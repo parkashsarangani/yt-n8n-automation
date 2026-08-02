@@ -1,0 +1,15 @@
+{
+  "name": "shorts-compose",
+  "version": "1.0.0",
+  "description": "FFmpeg composition service for the YouTube Shorts automation pipeline - assembles scenes (Pexels stock or motion-graphics templates), captions, and music into a final video.",
+  "main": "compose.js",
+  "scripts": {
+    "start": "node compose.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "express": "^4.19.0",
+    "ffmpeg-static": "^5.2.0",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}

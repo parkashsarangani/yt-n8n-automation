@@ -1,0 +1,33 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=https://n8n.interviewbuddy.cloud/
+      - NODE_ENV=production
+      - GENERIC_TIMEZONE=Europe/Berlin
+      - TZ=Europe/Berlin
+    volumes:
+      - n8n_data:/home/node/.n8n
+  shorts-compose:
+    build: /home/ubuntu/shorts-compose
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - OUTPUT_DIR=/app/outputs
+    volumes:
+      - /home/ubuntu/shorts-compose/outputs:/app/outputs
+      - /home/ubuntu/shorts-compose/topic_history.json:/app/topic_history.json
+      - /home/ubuntu/shorts-compose/music:/app/music
+      # shorts-revideo service and its shared volume are no longer needed -
+      # template scenes now render directly inside shorts-compose using the
+      # motion-assets/ folder (fonts, icons, backgrounds) bundled into this
+      # image at build time. No more Puppeteer/Chrome dependency at all.
+volumes:
+  n8n_data:
