@@ -61,8 +61,8 @@ jobs:
       - name: Deploy n8n workflow
         run: |
           echo "=== Deploying n8n workflow ==="
-          # Strip read-only fields (id) that the n8n API rejects on PUT
-          jq 'del(.id)' n8n/workflow.json > /tmp/workflow_deploy.json
+          # Strip read-only fields that the n8n API rejects on PUT
+          jq 'del(.id, .active, .versionId, .createdAt, .updatedAt)' n8n/workflow.json > /tmp/workflow_deploy.json
 
           HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
             -X PUT "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
