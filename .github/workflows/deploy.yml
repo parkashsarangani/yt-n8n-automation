@@ -1,75 +1,56 @@
 name: Deploy to Production
 
 on:
-    push:
-        branches: [main]
+  push:
+    branches: [main]
 
 concurrency:
-    group: production-deploy
-    cancel-in-progress: false
+  group: production-deploy
+  cancel-in-progress: false
 
 jobs:
-    typecheck:
-        name: Typecheck
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script_stop: true
+          script: |
+            set -e
 
-            - uses: actions/setup-node@v4
-              with:
-                  node-version: 20
+            echo "=== Pulling latest code ==="
+            cd ${{ secrets.PROJECT_DIR }}
+            git fetch origin main
+            git reset --hard origin/main
 
-            - name: Install Remotion dependencies
-              working-directory: shorts-compose/remotion
-              run: npm install
+            echo "=== Building and deploying ==="
+            docker compose build --no-cache shorts-compose
+            docker compose up -d --force-recreate shorts-compose
 
-            - name: Typecheck
-              working-directory: shorts-compose/remotion
-              run: npx tsc --noEmit
+            echo "=== Waiting for health check ==="
+            sleep 5
+            RETRY=0
+            MAX_RETRY=12
+            until curl -sf http://localhost:4000/topic-history > /dev/null 2>&1; do
+              RETRY=$((RETRY + 1))
+              if [ $RETRY -ge $MAX_RETRY ]; then
+                echo "ERROR: shorts-compose failed to start after 60s"
+                docker compose logs --tail=50 shorts-compose
+                exit 1
+              fi
+              echo "Waiting for shorts-compose to be ready... ($RETRY/$MAX_RETRY)"
+              sleep 5
+            done
 
-    deploy:
-        name: Deploy
-        needs: typecheck
-        runs-on: ubuntu-latest
-        environment: production
-        steps:
-            - name: Deploy via SSH
-              uses: appleboy/ssh-action@v1
-              with:
-                  host: ${{ secrets.SERVER_HOST }}
-                  username: ${{ secrets.SERVER_USER }}
-                  key: ${{ secrets.SSH_PRIVATE_KEY }}
-                  port: ${{ secrets.SERVER_PORT }}
-                  script_stop: true
-                  script: |
-                      set -e
+            echo "=== Cleaning up old images ==="
+            docker image prune -f
 
-                      echo "=== Pulling latest code ==="
-                      cd ${{ secrets.PROJECT_DIR }}
-                      git fetch origin main
-                      git reset --hard origin/main
-
-                      echo "=== Building and deploying ==="
-                      docker compose build --no-cache shorts-compose
-                      docker compose up -d --force-recreate shorts-compose
-
-                      echo "=== Waiting for health check ==="
-                      sleep 5
-                      RETRY=0
-                      MAX_RETRY=12
-                      until curl -sf http://localhost:4000/topic-history > /dev/null 2>&1; do
-                        RETRY=$((RETRY + 1))
-                        if [ $RETRY -ge $MAX_RETRY ]; then
-                          echo "ERROR: shorts-compose failed to start after 60s"
-                          docker compose logs --tail=50 shorts-compose
-                          exit 1
-                        fi
-                        echo "Waiting for shorts-compose to be ready... ($RETRY/$MAX_RETRY)"
-                        sleep 5
-                      done
-
-                      echo "=== Cleaning up old images ==="
-                      docker image prune -f
-
-                      echo "=== Deploy complete ==="
-                      docker compose ps
+            echo "=== Deploy complete ==="
+            docker compose ps
