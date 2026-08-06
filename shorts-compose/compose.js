@@ -41,6 +41,10 @@ const FPS = 30;
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
+// Fixed follow/subscribe outro appended to every video
+const OUTRO_DURATION_SEC = 2.0;
+const DEFAULT_OUTRO_LINE = "Follow for more";
+
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
 // ---------------------------------------------------------------------------
@@ -96,6 +100,24 @@ async function downloadFile(url, destPath) {
 async function writeBase64(base64, destPath) {
   await fsp.writeFile(destPath, Buffer.from(base64, "base64"));
   return destPath;
+}
+
+function generateSilentAudioBase64(durationSec) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = path.join(os.tmpdir(), `silence-${crypto.randomUUID()}.mp3`);
+    execFile(
+      ffmpegPath,
+      ["-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", String(durationSec), "-c:a", "libmp3lame", "-b:a", "64k", tmpPath],
+      (err) => {
+        if (err) return reject(err);
+        fs.readFile(tmpPath, (readErr, data) => {
+          fs.unlink(tmpPath, () => {});
+          if (readErr) return reject(readErr);
+          resolve(data.toString("base64"));
+        });
+      }
+    );
+  });
 }
 
 function run(cmdBuilder) {
@@ -424,9 +446,9 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Inter Black,76,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,8,2,60,60,420,1
-Style: CaptionHL,Inter Black,80,&H0000FFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,110,110,0,0,1,4,8,2,60,60,420,1
-Style: CommentHook,Inter Black,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,-1,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
+Style: Caption,Inter Bold,64,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,0,0,0,0,100,100,0,0,1,3,4,2,60,60,420,1
+Style: CaptionHL,Inter Bold,68,&H0096E0FF,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
+Style: CommentHook,Inter Bold,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,0,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -471,9 +493,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const highlightText = chunk
           .map((item) => {
             if (item === w) {
-              return `{\\rCaptionHL}${item.text.toUpperCase()}{\\r}`;
+              return `{\\rCaptionHL}${item.text}{\\r}`;
             }
-            return item.text.toUpperCase();
+            return item.text;
           })
           .join(" ");
 
@@ -485,7 +507,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   if (commentHook && totalDuration) {
     const hookDuration = Math.min(1.8, totalDuration * 0.4);
     const hookStart = Math.max(0, totalDuration - hookDuration);
-    const escaped = commentHook.toUpperCase().replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
+    const escaped = commentHook.replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
     events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
   }
 
@@ -583,6 +605,18 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     }
 
     const mood = caption_style || "neutral";
+
+    // Append a fixed follow/subscribe outro card as the final scene of
+    // every video - a designed template CTA, not AI-varied per video.
+    const outroAudioBase64 = await generateSilentAudioBase64(OUTRO_DURATION_SEC);
+    scenes.push({
+      scene_index: scenes.length,
+      visual_source: "template",
+      template_name: "kinetic_text",
+      template_data: { line: reqBody.outro_line || DEFAULT_OUTRO_LINE },
+      audio: { audio_base64: outroAudioBase64 },
+    });
+
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes (mood: ${mood})`);
 
     // ===== PHASE 1: Build individual scenes in parallel =====
@@ -647,7 +681,10 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     // which adds complexity. ASS captions burned in by ffmpeg are reliable,
     // fast, and visually good enough with proper styling.
     const assPath = path.join(tmpDir, "captions.ass");
-    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, totalVideoDuration);
+    // comment_hook should land in the last moments of the actual content,
+    // not the appended outro card - exclude the outro from its timing window.
+    const contentDuration = totalVideoDuration - OUTRO_DURATION_SEC;
+    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, contentDuration);
     await fsp.writeFile(assPath, assContent);
 
     // ===== PHASE 4: Sound design + Audio mixing + Final composite =====
