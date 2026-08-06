@@ -424,9 +424,9 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Inter Black,76,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,8,2,60,60,420,1
-Style: CaptionHL,Inter Black,80,&H0000FFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,110,110,0,0,1,4,8,2,60,60,420,1
-Style: CommentHook,Inter Black,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,-1,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
+Style: Caption,Inter Bold,64,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,0,0,0,0,100,100,0,0,1,3,4,2,60,60,420,1
+Style: CaptionHL,Inter Bold,68,&H0096E0FF,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
+Style: CommentHook,Inter Bold,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,0,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -471,9 +471,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const highlightText = chunk
           .map((item) => {
             if (item === w) {
-              return `{\\rCaptionHL}${item.text.toUpperCase()}{\\r}`;
+              return `{\\rCaptionHL}${item.text}{\\r}`;
             }
-            return item.text.toUpperCase();
+            return item.text;
           })
           .join(" ");
 
@@ -485,7 +485,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   if (commentHook && totalDuration) {
     const hookDuration = Math.min(1.8, totalDuration * 0.4);
     const hookStart = Math.max(0, totalDuration - hookDuration);
-    const escaped = commentHook.toUpperCase().replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
+    const escaped = commentHook.replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
     events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
   }
 
