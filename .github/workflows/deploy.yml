@@ -61,9 +61,15 @@ jobs:
       - name: Deploy n8n workflow
         run: |
           echo "=== Deploying n8n workflow ==="
-          # n8n PUT /workflows/:id requires only: name, nodes, connections
-          # Strip everything else (settings with unsupported fields, read-only props, meta)
-          jq '{name, nodes, connections}' n8n/workflow.json > /tmp/workflow_deploy.json
+          # n8n PUT requires: name, nodes, connections, settings
+          # settings only accepts: executionOrder, timezone, saveManualExecutions,
+          # callerPolicy, errorWorkflow — strip all others to avoid validation errors
+          jq '{
+            name,
+            nodes,
+            connections,
+            settings: {executionOrder: (.settings.executionOrder // "v1")}
+          }' n8n/workflow.json > /tmp/workflow_deploy.json
 
           HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
             -X PUT "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
