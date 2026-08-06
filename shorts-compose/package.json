@@ -5,6 +5,7 @@
   "main": "compose.js",
   "scripts": {
     "start": "node compose.js",
+    "test": "node --test tests/",
     "remotion:studio": "cd remotion && npx remotion studio"
   },
   "dependencies": {
