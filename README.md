@@ -1,7 +1,8 @@
 # YouTube Shorts Facts Automation Pipeline
 
 A fully automated pipeline that generates, voices, composes, and uploads YouTube
-Shorts — posting 5x/day with zero manual intervention.
+Shorts — posting 5x/day with zero manual intervention. Studio-grade output
+quality via a hybrid Remotion + FFmpeg rendering architecture.
 
 ## Architecture
 
@@ -11,44 +12,79 @@ n8n (workflow orchestration)
   ├─ Claude API — open-ended topic selection, script writing (2-stage), editorial review
   ├─ ElevenLabs — text-to-speech with word-level timestamps
   ├─ Pexels API — stock VIDEO clips for scenes that need real footage
-  ├─ shorts-compose (this repo) — ffmpeg-based video assembly, async job-polling
-  │    ├─ Stock scenes: real Pexels video clips, scaled/cropped/graded to fill frame
-  │    ├─ Template scenes: motion-graphics (stat reveals, comparisons,
-  │    │  kinetic text) built from real licensed assets - no browser/
-  │    │  Puppeteer dependency, pure ffmpeg + pre-rendered clips
-  │    ├─ Mood-based color grading, vignette, synced whoosh/impact/riser SFX
-  │    └─ ASS-based animated karaoke captions + spoken + on-screen CTA
+  ├─ shorts-compose (this repo) — hybrid video assembly, async job-polling
+  │    ├─ Remotion (React) — studio motion graphics (stat reveals, comparisons,
+  │    │    kinetic text) with spring animations, easing curves, and proper
+  │    │    typography; also handles caption overlay with per-word highlighting
+  │    ├─ FFmpeg — stock video processing (scale/crop/grade), eased Ken Burns
+  │    │    on images, audio normalization, music ducking, SFX mixing,
+  │    │    crossfade transitions, and final encoding (CRF 16, BT.709)
+  │    ├─ Split-tone color science per mood (warm highlights + cool shadows,
+  │    │    shadow lift, highlight rolloff, cinematic vignette)
+  │    ├─ Scene transitions: 0.4s crossfades between all scenes via xfade
+  │    ├─ Sound design: whoosh + sub-bass on every cut, impact + riser on
+  │    │    template reveals, gently-ducked background music (ratio 4, shaped)
+  │    └─ Final: fade-in/out, BT.709 colorspace, high profile 4.1, faststart
   └─ YouTube Data API — upload, AI-content disclosure
 ```
 
 All of this is self-hosted on a local Ubuntu server, exposed via a Cloudflare
 Tunnel, with `n8n` and `shorts-compose` running as Docker Compose services.
 
-### Why `shorts-compose` uses async job-polling, not a single request
+### Why the hybrid Remotion + FFmpeg approach
 
-Render time grew past Cloudflare's 120s proxy timeout as features were added
-(motion grading, synced SFX, heavier per-segment processing), causing hard
-524 timeouts even though the render itself succeeded. `/compose` now returns
-a `job_id` immediately; the caller polls `/compose-status/:jobId` until the
-job reports done or failed. This removes render time from the timeout
-equation entirely, regardless of how heavy future features get.
+FFmpeg is unbeatable for raw video processing (scaling, cropping, encoding,
+audio mixing), but its filter-graph-based compositing has severe limits for
+motion graphics: no easing curves, no spring physics, no proper typography
+control, and ASS subtitles look noticeably worse than CSS-rendered text.
+
+Remotion renders React components to video frames via headless Chromium —
+giving full CSS animations, spring physics, SVG, and web fonts. The tradeoff
+is render time (~2-4 min for a 20s video at 30fps), but the async job-polling
+pattern already handles this.
+
+The split:
+- **Remotion**: template scenes (stat_reveal, comparison, kinetic_text) +
+  caption overlay with karaoke highlighting
+- **FFmpeg**: stock video scenes, image Ken Burns, audio mixing, crossfade
+  transitions, final encoding
+
+### Why async job-polling (unchanged from v1)
+
+Render time exceeds Cloudflare's 120s proxy timeout. `/compose` returns a
+`job_id` immediately; the caller polls `/compose-status/:jobId` until done.
 
 ## Repo layout
 
 ```
-n8n/workflow.json          - the full n8n workflow (import into n8n)
-shorts-compose/            - the video composition service
-  compose.js                 - main ffmpeg orchestration logic (async job API)
+n8n/workflow.json              - the full n8n workflow (import into n8n)
+shorts-compose/                - the video composition service
+  compose.js                     - main orchestration (async job API, hybrid pipeline)
   Dockerfile
   package.json
-  motion-assets/             - real licensed assets used by template scenes
-    fonts/                     Inter (SIL Open Font License)
-    icons/                     useAnimations icon set (CC-BY 4.0 - see LICENSES.md)
-    backgrounds/               generated gradient/card backgrounds
-    elements/                  generated growing-bar animation
-    sfx/                       synthesized whoosh/impact/riser sound effects
-                                (generated via ffmpeg's own audio synthesis -
-                                no third-party licensing involved)
+  remotion/                      - Remotion project (studio motion graphics)
+    src/
+      index.ts                     - Remotion entry point
+      Root.tsx                     - composition registry
+      compositions/
+        StatReveal.tsx               - animated stat/number reveal
+        Comparison.tsx               - side-by-side comparison cards
+        KineticText.tsx              - word-by-word kinetic typography
+        CaptionOverlay.tsx           - per-word karaoke captions
+        SceneTransition.tsx          - transition overlays
+      lib/
+        easing.ts                    - spring, expo, back-out, cinematic easing
+        colors.ts                    - mood-based color schemes (split-tone)
+    render-bridge.mjs              - Node.js bridge (called from compose.js)
+    package.json
+    tsconfig.json
+  motion-assets/                 - real licensed assets
+    fonts/                         Inter (SIL Open Font License)
+    icons/                         useAnimations icon set (CC-BY 4.0)
+    backgrounds/                   generated gradient/card backgrounds
+    elements/                      generated growing-bar animation
+    sfx/                           synthesized whoosh/impact/riser SFX
+docker-compose.yml             - deploys n8n + shorts-compose
 ```
 
 ## Setup
@@ -62,9 +98,12 @@ shorts-compose/            - the video composition service
 
 ### 2. Deploy the stack
 
-```
+```bash
 docker compose up -d --build
 ```
+
+The first build takes longer (installs Chromium + Remotion dependencies inside
+the container). Subsequent rebuilds use Docker layer caching.
 
 ### 3. Import the workflow
 
@@ -74,71 +113,66 @@ design — none are included here).
 
 ### 4. Confirm the compose service
 
-```
+```bash
 docker logs -f shorts-compose
 ```
+
+### 5. (Optional) Preview Remotion compositions locally
+
+```bash
+cd shorts-compose/remotion
+npm install
+npx remotion studio
+```
+
+This opens the Remotion Studio where you can preview and tweak template
+animations before deploying.
 
 ## Content pipeline, briefly
 
 1. **Topic generation** — genuinely open-ended, not restricted to a fixed
-   niche list or category taxonomy (an earlier 7-niche system was
-   deliberately torn out after repeated real-world testing showed any
-   labeled category list - even framed as "inspiration" - functions as a
-   restriction). Hard exclusion on medical/health content. An explicit
-   anti-clustering rule checks the *shape* of recently-used topics (not
-   just the subject) so the model doesn't silently converge on one
-   structural pattern (e.g. "what if everyone did X at once") across
-   consecutive runs. Topic history is capped at 90 entries (raised from an
-   original 30, which was aging out real hits within about 6 days at this
-   posting volume).
+   niche list. Hard exclusion on medical/health content. Anti-clustering
+   checks topic *shape*, not just subject. History capped at 90 entries.
 2. **Stage 1 (draft, Claude Opus) + Stage 2 (editorial, Claude Sonnet)** —
-   two-pass script generation. Hooks are dramatic and direct-address, with
-   an explicit "reject trivia that's only interesting after the
-   explanation" filter at topic-selection time. Length target is 70-90
-   words (~20-25s) - tightened from an original 110-130 word target based
-   on this channel's own real retention data (best performers held
-   59-65%, worst held 30-32% and skewed longer). Scripts end with a
-   specific, non-generic spoken call-to-action tied to the exact fact,
-   not a bolted-on "comment below."
-3. **Validation** — a non-throwing check that triggers automatic retry with
-   a fresh topic on failure (bad JSON, banned content, medical topics,
-   word-count overage, scene/beat mismatches), rather than either crashing
-   or posting a broken video.
+   two-pass script generation. Length target 70-90 words (~20-25s). Scripts
+   end with a specific, non-generic spoken CTA tied to the exact fact.
+3. **Validation** — non-throwing check that triggers automatic retry with a
+   fresh topic on failure.
 4. **Visual assembly** — Claude picks per-scene between a real Pexels video
-   clip or a motion-graphics template, based on whether the beat is a
-   concrete, filmable thing or a number/comparison/punchy line. Stock
-   scenes source genuine video footage (not panned still images) via the
-   Pexels Video API, scaled/cropped to fill the frame, with the original
-   clip audio always discarded in favor of the ElevenLabs narration.
-5. **Compose** — ffmpeg assembles scenes with mood-based color grading,
-   vignette, and SFX synced to real scene-cut and template-reveal
-   timestamps (not just mixed in globally). Burns in karaoke-style
-   captions with per-word highlighting, mixes ducked background music,
-   and disclosure-tags the upload. Runs as an async job (see above) rather
-   than blocking a single HTTP request for the whole render.
+   clip or a Remotion motion-graphics template, based on whether the beat
+   is filmable or a number/comparison/punchy line.
+5. **Compose** — hybrid Remotion + FFmpeg pipeline assembles scenes with
+   studio color grading, crossfade transitions, synced SFX, per-word
+   karaoke captions, ducked music, and BT.709-flagged final encoding.
+
+## Studio quality improvements (v2)
+
+| Area | Before (v1) | After (v2) |
+|------|-------------|------------|
+| Transitions | Hard cuts only | 0.4s crossfades (xfade) + fade in/out |
+| Color grade | Basic EQ + saturation | Split-tone (warm highlights, cool shadows), shadow lift, highlight rolloff, cinematic curves |
+| Motion | Linear zoompan | Sinusoidal eased Ken Burns, punch-in at cuts |
+| Templates | ASS subtitle overlays on static bg | Full Remotion React animations with spring physics, staggered reveals |
+| Captions | ASS hard-burn with outline | Remotion-rendered with scale punch, soft shadow, fixed baseline |
+| Audio mix | Aggressive sidechain (ratio 10) | Gentle duck (ratio 4, shaped), sub-bass on every cut |
+| Encoding | CRF 18, no colorspace flags | CRF 16, BT.709, high profile 4.1, faststart |
+| Typography | System fontconfig rendering | CSS/Web font rendering via Remotion (letter-spacing, shadows) |
 
 ## Licensing notes for bundled assets
 
 See `LICENSES.md`. In short: Inter is SIL Open Font License (no attribution
 required). The icon set is CC-BY 4.0 (**attribution to useanimations.com is
-required** somewhere in your channel/description if you use these assets
-commercially — this has not yet been added and is a known open item). The
-SFX files are synthesized programmatically (ffmpeg audio filters), not
-sourced from any third party - no attribution needed.
+required** — this has not yet been added and is a known open item). The SFX
+files are synthesized programmatically, no third-party licensing.
 
 ## Known limitations / open items
 
-- Icon coverage doesn't yet cover every possible topic angle (no
-  lawsuit/gavel or history/map icons yet — only alert/warning, trend
-  arrows, lock, activity, archive, star).
-- `stat_reveal` template always defaults to the "activity" icon; the
-  schema doesn't yet let Claude pick a specific icon per scene.
-- CC-BY attribution for the icon set is not yet added anywhere in the
-  channel - a real, open compliance item.
-- Custom AI-generated thumbnails were built (Claude + fal.ai) and then
-  deliberately removed entirely - YouTube currently falls back to its own
-  auto-selected frame. The generation code no longer exists in this repo;
-  if revisited, it would need to be rebuilt, not just re-enabled.
-- A parallel, non-n8n orchestrator (plain Node.js, no workflow engine) was
-  also built as a separate experiment and lives in a different repo/
-  project - not part of this one.
+- Icon coverage doesn't yet cover every possible topic angle.
+- `stat_reveal` template defaults to a generic icon; the schema doesn't yet
+  let Claude pick a specific icon per scene.
+- CC-BY attribution for the icon set is not yet added to the channel.
+- Remotion rendering adds ~2-4 min to total compose time (acceptable given
+  the async job pattern, but limits real-time preview).
+- Remotion requires ~4-6GB RAM during rendering (Chromium + frame buffer).
+  The docker-compose sets a 6GB memory limit accordingly.
+- Custom thumbnails were removed entirely — YouTube falls back to auto-frame.
