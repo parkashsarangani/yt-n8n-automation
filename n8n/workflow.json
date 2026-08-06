@@ -603,7 +603,7 @@
     },
     {
       "parameters": {
-        "url": "=https://api.pexels.com/v1/videos/search",
+        "url": "=https://api.pexels.com/v1/search",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
@@ -628,7 +628,7 @@
         }
       },
       "id": "8c231b58-691f-4352-bcd1-3f12944d086e",
-      "name": "Pexels: Search Video",
+      "name": "Pexels: Search Photos",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -647,10 +647,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const sceneIndex = $('Split Out Scenes').item.json.scene_index;\nconst videos = $input.item.json.videos || [];\nif (!videos.length) {\n  throw new Error(`Pexels returned zero video results for scene_index ${sceneIndex} (query: \"${$('Split Out Scenes').item.json.stock_search_query}\"). No paid fallback is configured - adjust the stock_search_query or topic and retry.`);\n}\n\n// Real Pexels Video Resource shape: video_files[] = {id, quality: 'hd'|'sd'|'hls', file_type, width, height, fps, link}\nfunction usableFiles(video) {\n  return (video.video_files || []).filter(f => f.file_type === 'video/mp4' && f.quality !== 'hls' && f.width && f.height);\n}\nfunction bestOf(files) {\n  const sorted = [...files].sort((a, b) => {\n    if (a.quality !== b.quality) return a.quality === 'hd' ? -1 : 1;\n    return Math.abs(a.width - 1080) - Math.abs(b.width - 1080);\n  });\n  return sorted[0];\n}\n\n// Pass 1: check EVERY candidate video for a genuine portrait file before\n// accepting anything else - a later video's portrait option must win over\n// an earlier video's landscape fallback, not get short-circuited.\nlet chosen = null;\nfor (const v of videos) {\n  const portrait = usableFiles(v).filter(f => f.height > f.width);\n  if (portrait.length) { chosen = { file: bestOf(portrait), duration: v.duration }; break; }\n}\n// Pass 2: only if NO video in the whole list had a portrait option, fall\n// back to the first video with any usable mp4 file at all.\nif (!chosen) {\n  for (const v of videos) {\n    const files = usableFiles(v);\n    if (files.length) { chosen = { file: bestOf(files), duration: v.duration }; break; }\n  }\n}\nif (!chosen) {\n  throw new Error(`Pexels video results for scene_index ${sceneIndex} had no usable mp4 file`);\n}\n\nreturn { json: { scene_index: sceneIndex, video_url: chosen.file.link, source_duration: chosen.duration, source_width: chosen.file.width, source_height: chosen.file.height, _source: 'pexels_video' } };"
+        "jsCode": "const sceneIndex = $('Split Out Scenes').item.json.scene_index;\nconst photos = $input.item.json.photos || [];\nif (!photos.length) {\n  throw new Error(`Pexels returned zero photo results for scene_index ${sceneIndex} (query: \"${$('Split Out Scenes').item.json.stock_search_query}\"). No paid fallback is configured - adjust the stock_search_query or topic and retry.`);\n}\n\n// Pass 1: prefer genuine portrait photos - the orientation=portrait query\n// param should already guarantee this, but verify defensively rather than\n// trust it blindly (mirrors the video-search fallback pattern).\nlet usable = photos.filter(p => p.src && p.height > p.width);\n// Pass 2: if none are portrait, fall back to whatever photos exist.\nif (!usable.length) usable = photos.filter(p => p.src);\nif (!usable.length) {\n  throw new Error(`Pexels photo results for scene_index ${sceneIndex} had no usable image`);\n}\n\n// Multiple distinct photos per scene so the Ken Burns pan/zoom in\n// buildImageScene can cut between them (it cycles through scene.images,\n// one per segment) instead of holding on a single static frame.\nconst images = usable.map(p => p.src.large2x || p.src.large || p.src.original);\n\nreturn { json: { scene_index: sceneIndex, images, _source: 'pexels_photo' } };"
       },
       "id": "6cc80a0f-9064-45f9-bf26-163d703ad391",
-      "name": "Tag Pexels Video",
+      "name": "Tag Pexels Photos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1181,18 +1181,18 @@
         ]
       ]
     },
-    "Pexels: Search Video": {
+    "Pexels: Search Photos": {
       "main": [
         [
           {
-            "node": "Tag Pexels Video",
+            "node": "Tag Pexels Photos",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Tag Pexels Video": {
+    "Tag Pexels Photos": {
       "main": [
         [
           {
@@ -1214,7 +1214,7 @@
         ],
         [
           {
-            "node": "Pexels: Search Video",
+            "node": "Pexels: Search Photos",
             "type": "main",
             "index": 0
           }
