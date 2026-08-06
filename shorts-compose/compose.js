@@ -41,6 +41,10 @@ const FPS = 30;
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
+// Fixed follow/subscribe outro appended to every video
+const OUTRO_DURATION_SEC = 2.0;
+const DEFAULT_OUTRO_LINE = "Follow for more";
+
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
 // ---------------------------------------------------------------------------
@@ -96,6 +100,24 @@ async function downloadFile(url, destPath) {
 async function writeBase64(base64, destPath) {
   await fsp.writeFile(destPath, Buffer.from(base64, "base64"));
   return destPath;
+}
+
+function generateSilentAudioBase64(durationSec) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = path.join(os.tmpdir(), `silence-${crypto.randomUUID()}.mp3`);
+    execFile(
+      ffmpegPath,
+      ["-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", String(durationSec), "-c:a", "libmp3lame", "-b:a", "64k", tmpPath],
+      (err) => {
+        if (err) return reject(err);
+        fs.readFile(tmpPath, (readErr, data) => {
+          fs.unlink(tmpPath, () => {});
+          if (readErr) return reject(readErr);
+          resolve(data.toString("base64"));
+        });
+      }
+    );
+  });
 }
 
 function run(cmdBuilder) {
@@ -583,6 +605,18 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     }
 
     const mood = caption_style || "neutral";
+
+    // Append a fixed follow/subscribe outro card as the final scene of
+    // every video - a designed template CTA, not AI-varied per video.
+    const outroAudioBase64 = await generateSilentAudioBase64(OUTRO_DURATION_SEC);
+    scenes.push({
+      scene_index: scenes.length,
+      visual_source: "template",
+      template_name: "kinetic_text",
+      template_data: { line: reqBody.outro_line || DEFAULT_OUTRO_LINE },
+      audio: { audio_base64: outroAudioBase64 },
+    });
+
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes (mood: ${mood})`);
 
     // ===== PHASE 1: Build individual scenes in parallel =====
@@ -647,7 +681,10 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     // which adds complexity. ASS captions burned in by ffmpeg are reliable,
     // fast, and visually good enough with proper styling.
     const assPath = path.join(tmpDir, "captions.ass");
-    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, totalVideoDuration);
+    // comment_hook should land in the last moments of the actual content,
+    // not the appended outro card - exclude the outro from its timing window.
+    const contentDuration = totalVideoDuration - OUTRO_DURATION_SEC;
+    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, contentDuration);
     await fsp.writeFile(assPath, assContent);
 
     // ===== PHASE 4: Sound design + Audio mixing + Final composite =====
