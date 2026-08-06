@@ -41,9 +41,11 @@ const FPS = 30;
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
-// Fixed follow/subscribe outro appended to every video
-const OUTRO_DURATION_SEC = 2.0;
-const DEFAULT_OUTRO_LINE = "Follow for more";
+// Fixed engagement outro appended to every video. 2.5s gives the four
+// asks (comment, like, share, follow) room to land - the KineticText
+// template reveals words one at a time, so a bare 2s felt rushed.
+const OUTRO_DURATION_SEC = 2.5;
+const DEFAULT_OUTRO_LINE = "Comment, like, share, and follow";
 
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
@@ -132,6 +134,21 @@ function run(cmdBuilder) {
       .on("end", () => resolve())
       .run();
   });
+}
+
+// loudnorm computes a gain from the input's measured LUFS to the -16 LUFS
+// target - on true digital silence (e.g. the outro's generated silent
+// track) or other near-silent audio, measured loudness is -infinity, and
+// the resulting gain is NaN, which crashes the AAC encoder entirely. Try
+// with loudnorm first (normal case); if it fails, retry the identical
+// encode without it rather than losing the whole scene.
+async function runAudioMux(cmdFactory) {
+  try {
+    await run(cmdFactory(true));
+  } catch (err) {
+    console.warn(`[loudnorm] normalization failed (${err.message}), retrying without it`);
+    await run(cmdFactory(false));
+  }
 }
 
 function ffprobeDuration(filePath) {
@@ -236,26 +253,25 @@ async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath
     `unsharp=5:5:0.4:5:5:0.0`,
   ].join(",") + "[processed]";
 
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[processed]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push(
+      "-c:v", V_ENCODER,
+      "-r", String(FPS),
+      "-preset", "veryfast",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+    );
+    return ffmpeg()
       .input(stockVideoPath)
       .input(audioPath)
       .complexFilter([videoFilter])
-      .outputOptions([
-        "-map", "[processed]",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", V_ENCODER,
-        "-r", String(FPS),
-        "-preset", "veryfast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -341,21 +357,16 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
   }
 
   // Mux with audio
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "0:v", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push("-c:v", "copy", "-c:a", "aac", "-b:a", "192k");
+    return ffmpeg()
       .input(sceneVideoPath)
       .input(audioPath)
-      .outputOptions([
-        "-map", "0:v",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -402,26 +413,25 @@ async function buildTemplateScene(templateName, templateData, duration, audioPat
     ? `[0:v]tpad=stop_mode=clone:stop_duration=${(duration - templateDuration + 0.1).toFixed(3)}[padded]`
     : `[0:v]null[padded]`;
 
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[padded]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push(
+      "-c:v", V_ENCODER,
+      "-r", String(FPS),
+      "-preset", "veryfast",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+    );
+    return ffmpeg()
       .input(templateVideoPath)
       .input(audioPath)
       .complexFilter([videoFilter])
-      .outputOptions([
-        "-map", "[padded]",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", V_ENCODER,
-        "-r", String(FPS),
-        "-preset", "veryfast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -620,7 +630,12 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes (mood: ${mood})`);
 
     // ===== PHASE 1: Build individual scenes in parallel =====
-    const sceneResults = await Promise.all(
+    // Use allSettled, not all: if one scene throws, all() rejects
+    // immediately while sibling scenes' ffmpeg processes keep running - and
+    // the job's finally block then deletes tmpDir out from under them,
+    // producing confusing "No such file" errors and orphaned processes.
+    // Wait for every scene to settle first, then fail with a clear message.
+    const settled = await Promise.allSettled(
       scenes.map(async (scene, i) => {
         const audioPath = path.join(tmpDir, `voice_${i}.mp3`);
         if (scene?.audio?.audio_base64) {
@@ -662,6 +677,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       })
     );
 
+    const failures = settled
+      .map((r, i) => (r.status === "rejected" ? `scene ${i}: ${r.reason?.message || r.reason}` : null))
+      .filter(Boolean);
+    if (failures.length) {
+      throw new Error(`Scene build failed - ${failures.join("; ")}`);
+    }
+
+    const sceneResults = settled.map((r) => r.value);
     const scenePaths = sceneResults.map((r) => r.path);
     const durations = sceneResults.map((r) => r.duration);
 
