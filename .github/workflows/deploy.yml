@@ -29,8 +29,8 @@ jobs:
 
           echo "=== Ensuring ephemeral output bind-mount dir exists ==="
           # Only outputs/ is a bind mount now (ephemeral render output).
-          # topic_history and music moved to named volumes (shorts_data,
-          # shorts_music) so checkout's clean:true no longer wipes them.
+          # topic_history moved to a named volume (shorts_data) so checkout's
+          # clean:true no longer wipes it.
           mkdir -p ./shorts-compose/outputs
 
           echo "=== Building shorts-compose ==="
