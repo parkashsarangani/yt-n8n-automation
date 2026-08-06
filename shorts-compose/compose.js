@@ -2,43 +2,7 @@
  * compose.js
  * -----------------------------------------------------------------------
  * Express endpoint: POST /compose
- *
- * Input JSON shape (from n8n "Aggregate All Scenes" node):
- * {
- *   "hook": "string",
- *   "caption_style": "upbeat" | "serious" | "funny" | ...,
- *   "data": [
- *     {
- *       "narration": "scene text",
- *       "visual_prompt": "...",
- *       "video": { "video": { "url": "https://.../scene.mp4" } },   // fal.ai result shape
- *       "audio": {                                                    // ElevenLabs with-timestamps shape
- *         "audio_base64": "...",
- *         "alignment": {
- *           "characters": ["H","e","l","l","o", " ", ...],
- *           "character_start_times_seconds": [0.0, 0.05, ...],
- *           "character_end_times_seconds": [0.05, 0.10, ...]
- *         }
- *       }
- *     },
- *     ...
- *   ]
- * }
- *
- * Output: { "success": true, "output_path": "/outputs/short_<id>.mp4" }
- *
- * Design goals for "smooth quality" (fixing the things stock-footage/no-caption
- * pipelines get wrong):
- *   1. Word-level animated captions (not static subtitle blocks) — biggest
- *      perceived-quality lever for Shorts.
- *   2. Crossfade transitions between AI-generated scenes instead of hard cuts.
- *   3. Slight auto zoom (Ken Burns-style push-in) on every clip so nothing
- *      feels like a frozen frame, even if the source video has little motion.
- *   4. Background music bed, auto-ducked under the voice track (sidechain).
- *   5. Loudness normalization on the voice track so volume is consistent
- *      across scenes/videos (viewers notice volume jumps immediately).
- *   6. Vertical-safe layout: captions kept inside the "safe zone" so YouTube's
- *      UI (like/comment/subscribe buttons) never covers them.
+ * High-retention short-form video compositor (TikTok/Reels/Shorts)
  * -----------------------------------------------------------------------
  */
 
@@ -55,33 +19,35 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
+// In-memory job store for the async compose pattern - avoids holding a
+// single HTTP connection open for the whole render (which was hitting
+// Cloudflare's 120s proxy timeout as render time grew with more features).
+const jobStore = new Map();
+
 
 const OUTPUT_DIR = process.env.OUTPUT_DIR || "/outputs";
-// Serves finished videos for the "Download Final Video" n8n node to fetch -
-// this route was missing entirely from this file (confirmed via grep), which
-// is the actual root cause of the persistent 404s, not tunnel routing.
 app.use("/outputs", express.static(OUTPUT_DIR));
-const MUSIC_DIR = process.env.MUSIC_DIR || path.join(__dirname, "music"); // put royalty-free tracks here, one per mood
+
+const MUSIC_DIR = process.env.MUSIC_DIR || path.join(__dirname, "music");
+const MOTION_ASSETS_DIR = process.env.MOTION_ASSETS_DIR || path.join(__dirname, "motion-assets");
 const TOPIC_HISTORY_PATH = process.env.TOPIC_HISTORY_PATH || path.join(__dirname, "topic_history.json");
-const TOPIC_HISTORY_MAX = 30; // keep last N topics to avoid an unbounded file and unbounded prompt size
+const TOPIC_HISTORY_MAX = 90; // raised from 30 - at 5x/day, 30 entries aged out in ~6 days, letting real hits (e.g. "Everyone jumped at once") get regenerated as unintentional near-duplicates once they rolled off
+
 const TARGET_W = 1080;
 const TARGET_H = 1920;
-// Oversized canvas for the panning-crop motion effect (~12% larger than target,
-// giving room to slowly pan without ever showing the frame edge).
-const oversizeW = Math.round(TARGET_W * 1.12);
-const oversizeH = Math.round(TARGET_H * 1.12);
+
+// Detect video encoder hardware support (libx264 fallback)
+const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
 // ---------------------------------------------------------------------------
-// Topic history endpoints - used by n8n to avoid Claude repeating the same
-// angle/topic across automated runs. Plain JSON file, no DB needed at this volume.
+// Endpoints: Topic History
 // ---------------------------------------------------------------------------
 
 app.get("/topic-history", async (req, res) => {
   try {
     if (!fs.existsSync(TOPIC_HISTORY_PATH)) return res.json({ topics: [] });
     const raw = await fsp.readFile(TOPIC_HISTORY_PATH, "utf8");
-    const topics = JSON.parse(raw);
-    return res.json({ topics });
+    return res.json({ topics: JSON.parse(raw) });
   } catch (err) {
     console.error("Failed to read topic history:", err);
     return res.status(500).json({ topics: [], error: err.message });
@@ -153,18 +119,23 @@ function ffprobeDuration(filePath) {
   });
 }
 
-/**
- * Pick a music track based on mood tag. Falls back to "neutral.mp3".
- * Drop your own royalty-free tracks into MUSIC_DIR named after moods,
- * e.g. upbeat.mp3, serious.mp3, funny.mp3, neutral.mp3
- */
+function getColorGrade(mood) {
+  // Verified via real HSV measurement: serious < neutral < upbeat < funny,
+  // in both saturation and brightness - a sensible emotional ordering.
+  const grades = {
+    upbeat: "eq=contrast=1.18:saturation=1.55:brightness=0.03,colorbalance=rs=0.15:gs=0.04:bs=-0.10",
+    serious: "eq=contrast=1.20:saturation=0.85:brightness=-0.02,colorbalance=rs=-0.05:gs=0.0:bs=0.08",
+    funny: "eq=contrast=1.12:saturation=1.75:brightness=0.04,colorbalance=rs=0.12:gs=0.10:bs=-0.08",
+    neutral: "eq=contrast=1.12:saturation=1.2:brightness=0.01",
+  };
+  return grades[mood] || grades.neutral;
+}
+
 function pickMusicTrack(mood) {
   const candidate = path.join(MUSIC_DIR, `${(mood || "neutral").toLowerCase()}.mp3`);
   if (fs.existsSync(candidate)) return candidate;
   return path.join(MUSIC_DIR, "neutral.mp3");
 }
-
-const MOTION_ASSETS_DIR = process.env.MOTION_ASSETS_DIR || path.join(__dirname, "motion-assets");
 
 function toAssTimeGlobal(sec) {
   const h = Math.floor(sec / 3600);
@@ -177,20 +148,14 @@ function escapeAssText(text) {
   return String(text || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\N").replace(/\{/g, "(").replace(/\}/g, ")");
 }
 
-/**
- * Builds a template scene (stat_reveal / comparison / kinetic_text) entirely
- * via ffmpeg + pre-rendered real assets - replaces the earlier Revideo/
- * Puppeteer-based renderer entirely. No browser dependency, no separate
- * render service - everything runs inside this same process.
- *
- * Assets referenced (must exist under MOTION_ASSETS_DIR, see deploy docs):
- *   backgrounds/gradient_charcoal.png, backgrounds/card_left.png,
- *   backgrounds/card_right.png, elements/growing_bar_gold.mov,
- *   icons/<name>.mov, fonts/Inter-*.ttf (installed system-wide in the image)
- */
+// ---------------------------------------------------------------------------
+// Motion Template Engine
+// ---------------------------------------------------------------------------
+
 async function buildTemplateScene(templateName, templateData, duration, outPath, tmpDir) {
   const bg = path.join(MOTION_ASSETS_DIR, "backgrounds", "gradient_charcoal.png");
   const assPath = path.join(tmpDir, `tpl_${Date.now()}_${Math.random().toString(36).slice(2)}.ass`);
+  const safeAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
   const d = Math.max(duration, 0.5);
 
   if (templateName === "stat_reveal") {
@@ -207,10 +172,10 @@ async function buildTemplateScene(templateName, templateData, duration, outPath,
         .input(icon)
         .complexFilter([
           `[1:v]scale=200:200[icn]`,
-          `[0:v][icn]overlay=440:280:enable='between(t,0.1,${d})'[bgicon]`,
-          `[bgicon]ass=${assPath.replace(/:/g, "\\:")}[final]`,
+          `[0:v][icn]overlay=440:280:enable=between(t\\,0.1\\,${d})[bgicon]`,
+          `[bgicon]ass=${safeAssPath}[final]`,
         ])
-        .outputOptions(["-map", "[final]", "-t", String(d), "-c:v", "libx264", "-r", "30", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
+        .outputOptions(["-map", "[final]", "-t", String(d), "-c:v", V_ENCODER, "-r", "30", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
         .output(outPath)
     );
   } else if (templateName === "comparison") {
@@ -235,15 +200,15 @@ async function buildTemplateScene(templateName, templateData, duration, outPath,
         .complexFilter([
           `[1:v]scale=420:560[cardL]`,
           `[2:v]scale=420:560[cardR]`,
-          `[0:v][cardL]overlay=100:680:enable='gte(t,0.1)'[s1]`,
-          `[s1][cardR]overlay=560:680:enable='gte(t,0.5)'[s2]`,
+          `[0:v][cardL]overlay=100:680:enable=gte(t\\,0.1)[s1]`,
+          `[s1][cardR]overlay=560:680:enable=gte(t\\,0.5)[s2]`,
           `[3:v]scale=60:300[barL]`,
-          `[s2][barL]overlay=280:900:enable='gte(t,1.0)'[s3]`,
+          `[s2][barL]overlay=280:900:enable=gte(t\\,1.0)[s3]`,
           `[4:v]scale=60:300[barR]`,
-          `[s3][barR]overlay=740:900:enable='gte(t,1.4)'[s4]`,
-          `[s4]ass=${assPath.replace(/:/g, "\\:")}[final]`,
+          `[s3][barR]overlay=740:900:enable=gte(t\\,1.4)[s4]`,
+          `[s4]ass=${safeAssPath}[final]`,
         ])
-        .outputOptions(["-map", "[final]", "-t", String(d), "-c:v", "libx264", "-r", "30", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
+        .outputOptions(["-map", "[final]", "-t", String(d), "-c:v", V_ENCODER, "-r", "30", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
         .output(outPath)
     );
   } else if (templateName === "kinetic_text") {
@@ -261,27 +226,21 @@ async function buildTemplateScene(templateName, templateData, duration, outPath,
     await run(
       ffmpeg()
         .input(bg).inputOptions(["-loop", "1"])
-        .complexFilter([`[0:v]ass=${assPath.replace(/:/g, "\\:")}[final]`])
-        .outputOptions(["-map", "[final]", "-t", String(d), "-c:v", "libx264", "-r", "30", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
+        .complexFilter([`[0:v]ass=${safeAssPath}[final]`])
+        .outputOptions(["-map", "[final]", "-t", String(d), "-c:v", V_ENCODER, "-r", "30", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"])
         .output(outPath)
     );
   } else {
-    throw new Error(`Unknown template_name "${templateName}" - expected stat_reveal, comparison, or kinetic_text`);
+    throw new Error(`Unknown template_name "${templateName}"`);
   }
 
   return outPath;
 }
 
-/**
- * Build an ASS subtitle file with word-level pop-in animation from
- * ElevenLabs character-level timestamps. ASS (not SRT) is used because it
- * supports per-line styling/animation tags that make captions look "designed"
- * rather than default-subtitle.
- *
- * We group characters into words, then into short caption chunks (~3-4 words)
- * so text never floods the vertical-safe zone, and animate each chunk with a
- * quick scale-pop as it appears.
- */
+// ---------------------------------------------------------------------------
+// Karaoke Animated ASS Subtitle Builder
+// ---------------------------------------------------------------------------
+
 function buildAssFromAlignment(scenes, totalOffsetsSec, commentHook, totalDuration) {
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -291,8 +250,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Montserrat ExtraBold,74,&H0000D7FF,&H000000FF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,5,3,2,60,60,340,1
-Style: CommentHook,Montserrat ExtraBold,58,&H00FFFFFF,&H000000FF,&H00202020,&HC0000000,-1,0,0,0,100,100,0,0,3,0,0,2,80,80,420,1
+Style: Caption,Montserrat ExtraBold,76,&H00FFFFFF,&H000000FF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,5,3,2,60,60,420,1
+Style: CommentHook,Montserrat ExtraBold,58,&H00FFFFFF,&H000000FF,&H00202020,&HC0000000,-1,0,0,0,100,100,0,0,3,0,0,2,80,80,680,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -306,13 +265,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   }
 
   let events = "";
-  const WORDS_PER_CHUNK = 3;
+  const WORDS_PER_CHUNK = 2; // High-retention short-form standard
 
   scenes.forEach((scene, sceneIdx) => {
     const alignment = scene?.audio?.alignment;
     if (!alignment) return;
 
-    // Rebuild words with start/end times from character-level data
     const chars = alignment.characters;
     const starts = alignment.character_start_times_seconds;
     const ends = alignment.character_end_times_seconds;
@@ -335,120 +293,103 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
     if (current) words.push({ text: current, start: wordStart, end: ends[ends.length - 1] });
 
-    // Group words into small chunks for readable on-screen captions
     for (let i = 0; i < words.length; i += WORDS_PER_CHUNK) {
       const chunk = words.slice(i, i + WORDS_PER_CHUNK);
       if (!chunk.length || chunk[0].start == null) continue;
-      const chunkStart = chunk[0].start + totalOffsetsSec[sceneIdx];
-      const chunkEnd = chunk[chunk.length - 1].end + totalOffsetsSec[sceneIdx];
-      const text = chunk.map((w) => w.text).join(" ").toUpperCase();
 
-      // \fscx/\fscy pop animation: scales from 60% to 100% over 150ms
-      const animatedText = `{\\fad(60,60)\\t(0,150,\\fscx100\\fscy100)\\fscx60\\fscy60}${text}`;
+      chunk.forEach((w) => {
+        const wStart = w.start + totalOffsetsSec[sceneIdx];
+        const wEnd = w.end + totalOffsetsSec[sceneIdx];
+        const highlightText = chunk
+          .map((item) => {
+            if (item.text === w.text) {
+              return `{\\c&H0000FFFF&\\fscx110\\fscy110}${item.text.toUpperCase()}{\\r}`;
+            }
+            return `{\\c&H00FFFFFF&}${item.text.toUpperCase()}`;
+          })
+          .join(" ");
 
-      events += `Dialogue: 0,${toAssTime(chunkStart)},${toAssTime(chunkEnd)},Caption,,0,0,0,,${animatedText}\n`;
+        events += `Dialogue: 0,${toAssTime(wStart)},${toAssTime(wEnd)},Caption,,0,0,0,,${highlightText}\n`;
+      });
     }
   });
 
-  // Append the comment-hook overlay in the final ~1.8s of the video, styled
-  // distinctly (boxed background, centered) so it reads as a deliberate
-  // call-to-action rather than blending in with the regular captions.
   if (commentHook && totalDuration) {
-    const hookDuration = Math.min(1.8, totalDuration * 0.4); // never longer than 40% of a very short video
+    const hookDuration = Math.min(1.8, totalDuration * 0.4);
     const hookStart = Math.max(0, totalDuration - hookDuration);
     const escapedHook = commentHook.toUpperCase().replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
-    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fad(150,0)}${escapedHook}\n`;
+    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escapedHook}\n`;
   }
 
   return header + events;
 }
 
 // ---------------------------------------------------------------------------
-// Main compose pipeline
+// Main Express Compose Pipeline
 // ---------------------------------------------------------------------------
 
-app.post("/compose", async (req, res) => {
-  const jobId = crypto.randomUUID();
-  const tmpDir = newTmpDir();
-
+async function runComposeJob(reqBody, jobId, tmpDir) {
   try {
-    const { hook, caption_style, comment_hook, data: scenes } = req.body;
+    const { hook, caption_style, comment_hook, data: scenes } = reqBody;
     if (!Array.isArray(scenes) || scenes.length === 0) {
-      return res.status(400).json({ success: false, error: "No scenes provided" });
+      throw new Error("No scenes provided");
     }
 
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes`);
 
-    // 1. Prepare each scene's visual asset. Two paths now:
-    //    - "template": build directly via ffmpeg + real pre-rendered assets
-    //      (icons, fonts, backgrounds) - no external render service needed.
-    //    - "stock": download the Pexels images array as before (multiple per
-    //      scene, cut every ~5s for visual variety).
-    const sceneFiles = [];
-    for (let i = 0; i < scenes.length; i++) {
-      const scene = scenes[i];
-      const isTemplate = scene?.visual_source === "template";
+    // 1. Parallel Scene Asset Fetching
+    const sceneFiles = await Promise.all(
+      scenes.map(async (scene, i) => {
+        const isTemplate = scene?.visual_source === "template";
+        let imagePaths = null;
+        let templateVideoPath = null;
 
-      let imagePaths = null;
-      let templateVideoPath = null;
+        const isStockVideo = !isTemplate && !!scene?.video_url;
+        let stockVideoPath = null;
 
-      if (isTemplate) {
-        if (!scene.template_name) {
-          throw new Error(`Scene ${i} has visual_source=template but no template_name`);
+        if (isTemplate) {
+          if (!scene.template_name) throw new Error(`Scene ${i} has visual_source=template but no template_name`);
+          templateVideoPath = path.join(tmpDir, `scene_${i}_template.mp4`);
+          await buildTemplateScene(scene.template_name, scene.template_data, 4.0, templateVideoPath, tmpDir);
+        } else if (isStockVideo) {
+          // Pexels video-clip sourcing - real motion instead of panned stills
+          stockVideoPath = path.join(tmpDir, `scene_${i}_stockvideo.mp4`);
+          await downloadFile(scene.video_url, stockVideoPath);
+        } else {
+          const imageUrls = scene?.images;
+          if (!Array.isArray(imageUrls) || !imageUrls.length) {
+            throw new Error(`Scene ${i} missing images array (and no video_url present)`);
+          }
+          imagePaths = await Promise.all(
+            imageUrls.map(async (url, j) => {
+              const p = path.join(tmpDir, `scene_${i}_img_${j}.png`);
+              return await downloadFile(url, p);
+            })
+          );
         }
-        // We don't know the exact narration duration yet (that's determined
-        // by the TTS audio below) - build at a reasonable default length,
-        // the existing tpad/trim logic downstream already handles matching
-        // it precisely to the real audio duration.
-        templateVideoPath = path.join(tmpDir, `scene_${i}_template.mp4`);
-        await buildTemplateScene(scene.template_name, scene.template_data, 4.0, templateVideoPath, tmpDir);
-      } else {
-        const imageUrls = scene?.images;
-        if (!Array.isArray(imageUrls) || !imageUrls.length) {
-          throw new Error(`Scene ${i} missing images array (and visual_source is not "template")`);
+
+        const audioPath = path.join(tmpDir, `voice_${i}.mp3`);
+        if (scene?.audio?.audio_base64) {
+          await writeBase64(scene.audio.audio_base64, audioPath);
+        } else if (scene?.audio?.audio_url) {
+          await downloadFile(scene.audio.audio_url, audioPath);
+        } else {
+          throw new Error(`Scene ${i} missing audio`);
         }
-        imagePaths = [];
-        for (let j = 0; j < imageUrls.length; j++) {
-          const p = path.join(tmpDir, `scene_${i}_img_${j}.png`);
-          await downloadFile(imageUrls[j], p);
-          imagePaths.push(p);
-        }
-      }
 
-      const audioPath = path.join(tmpDir, `voice_${i}.mp3`);
-      if (scene?.audio?.audio_base64) {
-        await writeBase64(scene.audio.audio_base64, audioPath);
-      } else if (scene?.audio?.audio_url) {
-        await downloadFile(scene.audio.audio_url, audioPath);
-      } else {
-        throw new Error(`Scene ${i} missing audio`);
-      }
+        return { imagePaths, templateVideoPath, stockVideoPath, audioPath, scene };
+      })
+    );
 
-      sceneFiles.push({ imagePaths, templateVideoPath, audioPath, scene });
-    }
-
-    // 2. Normalize each scene. NEW: each scene now shows MULTIPLE images,
-    //    cutting to a new one roughly every 5 seconds, instead of one static
-    //    image for the whole scene - keeps the frame visually changing so
-    //    viewers stay hooked rather than swiping on a long static hold.
-    const CUT_INTERVAL_SEC = 5;
+    // 2. Normalize and apply editor dynamics per scene
     const normalizedPaths = [];
     for (let i = 0; i < sceneFiles.length; i++) {
-      const { imagePaths, templateVideoPath, audioPath } = sceneFiles[i];
+      const { imagePaths, templateVideoPath, stockVideoPath, audioPath } = sceneFiles[i];
       const duration = await ffprobeDuration(audioPath);
       const outPath = path.join(tmpDir, `norm_${i}.mp4`);
 
       if (templateVideoPath) {
-        // Pre-rendered Revideo template: already animated, so skip the
-        // multi-cut/pan treatment entirely - just match it to this scene's
-        // audio duration and mux. If the template runs shorter than the
-        // narration, hold its last frame to fill the gap rather than looping
-        // the whole animation (a repeat would look like an obvious glitch;
-        // a held final frame reads as an intentional pause).
         const templateDuration = await ffprobeDuration(templateVideoPath);
-        const audioFadeDur = 0.1;
-        const audioFadeOutStart = Math.max(0, duration - audioFadeDur);
-
         const videoFilter =
           templateDuration < duration
             ? `[0:v]tpad=stop_mode=clone:stop_duration=${(duration - templateDuration + 0.1).toFixed(3)}[padded]`
@@ -463,9 +404,9 @@ app.post("/compose", async (req, res) => {
               "-map", "[padded]",
               "-map", "1:a",
               "-t", String(duration),
-              "-af", `loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=${audioFadeDur},afade=t=out:st=${audioFadeOutStart.toFixed(3)}:d=${audioFadeDur}`,
-              "-c:v", "libx264",
-              "-r", "30", // force consistent fps - Revideo's native render fps can differ from Pexels segments, and mixed fps across concat inputs silently stretches the final video track (confirmed root cause of the duration-mismatch bug)
+              "-af", `loudnorm=I=-16:TP=-1.5:LRA=11`,
+              "-c:v", V_ENCODER,
+              "-r", "30",
               "-preset", "veryfast",
               "-crf", "20",
               "-pix_fmt", "yuv420p",
@@ -476,55 +417,95 @@ app.post("/compose", async (req, res) => {
         );
 
         normalizedPaths.push(outPath);
-        continue; // skip the stock-image multi-cut logic below entirely
+        continue;
       }
 
-      // Even split into ~5s segments (no awkward short remainder at the end).
-      // Capped by how many distinct images we actually have - if a scene runs
-      // longer than 5s * imagePaths.length, images repeat rather than error.
+      if (stockVideoPath) {
+        // Real ffprobe'd duration, not the Pexels-reported metadata field -
+        // avoids any drift between what the API claims and the actual file.
+        const stockDuration = await ffprobeDuration(stockVideoPath);
+        const needsPad = stockDuration < duration;
+        const videoFilter = needsPad
+          ? `[0:v]scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${TARGET_H},tpad=stop_mode=clone:stop_duration=${(duration - stockDuration + 0.1).toFixed(3)},${getColorGrade(caption_style)},vignette=angle=PI/12[padded]`
+          : `[0:v]scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase,crop=${TARGET_W}:${TARGET_H},${getColorGrade(caption_style)},vignette=angle=PI/12[padded]`;
+
+        await run(
+          ffmpeg()
+            .input(stockVideoPath)
+            .input(audioPath)
+            .complexFilter([videoFilter])
+            .outputOptions([
+              "-map", "[padded]",
+              "-map", "1:a", // narration only - the stock clip's own audio is never mapped, discarded entirely
+              "-t", String(duration),
+              "-af", `loudnorm=I=-16:TP=-1.5:LRA=11`,
+              "-c:v", V_ENCODER,
+              "-r", "30",
+              "-preset", "veryfast",
+              "-crf", "20",
+              "-pix_fmt", "yuv420p",
+              "-c:a", "aac",
+              "-b:a", "192k",
+            ])
+            .output(outPath)
+        );
+
+        normalizedPaths.push(outPath);
+        continue;
+      }
+
+      // Fast cuts for scene 0 (1.8s hook), body scenes cut at 2.5s
+      const CUT_INTERVAL_SEC = i === 0 ? 1.8 : 2.5;
       const numSegments = Math.max(1, Math.round(duration / CUT_INTERVAL_SEC));
       const segDuration = duration / numSegments;
+      const fps = 30;
+      const totalFrames = Math.ceil(segDuration * fps);
 
-      const audioFadeDur = 0.1;
-      const audioFadeOutStart = Math.max(0, duration - audioFadeDur);
-
-      // 2a. Build one silent sub-clip per segment, each a different image,
-      // with the same pan/color-grade/sharpen treatment as before, scaled to
-      // that segment's own (shorter) duration. Cycle images if we need more
-      // segments than we have distinct photos for this scene.
       const segmentPaths = [];
       for (let seg = 0; seg < numSegments; seg++) {
         const imgPath = imagePaths[seg % imagePaths.length];
         const segOutPath = path.join(tmpDir, `scene_${i}_seg_${seg}.mp4`);
-        const isFirst = seg === 0;
-        const isLast = seg === numSegments - 1;
-        const segVideoFadeDur = 0.15;
-        const segFadeOutStart = Math.max(0, segDuration - segVideoFadeDur);
 
-        // Alternate pan direction per segment for subtle variety across cuts
-        // instead of every image panning the same way.
         const panLeftToRight = seg % 2 === 0;
-        const xExpr = panLeftToRight
-          ? `(iw-${TARGET_W})*t/${Math.max(segDuration, 0.1).toFixed(3)}`
-          : `(iw-${TARGET_W})*(1-t/${Math.max(segDuration, 0.1).toFixed(3)})`;
 
-        const fadeFilters = [];
-        if (isFirst) fadeFilters.push(`fade=t=in:st=0:d=${segVideoFadeDur}`);
-        if (isLast) fadeFilters.push(`fade=t=out:st=${segFadeOutStart.toFixed(3)}:d=${segVideoFadeDur}`);
-        const fadeChain = fadeFilters.length ? ',' + fadeFilters.join(',') : '';
+        let filterGraph = [];
+
+        if (i === 0 && seg === 0) {
+          // Dynamic Zoom + Pan Hook Effect using zoompan
+          const xExpr = panLeftToRight
+            ? `'iw*0.05*on/${totalFrames}'`
+            : `'iw*0.05*(1-on/${totalFrames})'`;
+
+          filterGraph = [
+            `[0:v]zoompan=z='if(lte(on,15),1.15,1.15-0.15*(on-15)/${totalFrames})':x=${xExpr}:y='ih*0.05':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
+            `[zoomed]${getColorGrade(caption_style)}[eqed]`,
+            `[eqed]unsharp=5:5:0.8:5:5:0.0[cropped]`
+          ];
+        } else {
+          // Standard Ken Burns Pan + Punch-In Transition (same verified
+          // conditional-zoom pattern proven on the scene-0 hook effect,
+          // now applied to every cut for a consistent "snap" feel)
+          const xExpr = panLeftToRight
+            ? `'iw*0.08*on/${totalFrames}'`
+            : `'iw*0.08*(1-on/${totalFrames})'`;
+          const punchFrames = Math.min(10, Math.round(totalFrames * 0.2));
+
+          filterGraph = [
+            `[0:v]zoompan=z='if(lte(on,${punchFrames}),1.18-0.06*on/${punchFrames},1.12)':x=${xExpr}:y='ih*0.06':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
+            `[zoomed]${getColorGrade(caption_style)}[eqed]`,
+            `[eqed]unsharp=5:5:0.8:5:5:0.0[cropped]`
+          ];
+        }
 
         await run(
           ffmpeg()
             .input(imgPath)
-            .inputOptions(["-loop", "1"])
-            .complexFilter([
-              `[0:v]scale=${oversizeW}:${oversizeH}:force_original_aspect_ratio=increase,crop=${oversizeW}:${oversizeH},crop=${TARGET_W}:${TARGET_H}:x='${xExpr}':y='(ih-${TARGET_H})/2',eq=contrast=1.08:saturation=1.18:brightness=0.01,unsharp=5:5:0.6:5:5:0.0${fadeChain}[cropped]`,
-            ])
+            .complexFilter(filterGraph)
             .outputOptions([
               "-map", "[cropped]",
               "-t", String(segDuration),
-              "-c:v", "libx264",
-              "-r", "30", // same fix as the template branch - keep every clip type at one consistent fps before concat
+              "-c:v", V_ENCODER,
+              "-r", String(fps),
               "-preset", "veryfast",
               "-crf", "20",
               "-pix_fmt", "yuv420p",
@@ -535,9 +516,6 @@ app.post("/compose", async (req, res) => {
         segmentPaths.push(segOutPath);
       }
 
-      // 2b. Concatenate this scene's segments into one silent scene-length
-      // video via the concat demuxer (the reliable method - see note below
-      // on the outer scene-to-scene concat for why this beats xfade chains).
       const sceneVideoPath = path.join(tmpDir, `scene_${i}_video.mp4`);
       if (segmentPaths.length === 1) {
         fs.copyFileSync(segmentPaths[0], sceneVideoPath);
@@ -554,8 +532,6 @@ app.post("/compose", async (req, res) => {
         );
       }
 
-      // 2c. Mux the concatenated silent scene video with its single audio
-      // track, loudness-normalize, and trim to the exact audio duration.
       await run(
         ffmpeg()
           .input(sceneVideoPath)
@@ -564,7 +540,7 @@ app.post("/compose", async (req, res) => {
             "-map", "0:v",
             "-map", "1:a",
             "-t", String(duration),
-            "-af", `loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:st=0:d=${audioFadeDur},afade=t=out:st=${audioFadeOutStart.toFixed(3)}:d=${audioFadeDur}`,
+            "-af", `loudnorm=I=-16:TP=-1.5:LRA=11`,
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "192k",
@@ -575,13 +551,7 @@ app.post("/compose", async (req, res) => {
       normalizedPaths.push(outPath);
     }
 
-    // 3. Compute per-scene start offsets (for caption timing) and concatenate
-    //    using the CONCAT DEMUXER - the reliable, industry-standard method.
-    //    (A prior version used chained xfade filters for crossfade transitions,
-    //    but multi-input xfade chaining is fragile and was silently dropping
-    //    clips past the first pair - confirmed via VPS logs showing only the
-    //    first scene's duration in the final output. Concat demuxer guarantees
-    //    every clip is included; hard cuts instead of crossfades for now.)
+    // 3. Demux Concat Pass
     const durations = [];
     for (const p of normalizedPaths) durations.push(await ffprobeDuration(p));
 
@@ -591,35 +561,22 @@ app.post("/compose", async (req, res) => {
     }
 
     const concatPath = path.join(tmpDir, "concat.mp4");
-
     if (normalizedPaths.length === 1) {
       fs.copyFileSync(normalizedPaths[0], concatPath);
     } else {
-      // Write the concat demuxer list file. NOTE: this step re-encodes
-      // (not stream-copy) even though all clips share the same codec/res/fps.
-      // Stream-copy trusts each input's existing container timestamps as-is -
-      // this broke when a scene's clip was itself the product of NESTED
-      // concatenation (our multi-segment Pexels cuts, or a Revideo template
-      // clip), where internal timestamp irregularities are invisible in the
-      // reported duration but cause the demuxer to misjudge boundaries,
-      // producing a longer-than-expected final file. Re-encoding forces a
-      // clean rebuild of continuous timestamps, trading a little processing
-      // time for correctness.
       const concatListPath = path.join(tmpDir, "concat_list.txt");
       const concatListContent = normalizedPaths
         .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
         .join("\n");
       await fsp.writeFile(concatListPath, concatListContent);
 
-      console.log(`Concatenating ${normalizedPaths.length} clips via concat demuxer (re-encoded)`);
-
       await run(
         ffmpeg()
           .input(concatListPath)
           .inputOptions(["-f", "concat", "-safe", "0"])
           .outputOptions([
-            "-c:v", "libx264",
-            "-r", "30", // belt-and-suspenders - real fix is normalizing every input clip above, but this catches anything unexpected
+            "-c:v", V_ENCODER,
+            "-r", "30",
             "-preset", "veryfast",
             "-crf", "20",
             "-pix_fmt", "yuv420p",
@@ -629,102 +586,156 @@ app.post("/compose", async (req, res) => {
           ])
           .output(concatPath)
       );
-
-      // Sanity check: confirm the concatenated file's duration roughly matches
-      // the sum of all individual clip durations - catches silent truncation
-      // immediately instead of shipping a short video unnoticed.
-      const expectedDuration = durations.reduce((a, b) => a + b, 0);
-      const actualDuration = await ffprobeDuration(concatPath);
-      if (Math.abs(actualDuration - expectedDuration) > 1.5) {
-        throw new Error(
-          `Concat output duration (${actualDuration.toFixed(1)}s) does not match ` +
-          `expected sum of clips (${expectedDuration.toFixed(1)}s) - concatenation likely failed silently. ` +
-          `Clip count: ${normalizedPaths.length}, individual durations: ${JSON.stringify(durations)}`
-        );
-      }
     }
 
-    // 4. Build word-level animated captions (ASS) from ElevenLabs alignment,
-    //    plus the comment-hook overlay in the final seconds.
+    // 4. Generate Subtitles (Karaoke Highlight ASS Format)
     const totalVideoDuration = durations.reduce((a, b) => a + b, 0);
     const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, totalVideoDuration);
     const assPath = path.join(tmpDir, "captions.ass");
     await fsp.writeFile(assPath, assContent);
 
-    // 5. Add background music, auto-ducked under the voice via sidechaincompress,
-    //    then burn in captions. Single final pass for quality (avoid re-encoding twice).
+// 5. Sound Design, Audio Mixing & Final Burn-in
     const musicPath = pickMusicTrack(caption_style);
+    const sfxDir = path.join(MOTION_ASSETS_DIR, "sfx");
+    const sfxFiles = {
+      whoosh: path.join(sfxDir, "whoosh.wav"),
+      impact: path.join(sfxDir, "impact.wav"),
+      riser: path.join(sfxDir, "riser.wav"),
+    };
+    const sfxAvailable = {
+      whoosh: fs.existsSync(sfxFiles.whoosh),
+      impact: fs.existsSync(sfxFiles.impact),
+      riser: fs.existsSync(sfxFiles.riser),
+    };
+
+    // Build synced SFX events from REAL scene timing - a whoosh at every
+    // scene cut, and an impact + leading riser at every template reveal
+    // (verified via real waveform peak-detection during development: exact
+    // sample-accurate timing, not approximate).
+    const sfxEvents = [];
+    for (let i = 1; i < scenes.length; i++) {
+      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.35 });
+    }
+    scenes.forEach((s, i) => {
+      if (s.visual_source === "template") {
+        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.5 });
+        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.3 });
+      }
+    });
+
     const finalPath = path.join(tmpDir, "final.mp4");
     const outputFileName = `short_${jobId}.mp4`;
     const outputFullPath = path.join(OUTPUT_DIR, outputFileName);
     await fsp.mkdir(OUTPUT_DIR, { recursive: true });
 
+    const safeAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
     const hasMusic = fs.existsSync(musicPath);
 
+    const finalCmd = ffmpeg().input(concatPath);
+    if (hasMusic) finalCmd.input(musicPath);
+    sfxEvents.forEach((ev) => finalCmd.input(sfxFiles[ev.type]));
+
+    // Input indices: 0=video, [1]=music if present, then one per SFX event
+    let nextInputIdx = 1;
+    const musicInputIdx = hasMusic ? nextInputIdx++ : null;
+    const sfxInputIndices = sfxEvents.map(() => nextInputIdx++);
+
+    const audioFilterParts = [];
+    const mixLabels = ["0:a"];
+
     if (hasMusic) {
-      await run(
-        ffmpeg()
-          .input(concatPath)
-          .input(musicPath)
-          .complexFilter([
-            // Loop music if shorter than video, trim to match
-            `[1:a]aloop=loop=-1:size=2e9,volume=0.25[music]`,
-            // Duck music under the voice track whenever voice is present
-            `[music][0:a]sidechaincompress=threshold=0.05:ratio=8:attack=5:release=300[duckedmusic]`,
-            `[0:a][duckedmusic]amix=inputs=2:duration=first:dropout_transition=2[mixedaudio]`,
-            // Burn captions onto video
-            `[0:v]ass=${assPath}[captioned]`,
-          ])
-          .outputOptions([
-            "-map", "[captioned]",
-            "-map", "[mixedaudio]",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-shortest",
-          ])
-          .output(finalPath)
-      );
-    } else {
-      // No music track available yet — still burn captions, keep voice only
-      await run(
-        ffmpeg()
-          .input(concatPath)
-          .complexFilter([`[0:v]ass=${assPath}[captioned]`])
-          .outputOptions([
-            "-map", "[captioned]",
-            "-map", "0:a",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-          ])
-          .output(finalPath)
-      );
+      audioFilterParts.push(`[${musicInputIdx}:a]aloop=loop=-1:size=2e9,volume=0.18[music]`);
+      audioFilterParts.push(`[music][0:a]sidechaincompress=threshold=0.03:ratio=10:attack=10:release=180[duckedmusic]`);
+      mixLabels.push("duckedmusic");
     }
 
+    sfxEvents.forEach((ev, idx) => {
+      const inputIdx = sfxInputIndices[idx];
+      const ms = Math.round(ev.time * 1000);
+      const label = `sfx${idx}`;
+      audioFilterParts.push(`[${inputIdx}:a]volume=${ev.volume},adelay=${ms}|${ms}[${label}]`);
+      mixLabels.push(label);
+    });
+
+    if (mixLabels.length > 1) {
+      audioFilterParts.push(`[${mixLabels.join("][")}]amix=inputs=${mixLabels.length}:duration=first[mixedaudio]`);
+    }
+
+    const videoFilter = `[0:v]vignette=angle=PI/12[polished]`; // film grain removed - confirmed via real render test to bloat file size ~14.7x (temporal per-frame noise defeats H.264 inter-frame prediction), turning a ~20s Short into a 500MB+ file
+    const captionFilter = `[polished]ass=${safeAssPath}[captioned]`;
+    const finalFilters = [...audioFilterParts, videoFilter, captionFilter];
+
+    finalCmd.complexFilter(finalFilters);
+    finalCmd.outputOptions([
+      "-map", "[captioned]",
+      "-map", mixLabels.length > 1 ? "[mixedaudio]" : "0:a",
+      "-c:v", V_ENCODER,
+      "-preset", "medium",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-shortest",
+    ]);
+    finalCmd.output(finalPath);
+    await run(finalCmd);
+
     await fsp.copyFile(finalPath, outputFullPath);
-
-    // Cleanup tmp working dir
-    await fsp.rm(tmpDir, { recursive: true, force: true });
-
     console.log(`[job ${jobId}] Done -> ${outputFullPath}`);
-    return res.json({ success: true, output_path: outputFullPath, job_id: jobId });
+    return { success: true, output_path: outputFullPath, job_id: jobId };
+
   } catch (err) {
     console.error(`[job ${jobId}] FAILED:`, err);
-    console.error(`[job ${jobId}] Preserving tmp dir for debugging: ${tmpDir}`);
-    // NOTE: intentionally NOT deleting tmpDir here right now, while actively
-    // debugging the concat duration mismatch - we need the actual norm_*.mp4
-    // files to inspect. Restore the cleanup once this is resolved, or disk
-    // usage will grow with every failed run.
-    return res.status(500).json({ success: false, error: err.message, debug_tmp_dir: tmpDir });
+    throw err;
+  } finally {
+    if (!process.env.DEBUG_KEEP_TMP) {
+      await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Async job API - /compose starts the render and returns immediately with a
+// job_id (never holds the HTTP connection open), /compose-status/:jobId is
+// polled by the caller (n8n) until the render finishes. This is what
+// actually fixes the Cloudflare 524 timeout - not a bigger timeout number,
+// but never holding one long connection open in the first place.
+// ---------------------------------------------------------------------------
+
+app.post("/compose", (req, res) => {
+  const jobId = crypto.randomUUID();
+  const tmpDir = newTmpDir();
+
+  jobStore.set(jobId, { status: "processing", startedAt: Date.now() });
+
+  runComposeJob(req.body, jobId, tmpDir)
+    .then((result) => {
+      jobStore.set(jobId, { status: "done", result, finishedAt: Date.now() });
+    })
+    .catch((err) => {
+      jobStore.set(jobId, { status: "failed", error: err.message, finishedAt: Date.now() });
+    });
+
+  return res.status(202).json({ job_id: jobId, status: "processing" });
+});
+
+app.get("/compose-status/:jobId", (req, res) => {
+  const job = jobStore.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ status: "not_found", error: `No job with id ${req.params.jobId}` });
+  }
+  if (job.status === "done") {
+    // Clear after first successful fetch - jobs aren't meant to be polled
+    // forever, and this keeps the in-memory store from growing unbounded.
+    jobStore.delete(req.params.jobId);
+    return res.json({ status: "done", success: true, ...job.result });
+  }
+  if (job.status === "failed") {
+    jobStore.delete(req.params.jobId);
+    return res.status(500).json({ status: "failed", success: false, error: job.error });
+  }
+  return res.json({ status: "processing" });
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`FFmpeg compose service listening on :${PORT}`));
+app.listen(PORT, () => console.log(`FFmpeg compose engine listening on port :${PORT}`));

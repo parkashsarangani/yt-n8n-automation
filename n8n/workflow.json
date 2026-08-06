@@ -28,13 +28,13 @@
           ]
         }
       },
-      "id": "46a7fc2d-fdfe-49fa-85b9-a9e7b540262b",
+      "id": "89a3ac7e-e649-497f-82b8-eba6423d509c",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        22944,
-        14480
+        12000,
+        8864
       ]
     },
     {
@@ -42,13 +42,13 @@
         "url": "https://shorts.interviewbuddy.cloud/topic-history",
         "options": {}
       },
-      "id": "d83f8908-7269-4e44-b50b-28467a6e07dd",
+      "id": "2b3a18d0-6874-419f-9930-df16582e2264",
       "name": "Get Topic History",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        23152,
-        14480
+        12208,
+        8864
       ],
       "continueOnFail": true
     },
@@ -56,13 +56,13 @@
       "parameters": {
         "jsCode": "const item = $input.first().json;\nif (item.error) {\n  console.log('Topic history fetch failed, continuing with empty history:', item.error);\n  return { json: { topics: [] } };\n}\nif (!Array.isArray(item.topics)) {\n  console.log('Topic history response missing topics array, defaulting to empty');\n  return { json: { topics: [] } };\n}\nreturn { json: { topics: item.topics } };"
       },
-      "id": "1f878047-a391-4f9a-a0a7-a2268f8bc008",
+      "id": "b955eb78-c089-4f01-a98d-2fd59efa1ab4",
       "name": "Ensure Topics Array",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        23312,
-        14480
+        12368,
+        8864
       ]
     },
     {
@@ -86,35 +86,38 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-4-6\", max_tokens: 300, messages: [{ role: \"user\", content: \"You are the topic strategist for a YouTube Shorts channel. The channel rotates across SEVEN focused niches - pick ONE topic from ONE niche for this Short.\\n\\nHARD EXCLUSION (non-negotiable, applies regardless of niche): never pick a medical or health-related topic - no diseases, illnesses, conditions, symptoms, treatments, medications, surgeries, or medical procedures, even framed as a surprising fact. A story involving a health/medical company (e.g. a fraud case about a fake diagnostic company) is fine - the topic is the FRAUD or EVENT, never medical content itself.\\n\\nTHE SEVEN NICHES:\\n1. BILLION DOLLAR FRAUDS - corporate accounting fraud, Ponzi/investment schemes, startup/tech fraud, crypto/finance fraud, insurance/real estate fraud, government/procurement fraud.\\n2. FAILED BILLION-DOLLAR VENTURES - product launches, megaprojects, or companies that collapsed spectacularly through bad decisions or bad luck, NOT fraud - no wrongdoing implied, just failure.\\n3. LANDMARK LAWSUITS & SETTLEMENTS - resolved legal cases with enormous payouts or precedent-setting outcomes.\\n4. ECONOMIC BUBBLES & CRASHES - historical market bubbles and crashes (tulip mania, dot-com, historical panics) and the mechanism behind how they inflated and burst.\\n5. HISTORICAL DISASTERS - industrial accidents, engineering failures, aviation disasters - covered with respectful framing, never graphic, focused on mechanism and consequence rather than victims.\\n6. SCALE & DATA STORIES - a number, economic fact, or scale so large or strange it is hard to grasp, told as a structured explainer (e.g. what a trillion dollars actually looks like, how fast wealth or debt compounds).\\n7. ANCIENT CIVILIZATIONS & HISTORY - genuinely interesting or weird historical events, figures, or civilizations, real and checkable, not dry textbook history - a strange, dark, surprising, or little-known angle.\\n\\nNICHE ROTATION RULE: classify the already-used topics below by niche (1-7), then pick whichever niche is MOST under-represented in that recent history. Never pick the same niche two times in a row. If the history is empty or too short to judge, pick freely.\\n\\nCONTENT RISK GUARDRAILS (apply to niches 1, 2, 3 especially):\\n- Only cover cases that are PUBLICLY DOCUMENTED and LEGALLY RESOLVED (conviction, settlement, guilty plea, bankruptcy, or extensive court-record/journalistic documentation) - never an ongoing, unresolved, or actively-litigated case. This avoids defamation risk on unproven allegations.\\n- No graphic content, no exploitative victim detail - for historical disasters (niche 5), focus on mechanism and consequence, not suffering.\\n- The fact must be real and checkable - no rumors, no unverified claims, no \\\"alleged\\\" framing as if confirmed.\\n\\nTHE TOPIC SENTENCE MUST CONTAIN THE ACTUAL HOOK/MECHANISM, never just a label or company/event name: describe the specific twist, scale, or moment that makes this a story - e.g. \\\"a fake blood-testing company convinced Silicon Valley it could run 200 tests from a single drop of blood - none of it worked\\\" not \\\"the Theranos fraud.\\\"\\n\\nVARIETY RULE: within any niche, prefer lesser-known or less-covered cases over the four or five most famous ones once those have been covered a few times - avoid becoming a channel that only ever repeats the same handful of famous stories.\\n\\nMust NOT closely resemble any of these already-used topics: \" + JSON.stringify($('Ensure Topics Array').item.json.topics.map(t => t.topic)) + \" - Output ONLY the topic as one plain sentence containing the specific hook/mechanism. No quotes, no JSON, no markdown, no preamble, no niche label.\" }] }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-5\", max_tokens: 1024, thinking: { type: \"disabled\" }, messages: [{ role: \"user\", content: \"You are picking a topic for a YouTube Shorts video.\\n\\nCRITERIA: pick whatever topic the majority of people would genuinely stop scrolling for - your own judgment, no fixed category, format, or pattern list to pick from.\\n\\nFORMAT IS OPEN: a topic can be a fact, hypothetical, scale question, or comparison - e.g. \\\"How would spending 1 trillion dollars actually look?\\\" is as valid as a straightforward fact. The only requirement: the answer must be groundable in real math or information, never fabricated. Vary the shape freely.\\n\\nREJECT trivia that only becomes interesting after the explanation - stated plainly, the topic itself must already create real curiosity, not just the payoff behind it.\\n\\nVARY THE SHAPE, NOT JUST THE SUBJECT: check the already-used topics below for their STRUCTURE, not just their subject - e.g. \\\"what if everyone did X at once\\\" is one shape; \\\"a hidden mechanism inside something ordinary\\\" is another, which a car-safety fact and a body-biology fact could both share despite being different subjects. If recent entries cluster on one shape, pick a genuinely different one.\\n\\nHARD EXCLUSION (non-negotiable): never a medical or health topic - no diseases, symptoms, treatments, medications, procedures, even framed as a surprising fact.\\n\\nMust NOT closely resemble any of these already-used topics: \" + JSON.stringify($('Ensure Topics Array').item.json.topics.map(t => t.topic)) + \" - Output ONLY the topic as one plain sentence. No quotes, no JSON, no markdown, no preamble, no category label.\" }] }) }}",
         "options": {}
       },
-      "id": "9328a16a-4e5b-456e-8188-270818a10725",
+      "id": "7a12b24f-41e8-4ba7-9544-2cf711a776b5",
       "name": "Claude: Generate Topic",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        24240,
-        14480
+        12784,
+        8864
       ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "80oNldJqbuobx761",
           "name": "claude"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
         "jsCode": "const response = $input.first().json;\nif (response.error) {\n  throw new Error('Claude API returned an error: ' + JSON.stringify(response.error));\n}\nlet raw = response.content?.[0]?.text;\nif (!raw || raw.trim() === '') {\n  throw new Error('Claude did not return a topic - check the \"Claude: Generate Topic\" node response');\n}\nif (response.stop_reason === 'max_tokens') {\n  console.log('Warning: topic generation hit max_tokens, response may be truncated');\n}\nraw = raw.trim().replace(/^```(?:\\w*)?\\s*/i, '').replace(/```\\s*$/, '').trim();\nconst topic = raw.replace(/^[\"']|[\"']$/g, '');\nif (topic.length < 10) {\n  throw new Error('Generated topic looks too short/empty to be usable: \"' + topic + '\"');\n}\nreturn { json: { topic } };"
       },
-      "id": "8cc10303-6376-4757-8c90-407277a5dd8a",
+      "id": "e584a553-450e-4993-85c1-a17c0ee18213",
       "name": "Extract Generated Topic",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        24464,
-        14480
+        13008,
+        8864
       ]
     },
     {
@@ -138,35 +141,38 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-4-6\", max_tokens: 3000, messages: [{ role: \"user\", content: \"You are the head writer for a YouTube Shorts channel built for maximum virality and watch time with a broad audience.\\n\\nHARD EXCLUSION (non-negotiable): never write about medical or health topics - no diseases, conditions, symptoms, treatments, medications, surgeries, or medical procedures, even framed as a surprising fact. If the given topic drifts toward this, reframe it toward a genuinely non-medical angle instead.\\n\\nIMPORTANT: There is NO fixed topic restriction, and NO forced format. You are given a topic and you develop the best version of it - which might be a surprise/curiosity-gap fact, or might be a straightforward explainer, how-to, comparison, or story. Do not force every topic into a clickbait mold.\\n\\nAUDIENCE: Broad, general audience. They want either a concrete surprising fact OR a genuinely clear, useful explanation - no vague generalities, no lifestyle-influencer fluff.\\n\\nVOICE: Confident, direct, to the point. Sounds like a well-informed friend telling you something worth knowing - not a lecture.\\n\\nHOOK - the single most important sentence in the video. This channel’s own performance data shows exactly what works for surprise-style content, so follow it where it applies:\\n\\nDATA RULE #1 (applies specifically to surprise/secret/contradiction-style topics - SKIP this rule entirely for straightforward explainers or how-tos, where clearly stating the value up front is correct) - THE NUMBER IS THE PAYOFF, NOT THE HOOK. On this channel, titles and hooks that lead with the statistic averaged 84 views; hooks framed as a hidden secret or contradiction averaged 298 - 3.5x more. A number stated up front RESOLVES the curiosity and leaves nothing to watch for. Never put the key figure in the hook or the title for this content type. State the secret or contradiction; save the number, mechanism, or answer for inside the video.\\n- WEAK (real underperformer from this channel): World’s Longest Flight Burns 161,000 Litres of Fuel -> STRONG: The world’s longest flight burns more fuel than you will use in your entire life.\\n- WEAK (real underperformer): Toilets Flush the Same Way in Australia - The Myth Explained -> STRONG: The Australia toilet myth fooled your science teacher too.\\n\\nHOOK PATTERNS - pick whichever fits the topic:\\n1. HIDDEN SECRET (top performer for surprise topics): something familiar is secretly doing something strange. From this channel’s number-one video: Kit Kat grinds up its own rejected bars and hides them inside new ones.\\n2. CONTRADICTION: a flat statement that sounds impossible but is true. Electric eels can drown.\\n3. EXTREME SUPERLATIVE: the most violent / deadliest / loudest version of something, belonging to an unexpected subject. The most violent strike in nature belongs to a shrimp.\\n4. WHAT HAPPENS WHEN: frame the fact as what actually happens when/if X - works for almost any topic, surprising or explanatory.\\n5. INFORMATIVE PROMISE (for genuine explainers/how-tos - do not force a curiosity gap here): state clearly and specifically what the viewer will understand or be able to do by the end. A concrete specific promise, not a vague tease - naming the exact mechanism or reason works; a generic \\\"let’s talk about X\\\" does not.\\n6. STAT SHOCK (use sparingly, surprise topics only): only when scale itself is the story - and even then, tease the scale in the hook and reveal the exact figure inside the video, never in the hook or title.\\n\\nPOWER WORDS: where they fit honestly, prefer words proven to lift clicks in this niche - secret, hidden, banned, lie, wrong, never, actually. Do not force them; one per hook or title is plenty.\\n\\nMore WEAK -> STRONG calibration (surprise-style):\\n- WEAK: Sleep is important for your brain. -> STRONG: Your brain deletes memories on purpose every single night.\\n- WEAK: Most people don’t know this about airports. -> STRONG: That airport announcement about a final call is almost always a lie.\\nWhat makes STRONG work: a SPECIFIC named entity doing something UNEXPECTED, stated flatly and confidently - never hedged, never introduced.\\n\\nBANNED PHRASES (none of these appear in the dramatic style below - they are flat filler/hype, not genuine drama): have you ever, let\\u2019s explore, in today\\u2019s video, did you know, it\\u2019s important to, the truth is, basically, honestly, crazy, insane, unbelievable, shocking, mind-blowing, impossible, wild, the reason is, this happens because, that\\u2019s because. Note: \\u201cimagine\\u201d, \\u201cpicture\\u201d, and \\u201clook at\\u201d are NOT banned - direct imperative address is the encouraged style below, this list only removes flat/generic filler that adds no drama.\\n\\nDRAMATIC HOOK STYLE (the default direction for this channel): lead with direct, imperative address that implicates the viewer physically or personally, then deliver a bold, high-drama claim - mortality, bodily horror, visceral scale, or danger read strongest. \\\"Did you know\\\", \\\"imagine\\\", and similar framing words are NOT banned here - use \\\"Picture X\\\", \\\"Look at your own X\\\", \\\"Right now, your X is...\\\" as strong, encouraged openers. Favor vivid, ominous, dramatic word choice over flat neutral phrasing - dread and awe are assets, not things to soften.\\n\\nCALIBRATION EXAMPLES (this exact style, this exact energy level):\\n- \\\"Right now, your eyes are lying to you - there's a blind spot in your vision so large a whole face could disappear into it, and your brain is painting over the gap.\\\"\\n- \\\"Look at your own hand. In seven years, not one atom of it will be the same one that's there today.\\\"\\n- \\\"Picture a teaspoon of a neutron star sitting in your palm - it would outweigh every car on the planet combined.\\\"\\n- \\\"Somewhere inside your skull right now, your brain is quietly eating parts of itself you're not using anymore.\\\"\\n- \\\"Hold your breath for a second - somewhere on Earth, someone is doing that on purpose, diving deeper than a submarine is rated to survive.\\\"\\nMatch this level of direct address, vivid imagery, and dramatic weight in every hook.\\n\\nHOOK STRESS TEST (apply silently): if a stranger heard ONLY this one sentence with zero context, would they feel a specific reaction - either wait-what surprise, or genuine oh-that’s-useful clarity - or would they shrug? A shrug means rewrite, even if the fact is technically true or the explanation technically correct.\\n\\nHOOK SELECTION - BEST OF 5 (mandatory): draft five distinct hook candidates. Score each on: (1) PROMISE STRENGTH - for surprise topics, does it open a loop WITHOUT resolving it; for explainers, does it clearly promise real understanding or usefulness? (2) PATTERN FIT - does it use the pattern best suited to this specific topic, not a forced default? (3) SPECIFICITY - a named, concrete entity or mechanism. (4) TENSION - surprising or clarifying enough to stop the scroll, credible enough not to smell fake or vague. Output all five in hook_candidates and the single strongest in hook.\\n\\nHONEST CLICKBAIT RULE: for surprise-style hooks, maximize curiosity by WITHHOLDING the resolution - never by exaggerating or inventing. For explainer-style hooks, state the value directly and deliver on it. Either way, every claim must be fully paid off by the script. Overpromising tanks retention, which is worse than a plain hook.\\n\\nPLAN THE ENDING FIRST: before writing any scene, decide TWO lines - the hook and the final kicker. The kicker is the last spoken sentence: the payoff, mechanism, or key takeaway, plus one line that reframes or tops it. Everything in between exists only to earn that line.\\n\\nSTRUCTURE - pick whichever fits the topic, do not force curiosity-gap structure onto an explainer:\\n- OPEN LOOP / ESCALATE / PAY OFF (surprise, secret, or contradiction topics): scene 1 = hook only, middle scene(s) escalate without revealing the payoff, final scene delivers the answer plus a kicker.\\n- CLEAR EXPLAINER (how-tos, mechanisms, straightforward informative topics): scene 1 = state plainly what this explains, middle scene(s) walk through the key steps or reasons in order, final scene lands the most useful or memorable takeaway. No need to withhold anything - clarity beats suspense here.\\nEither way: every transition must carry BUT or THEREFORE tension, never AND THEN listing - if a scene could be cut without breaking the chain, it is padding, cut it. End abruptly on the strongest line - no summary, no outro, no spoken call to action.\\n\\nLENGTH TARGET (calibrated to the proven sweet spot): aim for 110-130 total narration words across all scenes - that lands the video around 33-40 seconds. 130 words is a HARD ceiling. 3-4 scenes, roughly 25-35 words each. No padding, no repeating a point in different words.\\n\\nSENTENCE RHYTHM: short, punchy. Avoid semicolons and long subordinate clauses - this is spoken aloud, not read.\\n\\nVISUAL STYLE - PROFESSIONAL HOUSE STYLE (critical): this channel’s look is polished editorial documentary photography - clean, high-production, never casual or amateur. Every visual_prompt follows this structured format, in this order: [1] SUBJECT plus one clear action or state, [2] composition and camera angle, [3] lighting, [4] mood and palette. Keep it under 40 words with concrete nouns first - image models follow short ordered prompts far better than long prose.\\n- Lean into: dramatic directional lighting, macro-level detail, high contrast, shallow depth of field, cinematic color, museum-grade clarity.\\n- One dominant subject that fills the frame and reads instantly at thumbnail size - never a cluttered wide scene.\\n\\nVISUAL PROMPTS - CRITICAL RULES (AI image generation CANNOT render readable text, numbers, or UI - it comes out garbled and destroys credibility):\\n- NEVER describe a shot where readable text, numbers, prices, documents, receipts, screens, banknote denominations, or any typography would need to be legible. No paperwork close-ups, no readable screens, no money denominations, no ID cards, no forms, no spreadsheets, no calculator displays.\\n- Numbers and facts belong ONLY in the narration and the caption overlay - never in the generated image.\\n- Describe the CONCEPT visually without legible text: concrete b-roll matching the exact point.\\n- SCENE 1 IS THE THUMBNAIL: its image is the first frame in the feed and the de facto thumbnail. Show the subject at its most striking, clearest moment - never at rest or generic. Make it the most arresting composition of the set.\\n- Each scene’s visual_prompt must be SPECIFIC and ACCURATE to that scene’s exact beat - no generic filler.\\n- ALSO give stock_search_query: 2-4 plain concrete nouns describing the literal subject and setting, written for a stock-photo search engine (e.g. \\\"woman grocery shopping\\\", \\\"honey jar closeup\\\"). This is separate from visual_prompt and must NOT include style/lighting/camera language.\\n- Include a negative_prompt that explicitly excludes: readable text, visible numbers, legible documents, screen UI, distinct currency denominations, logos.\\n\\nCOMMENT MECHANIC (critical for engagement): in comment_hook, give a short, concrete question or mildly interesting opinion tied directly to THIS content (e.g. Would you have guessed the shrimp? or Which step do you already do?). NOT part of the narration - it appears as on-screen text in the final 1-2 seconds. Never a generic line like what do you think.\\n\\nSELF-REVIEW before output (silent): Did you plan the hook AND kicker first? Did you pick the hook pattern and structure that genuinely fits this topic, rather than forcing curiosity-gap onto an explainer or vice versa? Do all transitions carry BUT/THEREFORE tension? Does the narration stop abruptly with no outro? Total narration 110-130 words? Every visual_prompt free of readable text and specific to its beat? Rewrite anything that fails. Then output ONLY the final result.\\n\\nSEO/TAGS STRATEGY:\\n- title: for surprise topics, withhold the why/how/figure - never include the payoff number (this channel’s data: number-led titles average 3.5x fewer views). For explainers, state the value clearly and specifically. Prefer recurring template families the channel can repeat and compound on. Strong keyword early where natural. MAXIMUM 90 characters.\\n- tags: mix broad viral tags (fun facts, how to, shorts, explained) with specific tags for this exact topic.\\n- seo_description: first 1-2 sentences carry the key search terms, then end with a comment-inviting question.\\n\\nVISUAL SOURCE PER SCENE - stock photo OR animated template:\\nFor each scene, decide whether a real stock photo or a designed animated template better serves that specific beat. Templates give exact, designed visuals for beats that are fundamentally about a NUMBER, a COMPARISON, or a PUNCHY LINE - things no stock photo can show precisely. Use a template when the beat IS one of these three shapes; use stock otherwise.\\n\\nAVAILABLE TEMPLATES (use the exact name and exact data fields shown):\\n1. \\\"stat_reveal\\\" - a single striking number/stat as a payoff. data: {statValue: string (the number/figure, short), label: string (what it means, short phrase)}\\n2. \\\"comparison\\\" - two values side by side. data: {leftLabel: string, leftValue: string, rightLabel: string, rightValue: string}\\n3. \\\"kinetic_text\\\" - one punchy line revealed word by word. data: {line: string (under 8 words)}\\n\\nFor each scene, output:\\n- visual_source: \\\"stock\\\" or \\\"template\\\"\\n- if \\\"template\\\": template_name (one of the three above, exact match) and template_data (the exact fields that template requires, values drawn from this scene's narration)\\n- if \\\"stock\\\": keep visual_prompt, negative_prompt, and stock_search_query as specified in the rules above\\nA typical script might use \\\"template\\\" for the scene containing the core number/payoff and \\\"stock\\\" for the rest - do not force every scene into a template, and do not force every scene into stock either.\\n\\nOUTPUT - valid JSON only, no markdown fences, no preamble, no trailing commas:\\n{\\\"hook\\\": string, \\\"hook_type\\\": string, \\\"hook_candidates\\\": array of exactly 5 strings, \\\"title\\\": string (MAXIMUM 90 characters), \\\"seo_description\\\": string, \\\"comment_hook\\\": string, \\\"tags\\\": array of 8-15 strings, \\\"full_script\\\": string, \\\"caption_style\\\": \\\"upbeat\\\"|\\\"serious\\\"|\\\"funny\\\"|\\\"neutral\\\", \\\"scenes\\\": [{\\\"scene_index\\\": number, \\\"point\\\": string, \\\"narration\\\": string, \\\"visual_source\\\": \\\"stock\\\"|\\\"template\\\", \\\"visual_prompt\\\": string, \\\"negative_prompt\\\": string, \\\"stock_search_query\\\": string, \\\"template_name\\\": string, \\\"template_data\\\": object}]}\\n\\nTopic: \" + $json.topic }] }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: \"claude-opus-4-8\", max_tokens: 8192, messages: [{ role: \"user\", content: \"You are the head writer for a YouTube Shorts channel built for maximum virality and watch time with a broad audience.\\n\\nHARD EXCLUSION (non-negotiable): never write about medical or health topics - no diseases, conditions, symptoms, treatments, medications, surgeries, or medical procedures, even framed as a surprising fact. If the given topic drifts toward this, reframe it toward a genuinely non-medical angle instead.\\n\\nIMPORTANT: There is NO fixed topic restriction, and NO forced format. You are given a topic and you develop the best version of it - which might be a surprise/curiosity-gap fact, or might be a straightforward explainer, how-to, comparison, or story. Do not force every topic into a clickbait mold.\\n\\nAUDIENCE: Broad, general audience. They want either a concrete surprising fact OR a genuinely clear, useful explanation - no vague generalities, no lifestyle-influencer fluff.\\n\\nVOICE: Confident, direct, to the point - but also genuinely warm and funny, like a smart friend telling you something wild over drinks, not a narrator reading facts at you. React to your own story: a dry aside, a wry comparison, mild disbelief at the thing you are describing. Humor should come from the material itself (an absurd detail, an ironic twist, a comparison that makes the scale click) - never a forced joke bolted on. If a line could have been written by a textbook, rewrite it until it sounds like a person actually reacting to the story as they tell it.\\n\\nHOOK - the single most important sentence in the video. Everything below serves ONE goal: a hook that sounds like a genuinely charming, funny, sharp person just said something wild - not a checklist being satisfied. If a hook technically passes every rule below but reads flat or generic, it has failed the actual goal. Rewrite for charm first, then verify it against the rules.\\\\n\\\\nTHE CORE MECHANIC - withhold, don\\\\u2019t resolve: for surprise/secret/contradiction topics, state the contradiction or secret but never the number or mechanism - that\\\\u2019s the payoff, saved for inside the video. On this channel, hooks that led with a statistic averaged 84 views; hooks that withheld it averaged 298 - 3.5x more. For genuine explainers/how-tos, this rule does not apply - state the value directly and specifically instead.\\\\n- WEAK (real underperformer): World\\\\u2019s Longest Flight Burns 161,000 Litres of Fuel -> STRONG: The world\\\\u2019s longest flight burns more fuel than you will use in your entire life.\\\\n- WEAK: Sleep is important for your brain. -> STRONG: Your brain deletes memories on purpose every single night.\\\\nWhat makes STRONG work: a SPECIFIC named entity doing something UNEXPECTED, stated flatly and confidently - never hedged.\\\\n\\\\nDELIVERY - direct, personal, and genuinely funny: address the viewer directly and physically (your eyes, your hand, your brain, right now) and let the sentence carry real ominous or awe-struck energy - dread and awe are assets. Vary the actual grammatical shape every time - do not default to the same \\\"Right now, your X...\\\" template repeatedly. Some options, not a checklist to rotate through: a flat impossible-sounding statement, a direct command, a contradiction stated as plain fact, a question that answers itself uncomfortably. The only banned openers are dead filler that adds no drama: \\\\u201chave you ever\\\\u201d, \\\\u201clet\\\\u2019s explore\\\\u201d, \\\\u201cin today\\\\u2019s video\\\\u201d, \\\\u201cit\\\\u2019s important to\\\\u201d, \\\\u201cthe truth is\\\\u201d, \\\\u201cbasically\\\\u201d, \\\\u201chonestly\\\\u201d. \\\\u201cDid you know\\\\u201d, \\\\u201cimagine\\\\u201d, \\\\u201cpicture\\\\u201d, and \\\\u201clook at\\\\u201d are genuinely fine when they lead into something sharp - the problem was never the opener, it\\\\u2019s vague or generic delivery. Generic hype words are also banned regardless of framing: crazy, insane, unbelievable, shocking, mind-blowing, impossible, wild.\\\\n\\\\nFIVE DIFFERENT HOOKS, FIVE DIFFERENT SHAPES: draft five real candidates, each genuinely different in structure and angle - not five phrasings of the same idea. Score each on: does it withhold the payoff (where that rule applies)? does it name something specific and concrete? would a stranger react with real surprise or genuine want-to-know, not a shrug? Output all five in hook_candidates, the strongest in hook.\\\\n\\\\nHONEST CLICKBAIT: withhold or promise, never exaggerate or invent. Every claim must be fully paid off by the script - overpromising tanks retention, which is worse than a plain hook.\\\\n\\\\nPLAN THE ENDING FIRST: before writing any scene, decide the hook, the kicker, and the closing call-to-action together as one unit. The kicker is the payoff plus a line that reframes or tops it; the CTA immediately follows as one natural spoken sentence - a specific, genuine question about THIS fact that invites a real answer (e.g. built around a real choice, a personal reaction, or a detail only the viewer would know) - never a generic \\\"comment below\\\" or \\\"what do you think\\\" filler. Everything before this exists only to earn that final moment.\\\\n\\\\nSTRUCTURE - pick whichever fits the topic, do not force curiosity-gap structure onto an explainer:\\n- OPEN LOOP / ESCALATE / PAY OFF (surprise, secret, or contradiction topics): scene 1 = hook only, middle scene(s) escalate without revealing the payoff, final scene delivers the answer plus a kicker.\\n- CLEAR EXPLAINER (how-tos, mechanisms, straightforward informative topics): scene 1 = state plainly what this explains, middle scene(s) walk through the key steps or reasons in order, final scene lands the most useful or memorable takeaway. No need to withhold anything - clarity beats suspense here.\\nEither way: every transition must carry BUT or THEREFORE tension, never AND THEN listing - if a scene could be cut without breaking the chain, it is padding, cut it. End on the strongest line - no summary, no generic outro - but the final spoken sentence must be a natural, specific call-to-action tied directly to this exact fact (a genuine question inviting a real answer, not \\\"comment below\\\" or \\\"what do you think\\\"). It should read as the natural next thought after the kicker, not a bolted-on afterthought.\\n\\nSUSTAINED STORYTELLING (critical - this is where scripts most often fail): the hook is not the only place that needs personality and tension. Every middle scene must ALSO read like a person telling a story that keeps getting more interesting, not a list of facts about the same topic. Concretely: each scene should make the previous one MORE surprising in hindsight, add a reaction or a stake, or set up a question the next scene answers - never just \\\"and here is another fact about X.\\\" If you could shuffle the middle scenes into a different order without losing anything, they are not actually building a story - rewrite so each one depends on the one before it.\\n\\nLENGTH TARGET (tightened based on this channel's own real retention data - best performers hold 59-65%, worst hold 30-32% and skew longer): aim for 70-90 total narration words across all scenes - that lands the video around 20-25 seconds, including the closing CTA sentence. 100 words is a HARD ceiling. 3-4 scenes, roughly 18-25 words each. No padding, no repeating a point in different words - every sentence must be load-bearing.\\n\\nSENTENCE RHYTHM: short, punchy. Avoid semicolons and long subordinate clauses - this is spoken aloud, not read.\\n\\nVISUAL STYLE - PROFESSIONAL HOUSE STYLE (critical): this channel’s look is polished editorial documentary photography - clean, high-production, never casual or amateur. Every visual_prompt follows this structured format, in this order: [1] SUBJECT plus one clear action or state, [2] composition and camera angle, [3] lighting, [4] mood and palette. Keep it under 40 words with concrete nouns first - image models follow short ordered prompts far better than long prose.\\n- Lean into: dramatic directional lighting, macro-level detail, high contrast, shallow depth of field, cinematic color, museum-grade clarity.\\n- One dominant subject that fills the frame and reads instantly at thumbnail size - never a cluttered wide scene.\\n\\nVISUAL PROMPTS - CRITICAL RULES (AI image generation CANNOT render readable text, numbers, or UI - it comes out garbled and destroys credibility):\\n- NEVER describe a shot where readable text, numbers, prices, documents, receipts, screens, banknote denominations, or any typography would need to be legible. No paperwork close-ups, no readable screens, no money denominations, no ID cards, no forms, no spreadsheets, no calculator displays.\\n- Numbers and facts belong ONLY in the narration and the caption overlay - never in the generated image.\\n- Describe the CONCEPT visually without legible text: concrete b-roll matching the exact point.\\n- SCENE 1 IS THE THUMBNAIL: its image is the first frame in the feed and the de facto thumbnail. Show the subject at its most striking, clearest moment - never at rest or generic. Make it the most arresting composition of the set.\\n- Each scene’s visual_prompt must be SPECIFIC and ACCURATE to that scene’s exact beat - no generic filler.\\n- ALSO give stock_search_query: 2-4 plain concrete nouns describing the literal subject and setting, written for a stock-photo search engine (e.g. \\\"woman grocery shopping\\\", \\\"honey jar closeup\\\"). This is separate from visual_prompt and must NOT include style/lighting/camera language.\\n- Include a negative_prompt that explicitly excludes: readable text, visible numbers, legible documents, screen UI, distinct currency denominations, logos.\\n\\nCOMMENT MECHANIC (critical for engagement): in comment_hook, give a short, concrete question or mildly interesting opinion tied directly to THIS content (e.g. Would you have guessed the shrimp? or Which step do you already do?). NOT part of the narration - it appears as on-screen text in the final 1-2 seconds. Never a generic line like what do you think.\\n\\nSELF-REVIEW before output (silent): Did you plan the hook AND kicker first? Did you pick the hook pattern and structure that genuinely fits this topic, rather than forcing curiosity-gap onto an explainer or vice versa? Do all transitions carry BUT/THEREFORE tension? Does the narration end on the kicker followed immediately by one specific, non-generic spoken CTA question? Total narration 70-90 words? Every visual_prompt free of readable text and specific to its beat? Rewrite anything that fails. Then output ONLY the final result.\\n\\nSEO/TAGS STRATEGY:\\n- title: for surprise topics, withhold the why/how/figure - never include the payoff number (this channel’s data: number-led titles average 3.5x fewer views). For explainers, state the value clearly and specifically. Prefer recurring template families the channel can repeat and compound on. Strong keyword early where natural. MAXIMUM 50 characters (mobile screens truncate longer titles - this is a hard ceiling, not a target to approach).\\n- tags: mix broad viral tags (fun facts, how to, shorts, explained) with specific tags for this exact topic.\\n- seo_description: first 1-2 sentences carry the key search terms, then end with a comment-inviting question.\\n\\nVISUAL SOURCE PER SCENE - stock photo OR animated template:\\nFor each scene, decide whether a real stock photo or a designed animated template better serves that specific beat. Templates give exact, designed visuals for beats that are fundamentally about a NUMBER, a COMPARISON, or a PUNCHY LINE - things no stock photo can show precisely. Use a template when the beat IS one of these three shapes; use stock otherwise.\\n\\nAVAILABLE TEMPLATES (use the exact name and exact data fields shown):\\n1. \\\"stat_reveal\\\" - a single striking number/stat as a payoff. data: {statValue: string (the number/figure, short), label: string (what it means, short phrase)}\\n2. \\\"comparison\\\" - two values side by side. data: {leftLabel: string, leftValue: string, rightLabel: string, rightValue: string}\\n3. \\\"kinetic_text\\\" - one punchy line revealed word by word. data: {line: string (under 8 words)}\\n\\nFor each scene, output:\\n- visual_source: \\\"stock\\\" or \\\"template\\\"\\n- if \\\"template\\\": template_name (one of the three above, exact match) and template_data (the exact fields that template requires, values drawn from this scene's narration)\\n- if \\\"stock\\\": keep visual_prompt, negative_prompt, and stock_search_query as specified in the rules above\\nA typical script might use \\\"template\\\" for the scene containing the core number/payoff and \\\"stock\\\" for the rest - do not force every scene into a template, and do not force every scene into stock either.\\n\\nOUTPUT - valid JSON only, no markdown fences, no preamble, no trailing commas:\\n{\\\"hook\\\": string, \\\"hook_type\\\": string, \\\"hook_candidates\\\": array of exactly 5 strings, \\\"title\\\": string (MAXIMUM 50 characters), \\\"seo_description\\\": string, \\\"comment_hook\\\": string, \\\"tags\\\": array of 8-15 strings, \\\"full_script\\\": string, \\\"caption_style\\\": \\\"upbeat\\\"|\\\"serious\\\"|\\\"funny\\\"|\\\"neutral\\\", \\\"scenes\\\": [{\\\"scene_index\\\": number, \\\"point\\\": string, \\\"narration\\\": string, \\\"visual_source\\\": \\\"stock\\\"|\\\"template\\\", \\\"visual_prompt\\\": string, \\\"negative_prompt\\\": string, \\\"stock_search_query\\\": string, \\\"template_name\\\": string, \\\"template_data\\\": object}]}\\n\\nTopic: \" + $json.topic }] }) }}",
         "options": {}
       },
-      "id": "bc33640a-e977-4e0d-8c1b-cede7e9bdd3d",
+      "id": "a3047261-2c95-422b-961e-2556c4481dbf",
       "name": "Claude: Draft Script (Stage 1)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        24624,
-        14480
+        13168,
+        8864
       ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "80oNldJqbuobx761",
           "name": "claude"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
         "jsCode": "const response = $input.first().json;\nif (response.error) {\n  throw new Error('Claude API returned an error: ' + JSON.stringify(response.error));\n}\nlet raw = response.content?.[0]?.text;\nif (!raw) throw new Error('Claude draft response missing content[0].text');\nif (response.stop_reason === 'max_tokens') {\n  throw new Error('Claude draft was cut off by max_tokens - the script is likely truncated mid-JSON. Increase max_tokens on the \"Claude: Draft Script (Stage 1)\" node.');\n}\n\n// Strip markdown code fences if present (Claude sometimes wraps JSON in ```json ... ``` despite instructions not to)\nraw = raw.trim();\nif (raw.startsWith('```')) {\n  raw = raw.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\n}\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error('Claude draft did not return valid JSON even after stripping fences: ' + raw.slice(0, 300));\n}\nreturn { json: { draft: parsed } };"
       },
-      "id": "38edcca0-1d7c-4b19-880e-fea31a8a5a5f",
+      "id": "e1965522-b67c-4f54-b9b0-f57e5e80a522",
       "name": "Parse Draft JSON",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        24848,
-        14480
+        13392,
+        8864
       ]
     },
     {
@@ -190,35 +196,38 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-4-6\", max_tokens: 3000, messages: [{ role: \"user\", content: \"You are a strict editor for a viral facts/comparison YouTube Shorts channel with a broad general audience. You will be given a draft script as JSON. Find and fix everything that sounds vague, unverifiable, too long, or would require the AI video generator to render readable text - then output the corrected JSON in the exact same schema.\\n\\nCHECK FOR AND FIX:\\n0. MEDICAL EXCLUSION: if any scene or the hook/title touches disease, illness, symptoms, treatment, medication, surgery, or any medical/health topic, rewrite that scene entirely toward a non-medical angle - this overrides every other instruction below.\\n1. Banned filler/hype: have you ever, let\\u2019s explore, in today\\u2019s video, did you know, it\\u2019s important to, the truth is, basically, honestly, crazy, insane, unbelievable, shocking, mind-blowing, impossible, wild, the reason is, this happens because, that\\u2019s because. Remove any of these. \\u201cImagine\\u201d, \\u201cpicture\\u201d, and \\u201clook at\\u201d are NOT on this list - they are the encouraged dramatic style, do not remove them.\\n1. DRAMATIC HOOK STYLE (enforce this, do not soften it): the hook must use direct, imperative address (\\\"Picture X\\\", \\\"Look at your own X\\\", \\\"Right now, your X...\\\") and lead into a bold, high-drama claim - mortality, bodily horror, visceral scale, or danger. \\\"Did you know\\\", \\\"imagine\\\", and similar framing openers are ENCOURAGED here, not banned. If a hook reads flat, neutral, or academic instead of dramatic and personal, rewrite it to match this energy: \\\"Right now, your eyes are lying to you - there's a blind spot in your vision so large a whole face could disappear into it.\\\"\\n2. Vague claims without a concrete number, price, or specific - make every point quotable and specific.\\n3. Sentences that sound written rather than spoken - rewrite anything stiff, short punchy sentences preferred.\\n4. HOOK STRENGTH (apply the hardest scrutiny here): a hook can be factually true and still be WEAK if it has no tension or specific stakes. Test it: would a stranger hearing ONLY this sentence react with a specific wait-what, or just shrug? If it starts with any framing like Here's something, Did you know, Most people don't realize, or X is more Y than you think - strip the framing and lead directly with the sharpest specific claim. Rewrite until it names a specific entity doing something concretely unexpected, stated flatly with no hedging.\\n5. TOTAL WORD COUNT: sum the words across every scene’s narration. If the total exceeds 130 words, cut content - remove repetition, shorten sentences, drop the weakest point entirely if needed. This is a hard requirement.\\n6. CRITICAL - any visual_prompt describing a shot that requires readable text, numbers, documents, receipts, screens with visible UI, legible money denominations, ID cards, or forms with visible writing MUST be rewritten to show the concept without needing legible text. Check every single scene for this - it is the most common failure.\\n7. Confirm each scene’s visual_prompt is specific and accurate to its exact point (no generic filler shot).\\n8. Confirm the title field is 90 characters or fewer.\\n9. Confirm tags contains 8-15 relevant, specific terms (no generic filler tags unrelated to the topic) and that seo_description includes the key search terms in the first sentences and ends with a comment-inviting question.\\n10. Confirm comment_hook is specific to this exact fact (not a generic \\\"what do you think\\\") and negative_prompt on every scene explicitly excludes readable text/numbers/documents/screens/currency denominations.\\n\\n11. HOOK CANDIDATE REVIEW: compare the chosen hook against every entry in hook_candidates. If any candidate scores higher on curiosity gap + specificity, swap it in as the hook. You may also write one new hook combining the strongest elements of multiple candidates - if it beats them all, use it. The final hook must withhold a resolution that the script then clearly delivers.\\n12. TITLE GAP CHECK: if the title resolves the surprise (gives away the why/how), rewrite it to state the claim but withhold the resolution.\\n\\n13. FLOW CHECK: every scene transition must carry BUT or THEREFORE tension, never and-then listing - rewrite any flat sequential transition.\\n14. ENDING CHECK: the narration must stop abruptly on the strongest kicker line. Delete any summary, outro, or spoken call-to-action sentence at the end.\\n15. LENGTH TARGET: total narration should land between 110 and 130 words - trim if over 130, and if far under 100, check whether the payoff is being rushed.\\n\\nOutput ONLY the corrected JSON, same schema as input, no markdown fences, no preamble, no commentary about what you changed.\\n\\nDraft to edit:\\n\" + JSON.stringify($json.draft) }] }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-5\", max_tokens: 8192, thinking: { type: \"disabled\" }, messages: [{ role: \"user\", content: \"You are a strict editor for a viral facts/comparison YouTube Shorts channel with a broad general audience. You will be given a draft script as JSON. Find and fix everything that sounds vague, unverifiable, too long, or would require the AI video generator to render readable text - then output the corrected JSON in the exact same schema.\\n\\nCHECK FOR AND FIX:\\n0. MEDICAL EXCLUSION: if any scene or the hook/title touches disease, illness, symptoms, treatment, medication, surgery, or any medical/health topic, rewrite that scene entirely toward a non-medical angle - this overrides every other instruction below.\\n1. Banned filler/hype: have you ever, let\\u2019s explore, in today\\u2019s video, did you know, it\\u2019s important to, the truth is, basically, honestly, crazy, insane, unbelievable, shocking, mind-blowing, impossible, wild, the reason is, this happens because, that\\u2019s because. Remove any of these. \\u201cImagine\\u201d, \\u201cpicture\\u201d, and \\u201clook at\\u201d are NOT on this list - they are the encouraged dramatic style, do not remove them.\\n1. DRAMATIC HOOK STYLE (enforce this, do not soften it): the hook must use direct, imperative address (\\\"Picture X\\\", \\\"Look at your own X\\\", \\\"Right now, your X...\\\") and lead into a bold, high-drama claim - mortality, bodily horror, visceral scale, or danger. \\\"Did you know\\\", \\\"imagine\\\", and similar framing openers are ENCOURAGED here, not banned. If a hook reads flat, neutral, or academic instead of dramatic and personal, rewrite it to match this energy: \\\"Right now, your eyes are lying to you - there's a blind spot in your vision so large a whole face could disappear into it.\\\"\\n2. Vague claims without a concrete number, price, or specific - make every point quotable and specific.\\n3. Sentences that sound written rather than spoken - rewrite anything stiff, short punchy sentences preferred.\\n4. HOOK STRENGTH (apply the hardest scrutiny here): a hook can be factually true and still be WEAK if it has no tension or specific stakes. Test it: would a stranger hearing ONLY this sentence react with a specific wait-what, or just shrug? If it starts with any framing like Here's something, Did you know, Most people don't realize, or X is more Y than you think - strip the framing and lead directly with the sharpest specific claim. Rewrite until it names a specific entity doing something concretely unexpected, stated flatly with no hedging.\\n5. TOTAL WORD COUNT: sum the words across every scene’s narration. If the total exceeds 100 words, cut content - remove repetition, shorten sentences, drop the weakest point entirely if needed. This is a hard requirement.\\n6. CRITICAL - any visual_prompt describing a shot that requires readable text, numbers, documents, receipts, screens with visible UI, legible money denominations, ID cards, or forms with visible writing MUST be rewritten to show the concept without needing legible text. Check every single scene for this - it is the most common failure.\\n7. Confirm each scene’s visual_prompt is specific and accurate to its exact point (no generic filler shot).\\n8. Confirm the title field is 50 characters or fewer (mobile-screen fit) - if longer, rewrite it tighter rather than truncate mid-word.\\n9. Confirm tags contains 8-15 relevant, specific terms (no generic filler tags unrelated to the topic) and that seo_description includes the key search terms in the first sentences and ends with a comment-inviting question.\\n10. Confirm comment_hook is specific to this exact fact (not a generic \\\"what do you think\\\") and negative_prompt on every scene explicitly excludes readable text/numbers/documents/screens/currency denominations.\\n\\n11. HOOK CANDIDATE REVIEW: compare the chosen hook against every entry in hook_candidates. If any candidate scores higher on curiosity gap + specificity, swap it in as the hook. You may also write one new hook combining the strongest elements of multiple candidates - if it beats them all, use it. The final hook must withhold a resolution that the script then clearly delivers.\\n12. TITLE GAP CHECK: if the title resolves the surprise (gives away the why/how), rewrite it to state the claim but withhold the resolution.\\n\\n13. FLOW CHECK: every scene transition must carry BUT or THEREFORE tension, never and-then listing - rewrite any flat sequential transition.\\n14. ENDING CHECK: the narration must stop abruptly on the strongest kicker line. Delete any summary, outro, or spoken call-to-action sentence at the end.\\n15. LENGTH TARGET: total narration (including the closing CTA sentence) should land between 70 and 90 words - trim if over 100, and if far under 60, check whether the payoff is being rushed.\\n\\nOutput ONLY the corrected JSON, same schema as input, no markdown fences, no preamble, no commentary about what you changed.\\n\\nDraft to edit:\\n\" + JSON.stringify($json.draft) }] }) }}",
         "options": {}
       },
-      "id": "b23f04f2-30d6-44f7-a8ce-df7dc6c5732c",
+      "id": "90b1bb1d-9809-45ce-9217-9501aab09b6f",
       "name": "Claude: Editorial Rewrite (Stage 2)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        25040,
-        14480
+        13584,
+        8864
       ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "80oNldJqbuobx761",
           "name": "claude"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nif (response.error) {\n  throw new Error('Claude API returned an error: ' + JSON.stringify(response.error));\n}\nlet raw = response.content?.[0]?.text;\nif (!raw) throw new Error('Claude editor response missing content[0].text');\nif (response.stop_reason === 'max_tokens') {\n  throw new Error('Claude editorial rewrite was cut off by max_tokens - likely truncated mid-JSON. Increase max_tokens on the \"Claude: Editorial Rewrite (Stage 2)\" node.');\n}\nraw = raw.trim();\nif (raw.startsWith('```')) {\n  raw = raw.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\n}\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error('Claude editor did not return valid JSON even after stripping fences: ' + raw.slice(0, 300));\n}\n\nconst errors = [];\nif (!parsed.hook || parsed.hook.length < 5 || parsed.hook.length > 200) {\n  errors.push('hook missing or out of bounds (5-200 chars)');\n}\nif (parsed.hook_candidates !== undefined) {\n  if (!Array.isArray(parsed.hook_candidates) || parsed.hook_candidates.length < 3 || parsed.hook_candidates.length > 6) {\n    errors.push('hook_candidates, if present, must be an array of 3-6 strings');\n  }\n}\nif (!parsed.title || parsed.title.length < 5 || parsed.title.length > 95) {\n  errors.push('title missing or out of bounds (5-95 chars) - YouTube requires titles under 100 chars');\n}\nconst validCaptionStyles = ['upbeat', 'serious', 'funny', 'neutral'];\nif (!validCaptionStyles.includes(parsed.caption_style)) {\n  errors.push('caption_style must be one of: ' + validCaptionStyles.join(', '));\n}\nif (!Array.isArray(parsed.tags) || parsed.tags.length < 5 || parsed.tags.length > 20) {\n  errors.push('tags must be an array of 5-20 strings');\n}\nif (!parsed.seo_description || parsed.seo_description.length < 20) {\n  errors.push('seo_description missing or too short');\n}\nif (!parsed.comment_hook || parsed.comment_hook.length < 8) {\n  errors.push('comment_hook missing or too short');\n}\nconst genericCommentHooks = /^(what do you think|comment below|let us know|tell us|do you agree)/i;\nif (parsed.comment_hook && genericCommentHooks.test(parsed.comment_hook.trim())) {\n  errors.push('comment_hook is too generic - must be specific to this exact fact, not a generic prompt');\n}\n\n// Risky-visual keyword heuristic: catches shots that would need the AI video\n// model to render readable text/numbers - the exact defect that made two\n// prior videos look like obvious \"AI slop\" (garbled fake documents/money).\nconst riskyPatterns = [\n  /readable/i, /legible/i, /visible text/i, /text visible/i, /showing the (total|amount|number|price)/i,\n  /screen (showing|displaying)/i, /receipt (with|showing)/i, /document (with|showing)/i,\n  /denomination/i, /close-?up of.*(document|receipt|form|paperwork).*text/i, /id card/i,\n  /spreadsheet/i, /calculator display/i, /\\$[0-9]/,\n];\n\nif (!Array.isArray(parsed.scenes) || parsed.scenes.length < 3 || parsed.scenes.length > 4) {\n  errors.push('scenes must be an array of 3-4 items');\n} else {\n  let totalWords = 0;\n  parsed.scenes.forEach((s, i) => {\n    if (typeof s.scene_index !== 'number') errors.push(`scene ${i} missing numeric scene_index`);\n    if (!s.point || s.point.length < 3) errors.push(`scene ${i} missing point field`);\n    if (!s.narration || s.narration.length < 5) errors.push(`scene ${i} narration too short/missing`);\n    if (s.visual_source !== 'template') {\n      if (!s.visual_prompt || s.visual_prompt.length < 20) errors.push(`scene ${i} visual_prompt too short/missing`);\n      if (!s.negative_prompt) errors.push(`scene ${i} missing negative_prompt`);\n      if (!s.stock_search_query || s.stock_search_query.trim().length < 3) errors.push(`scene ${i} missing stock_search_query`);\n    }\n    if (s.visual_source === 'template') {\n      const spec = {\"stat_reveal\":[\"statValue\",\"label\"],\"comparison\":[\"leftLabel\",\"leftValue\",\"rightLabel\",\"rightValue\"],\"kinetic_text\":[\"line\"]}[s.template_name];\n      if (!spec) {\n        errors.push(`scene ${i} has unknown template_name \"${s.template_name}\" - must be one of stat_reveal, comparison, kinetic_text`);\n      } else if (!s.template_data || typeof s.template_data !== 'object') {\n        errors.push(`scene ${i} missing template_data object`);\n      } else {\n        for (const field of spec) {\n          if (!s.template_data[field] || String(s.template_data[field]).trim().length < 1) {\n            errors.push(`scene ${i} template_data missing required field \"${field}\" for template \"${s.template_name}\"`);\n          }\n        }\n      }\n    } else if (s.visual_source !== 'stock' && s.visual_source !== undefined) {\n      errors.push(`scene ${i} visual_source must be \"stock\" or \"template\", got \"${s.visual_source}\"`);\n    }\n\n    if (s.narration) totalWords += s.narration.trim().split(/\\s+/).length;\n\n    if (s.visual_prompt) {\n      for (const pattern of riskyPatterns) {\n        if (pattern.test(s.visual_prompt)) {\n          errors.push(`scene ${i} visual_prompt likely requires readable text/numbers in the AI-generated video (matched pattern: ${pattern}) - this reliably renders as garbled fake text. Rewrite to show the concept without legible text.`);\n          break;\n        }\n      }\n    }\n    if (s.negative_prompt && !/text|legible|readable/i.test(s.negative_prompt)) {\n      errors.push(`scene ${i} negative_prompt does not explicitly exclude readable text/numbers - required for every scene`);\n    }\n  });\n\n  if (totalWords > 160) {\n    errors.push(`total narration word count (${totalWords}) exceeds 160 word hard limit - script will run too long for a Short (target is under 130 words). Cut content.`);\n  }\n}\n\n\n// Medical/health exclusion backstop - a best-effort keyword scan, not\n// exhaustive, but catches obvious cases that slipped past both Claude passes.\nconst medicalKeywords = /\\b(disease|illness|symptom|diagnos|treatment|medication|surgery|surgical|cancer|tumor|infection|virus|bacteria(?!l gut)|syndrome|disorder|therapy|prescription|patient|clinical|chronic pain|mental illness|depression|anxiety disorder|vaccine|antibiotic)\\b/i;\nconst textToScan = [parsed.hook, parsed.title, ...(Array.isArray(parsed.scenes) ? parsed.scenes.map(s => s.narration || '') : [])].join(' ');\nif (medicalKeywords.test(textToScan)) {\n  errors.push('script appears to touch medical/health content (keyword match) - this content type is excluded, retry with a different topic');\n}\n\nif (errors.length > 0) {\n  return { json: { _scriptValid: false, _validationErrors: errors } };\n}\n\nreturn { json: { ...parsed, _scriptValid: true } };"
+        "jsCode": "const response = $input.first().json;\nif (response.error) {\n  throw new Error('Claude API returned an error: ' + JSON.stringify(response.error));\n}\nlet raw = response.content?.[0]?.text;\nif (!raw) throw new Error('Claude editor response missing content[0].text');\nif (response.stop_reason === 'max_tokens') {\n  throw new Error('Claude editorial rewrite was cut off by max_tokens - likely truncated mid-JSON. Increase max_tokens on the \"Claude: Editorial Rewrite (Stage 2)\" node.');\n}\nraw = raw.trim();\nif (raw.startsWith('```')) {\n  raw = raw.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\n}\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error('Claude editor did not return valid JSON even after stripping fences: ' + raw.slice(0, 300));\n}\n\nconst errors = [];\nif (!parsed.hook || parsed.hook.length < 5 || parsed.hook.length > 200) {\n  errors.push('hook missing or out of bounds (5-200 chars)');\n}\nif (parsed.hook_candidates !== undefined) {\n  if (!Array.isArray(parsed.hook_candidates) || parsed.hook_candidates.length < 3 || parsed.hook_candidates.length > 6) {\n    errors.push('hook_candidates, if present, must be an array of 3-6 strings');\n  }\n}\nif (!parsed.title || parsed.title.length < 5 || parsed.title.length > 50) {\n  errors.push('title missing or out of bounds (5-50 chars) - kept short for mobile-screen fit');\n}\nconst validCaptionStyles = ['upbeat', 'serious', 'funny', 'neutral'];\nif (!validCaptionStyles.includes(parsed.caption_style)) {\n  errors.push('caption_style must be one of: ' + validCaptionStyles.join(', '));\n}\nif (!Array.isArray(parsed.tags) || parsed.tags.length < 5 || parsed.tags.length > 20) {\n  errors.push('tags must be an array of 5-20 strings');\n}\nif (!parsed.seo_description || parsed.seo_description.length < 20) {\n  errors.push('seo_description missing or too short');\n}\nif (!parsed.comment_hook || parsed.comment_hook.length < 8) {\n  errors.push('comment_hook missing or too short');\n}\nconst genericCommentHooks = /^(what do you think|comment below|let us know|tell us|do you agree)/i;\nif (parsed.comment_hook && genericCommentHooks.test(parsed.comment_hook.trim())) {\n  errors.push('comment_hook is too generic - must be specific to this exact fact, not a generic prompt');\n}\n\n// Risky-visual keyword heuristic: catches shots that would need the AI video\n// model to render readable text/numbers - the exact defect that made two\n// prior videos look like obvious \"AI slop\" (garbled fake documents/money).\nconst riskyPatterns = [\n  /readable/i, /legible/i, /visible text/i, /text visible/i, /showing the (total|amount|number|price)/i,\n  /screen (showing|displaying)/i, /receipt (with|showing)/i, /document (with|showing)/i,\n  /denomination/i, /close-?up of.*(document|receipt|form|paperwork).*text/i, /id card/i,\n  /spreadsheet/i, /calculator display/i, /\\$[0-9]/,\n];\n\nif (!Array.isArray(parsed.scenes) || parsed.scenes.length < 3 || parsed.scenes.length > 4) {\n  errors.push('scenes must be an array of 3-4 items');\n} else {\n  let totalWords = 0;\n  parsed.scenes.forEach((s, i) => {\n    if (typeof s.scene_index !== 'number') errors.push(`scene ${i} missing numeric scene_index`);\n    if (!s.point || s.point.length < 3) errors.push(`scene ${i} missing point field`);\n    if (!s.narration || s.narration.length < 5) errors.push(`scene ${i} narration too short/missing`);\n    if (s.visual_source !== 'template') {\n      if (!s.visual_prompt || s.visual_prompt.length < 20) errors.push(`scene ${i} visual_prompt too short/missing`);\n      if (!s.negative_prompt) errors.push(`scene ${i} missing negative_prompt`);\n      if (!s.stock_search_query || s.stock_search_query.trim().length < 3) errors.push(`scene ${i} missing stock_search_query`);\n    }\n    if (s.visual_source === 'template') {\n      const spec = {\"stat_reveal\":[\"statValue\",\"label\"],\"comparison\":[\"leftLabel\",\"leftValue\",\"rightLabel\",\"rightValue\"],\"kinetic_text\":[\"line\"]}[s.template_name];\n      if (!spec) {\n        errors.push(`scene ${i} has unknown template_name \"${s.template_name}\" - must be one of stat_reveal, comparison, kinetic_text`);\n      } else if (!s.template_data || typeof s.template_data !== 'object') {\n        errors.push(`scene ${i} missing template_data object`);\n      } else {\n        for (const field of spec) {\n          if (!s.template_data[field] || String(s.template_data[field]).trim().length < 1) {\n            errors.push(`scene ${i} template_data missing required field \"${field}\" for template \"${s.template_name}\"`);\n          }\n        }\n      }\n    } else if (s.visual_source !== 'stock' && s.visual_source !== undefined) {\n      errors.push(`scene ${i} visual_source must be \"stock\" or \"template\", got \"${s.visual_source}\"`);\n    }\n\n    if (s.narration) totalWords += s.narration.trim().split(/\\s+/).length;\n\n    if (s.visual_prompt) {\n      for (const pattern of riskyPatterns) {\n        if (pattern.test(s.visual_prompt)) {\n          errors.push(`scene ${i} visual_prompt likely requires readable text/numbers in the AI-generated video (matched pattern: ${pattern}) - this reliably renders as garbled fake text. Rewrite to show the concept without legible text.`);\n          break;\n        }\n      }\n    }\n    if (s.negative_prompt && !/text|legible|readable/i.test(s.negative_prompt)) {\n      errors.push(`scene ${i} negative_prompt does not explicitly exclude readable text/numbers - required for every scene`);\n    }\n  });\n\n  if (totalWords > 120) {\n    errors.push(`total narration word count (${totalWords}) exceeds 120 word hard limit - script will run too long for a Short (target is 70-90 words). Cut content.`);\n  }\n}\n\n\n// Medical/health exclusion backstop - a best-effort keyword scan, not\n// exhaustive, but catches obvious cases that slipped past both Claude passes.\nconst medicalKeywords = /\\b(disease|illness|symptom|diagnos|treatment|medication|surgery|surgical|cancer|tumor|infection|virus|bacteria(?!l gut)|syndrome|disorder|therapy|prescription|patient|clinical|chronic pain|mental illness|depression|anxiety disorder|vaccine|antibiotic)\\b/i;\nconst textToScan = [parsed.hook, parsed.title, ...(Array.isArray(parsed.scenes) ? parsed.scenes.map(s => s.narration || '') : [])].join(' ');\nif (medicalKeywords.test(textToScan)) {\n  errors.push('script appears to touch medical/health content (keyword match) - this content type is excluded, retry with a different topic');\n}\n\nif (errors.length > 0) {\n  return { json: { _scriptValid: false, _validationErrors: errors } };\n}\n\nreturn { json: { ...parsed, _scriptValid: true } };"
       },
-      "id": "7b6cc8e5-a469-4c26-ad5d-04093a9eec3d",
+      "id": "17984c56-0eb6-4383-9097-ac651ac9fb92",
       "name": "Validate Final Script",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        25216,
-        14480
+        13760,
+        8864
       ]
     },
     {
@@ -226,13 +235,13 @@
         "fieldToSplitOut": "scenes",
         "options": {}
       },
-      "id": "0fb05f35-f9d3-419a-982a-1f251dea8513",
+      "id": "1b33b24b-0496-4c92-bf31-345787ca0ad3",
       "name": "Split Out Scenes",
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        26176,
-        14464
+        14720,
+        8848
       ]
     },
     {
@@ -244,13 +253,13 @@
         "jsonBody": "={{ JSON.stringify({ topic: $('Extract Generated Topic').item.json.topic, hook: $json.hook }) }}",
         "options": {}
       },
-      "id": "729dee9b-dd2f-4d41-a4fa-3c8a02eb7a0b",
+      "id": "c03ff295-b72a-4c7f-888b-b2288dc9aa9e",
       "name": "Save Topic to History",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        25632,
-        14320
+        14176,
+        8704
       ],
       "continueOnFail": true
     },
@@ -259,13 +268,13 @@
         "mode": "runOnceForEachItem",
         "jsCode": "const item = $input.item.json;\nconst sceneIndex = $('Split Out Scenes').item.json.scene_index;\nif (!item?.video?.url) {\n  throw new Error(`fal.ai result for scene_index ${sceneIndex} is missing video.url. Raw response: ` + JSON.stringify(item).slice(0, 500));\n}\nreturn { json: { scene_index: sceneIndex, video: item } };"
       },
-      "id": "94554c8c-71a5-4beb-b27c-ccfa3e9f04d3",
+      "id": "e8aaf872-512b-4520-8a0e-8f4be440c020",
       "name": "Tag Video with scene_index",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        26192,
-        14272
+        14736,
+        8656
       ]
     },
     {
@@ -295,13 +304,13 @@
           }
         }
       },
-      "id": "6691d050-d6e0-40bb-aec0-523cd3d10a30",
+      "id": "6e434739-8241-48e9-9f92-34025168984e",
       "name": "ElevenLabs: TTS+Timestamps",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        26224,
-        14624
+        14768,
+        9008
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -315,13 +324,13 @@
         "mode": "runOnceForEachItem",
         "jsCode": "const item = $input.item.json;\nconst sceneIndex = $('Split Out Scenes').item.json.scene_index;\nif (!item?.audio_base64) {\n  throw new Error(`ElevenLabs result for scene_index ${sceneIndex} is missing audio_base64. Raw response: ` + JSON.stringify(item).slice(0, 500));\n}\nif (!item?.alignment) {\n  throw new Error(`ElevenLabs result for scene_index ${sceneIndex} is missing alignment/timestamps - check that the \"with-timestamps\" endpoint is being used. Raw response: ` + JSON.stringify(item).slice(0, 500));\n}\nreturn { json: { scene_index: sceneIndex, audio: item } };"
       },
-      "id": "2e9da7cb-fc8b-4528-8920-c0c6c51b7774",
+      "id": "ae543c1f-f952-45c9-b6cd-c073a9a7e377",
       "name": "Tag Audio with scene_index",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        25952,
-        14928
+        14944,
+        9312
       ]
     },
     {
@@ -329,13 +338,13 @@
         "aggregate": "aggregateAllItemData",
         "options": {}
       },
-      "id": "1a721bff-d507-4a61-8dfd-4252975bd559",
+      "id": "41553a38-1f19-454e-a882-3d1aeb35b0a6",
       "name": "Aggregate All Videos",
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        26784,
-        14544
+        15328,
+        8928
       ]
     },
     {
@@ -343,70 +352,50 @@
         "aggregate": "aggregateAllItemData",
         "options": {}
       },
-      "id": "7eefdf2e-8523-4e78-b57a-b5637b605863",
+      "id": "18f34454-d400-4e95-a375-172d35a53d58",
       "name": "Aggregate All Audio",
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        26176,
-        14928
+        15088,
+        9312
       ]
     },
     {
       "parameters": {},
-      "id": "6ceba4ab-b9ae-41b6-958c-ea0a66b574e0",
+      "id": "96ea5ced-d7a7-4441-9b8a-a739980d56d4",
       "name": "Wait For Both Branches",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
       "position": [
-        27024,
-        14624
+        15568,
+        9008
       ]
     },
     {
       "parameters": {
-        "jsCode": "// This node is downstream of a real Merge node with TWO input connections\n// (images + audio), so n8n guarantees both branches have fully completed\n// before this runs - no race condition from cross-branch $() references.\nconst allItems = $input.all().map(i => i.json);\n\n// Each scene's visual asset is EITHER a Pexels stock array (.images) OR a\n// template scene descriptor (.visual_source === 'template') - shape-detect\n// on whichever field is present.\nconst imageAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && (i.data[0].images || i.data[0].visual_source === 'template'));\nconst audioAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && i.data[0].audio);\n\nif (!imageAgg) throw new Error('Could not find the visual branch in merged input - check \"Aggregate All Videos\" output shape');\nif (!audioAgg) throw new Error('Could not find the audio branch in merged input - check \"Aggregate All Audio\" output shape');\n\nconst visuals = imageAgg.data;\nconst audios = audioAgg.data;\n\nconst merged = visuals.map((v) => {\n  const match = audios.find((a) => a.scene_index === v.scene_index);\n  if (!match) {\n    throw new Error(`No audio found for scene_index ${v.scene_index} - visual/audio counts likely mismatched`);\n  }\n  return {\n    scene_index: v.scene_index,\n    images: v.images,\n    visual_source: v.visual_source,\n    template_name: v.template_name,\n    template_data: v.template_data,\n    audio: match.audio,\n  };\n});\n\nmerged.sort((a, b) => a.scene_index - b.scene_index);\n\nreturn {\n  json: {\n    hook: $('Validate Final Script').item.json.hook,\n    comment_hook: $('Validate Final Script').item.json.comment_hook,\n    full_script: $('Validate Final Script').item.json.full_script,\n    caption_style: $('Validate Final Script').item.json.caption_style,\n    data: merged\n  }\n};"
+        "jsCode": "// This node is downstream of a real Merge node with TWO input connections\n// (images + audio), so n8n guarantees both branches have fully completed\n// before this runs - no race condition from cross-branch $() references.\nconst allItems = $input.all().map(i => i.json);\n\n// Each scene's visual asset is EITHER a Pexels stock array (.images) OR a\n// template scene descriptor (.visual_source === 'template') - shape-detect\n// on whichever field is present.\nconst imageAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && (i.data[0].images || i.data[0].video_url || i.data[0].visual_source === 'template'));\nconst audioAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && i.data[0].audio);\n\nif (!imageAgg) throw new Error('Could not find the visual branch in merged input - check \"Aggregate All Videos\" output shape');\nif (!audioAgg) throw new Error('Could not find the audio branch in merged input - check \"Aggregate All Audio\" output shape');\n\nconst visuals = imageAgg.data;\nconst audios = audioAgg.data;\n\nconst merged = visuals.map((v) => {\n  const match = audios.find((a) => a.scene_index === v.scene_index);\n  if (!match) {\n    throw new Error(`No audio found for scene_index ${v.scene_index} - visual/audio counts likely mismatched`);\n  }\n  return {\n    scene_index: v.scene_index,\n    images: v.images,\n    video_url: v.video_url,\n    source_duration: v.source_duration,\n    source_width: v.source_width,\n    source_height: v.source_height,\n    visual_source: v.visual_source,\n    template_name: v.template_name,\n    template_data: v.template_data,\n    audio: match.audio,\n  };\n});\n\nmerged.sort((a, b) => a.scene_index - b.scene_index);\n\nreturn {\n  json: {\n    hook: $('Validate Final Script').item.json.hook,\n    comment_hook: $('Validate Final Script').item.json.comment_hook,\n    full_script: $('Validate Final Script').item.json.full_script,\n    caption_style: $('Validate Final Script').item.json.caption_style,\n    data: merged\n  }\n};"
       },
-      "id": "be83f51c-688b-468a-b875-8ece8de36cd8",
+      "id": "25f5d3c3-ba5a-45b6-b7f2-39059d261b8f",
       "name": "Merge By scene_index (not position)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        27248,
-        14624
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://shorts.interviewbuddy.cloud/compose",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}",
-        "options": {
-          "timeout": 300000
-        }
-      },
-      "id": "6932d626-a9fc-4318-abe7-c78e3069fdf5",
-      "name": "Node.js: FFmpeg Compose",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        27456,
-        14624
+        15792,
+        9008
       ]
     },
     {
       "parameters": {
         "jsCode": "const item = $input.first().json;\nif (item.success !== true) {\n  throw new Error('FFmpeg compose service reported failure: ' + (item.error || 'unknown error') + ' | job_id: ' + (item.job_id || 'unknown'));\n}\nif (!item.output_path) {\n  throw new Error('FFmpeg compose response missing output_path even though success=true: ' + JSON.stringify(item).slice(0, 500));\n}\nreturn { json: item };"
       },
-      "id": "0d2d743f-ff3f-4a85-b4fb-d0b7e71127a0",
+      "id": "ee566e74-6dbb-4817-aacb-880573a173c8",
       "name": "Validate Compose Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        27664,
-        14624
+        16208,
+        9008
       ]
     },
     {
@@ -420,20 +409,20 @@
           }
         }
       },
-      "id": "10422c6d-723f-49c0-93af-d29bc1467097",
+      "id": "cd312b58-3732-4695-94c6-ea24f6c6728f",
       "name": "Download Final Video",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        27888,
-        14624
+        16432,
+        9008
       ]
     },
     {
       "parameters": {
         "resource": "video",
         "operation": "upload",
-        "title": "={{ ($('Validate Final Script').item.json.title || $('Validate Final Script').item.json.hook).slice(0, 95) }}",
+        "title": "={{ ($('Validate Final Script').item.json.title || $('Validate Final Script').item.json.hook).slice(0, 50) }}",
         "regionCode": "DE",
         "categoryId": "22",
         "options": {
@@ -443,13 +432,13 @@
           "tags": "={{ $('Validate Final Script').item.json.tags.join(',') }}"
         }
       },
-      "id": "552855e0-026a-48e9-8cd4-25f4dbbbc6a3",
+      "id": "b7a5976a-0de0-429d-aef8-886290faab81",
       "name": "YouTube: Upload Draft",
       "type": "n8n-nodes-base.youTube",
       "typeVersion": 1,
       "position": [
-        28096,
-        14624
+        16640,
+        9008
       ],
       "credentials": {
         "youTubeOAuth2Api": {
@@ -462,13 +451,13 @@
       "parameters": {
         "options": {}
       },
-      "id": "db8ae772-dcd7-4cd9-b7b5-64380269c41e",
+      "id": "5337396d-f0c6-4d8f-bb42-570b438ab821",
       "name": "Loop Over Scenes",
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        26528,
-        14496
+        15072,
+        8880
       ]
     },
     {
@@ -482,13 +471,13 @@
         "jsonBody": "={{ JSON.stringify({ id: $json.uploadId || $json.id, status: { privacyStatus: $json.status?.privacyStatus || 'public', selfDeclaredMadeForKids: $json.status?.selfDeclaredMadeForKids ?? false, containsSyntheticMedia: true } }) }}",
         "options": {}
       },
-      "id": "36316d4a-6599-4bdf-9962-3a9ece5b6879",
+      "id": "c9aece85-fc66-4b18-a3e1-16226e31b635",
       "name": "Disclose AI-Generated Content",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        28304,
-        14624
+        16848,
+        9008
       ],
       "credentials": {
         "youTubeOAuth2Api": {
@@ -512,13 +501,13 @@
         "includeOtherFields": true,
         "options": {}
       },
-      "id": "828f0414-1004-4fef-8475-aa535b401af0",
+      "id": "7c2b6d6e-49e8-49f7-a6e9-277c5d3f6062",
       "name": "Init Script Attempt Counter",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        23488,
-        14480
+        12544,
+        8864
       ]
     },
     {
@@ -545,26 +534,26 @@
         },
         "options": {}
       },
-      "id": "63668115-b613-4bbf-aaab-e7363641bb7f",
+      "id": "ac464f3e-d6c4-42de-b911-2af4ff889e9f",
       "name": "If Script Valid",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        25392,
-        14480
+        13936,
+        8864
       ]
     },
     {
       "parameters": {
         "jsCode": "const prevAttempt = $('Init Script Attempt Counter').item.json.scriptAttempt ?? 0;\nconst newAttempt = prevAttempt + 1;\nconst errors = $input.first().json._validationErrors || [];\nconsole.log(`Script validation failed on attempt ${newAttempt}: ${errors.join(' | ')}`);\nreturn { json: { scriptAttempt: newAttempt, lastErrors: errors } };"
       },
-      "id": "4607529f-a78b-42ce-bfa2-4777d2376908",
+      "id": "a1278d48-f5a1-40b3-8140-759c390c0d08",
       "name": "Increment Script Attempt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        25648,
-        14496
+        14192,
+        8880
       ]
     },
     {
@@ -590,31 +579,31 @@
         },
         "options": {}
       },
-      "id": "bd4c5c06-1d21-4b04-90f6-1b8d1d0cb7d3",
+      "id": "17b37d95-65aa-4b8b-8aba-ecd4781021ce",
       "name": "If Under Max Script Attempts",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        25872,
-        14496
+        14416,
+        8880
       ]
     },
     {
       "parameters": {
         "jsCode": "const lastErrors = $input.first().json.lastErrors || [];\nthrow new Error('Script generation failed validation 3 times in a row with fresh topics each time - giving up for this scheduled run rather than posting a bad video. Last errors: ' + lastErrors.join(' | '));"
       },
-      "id": "bb876d4e-fa9e-4cd3-ad53-0fcf3d96edc2",
+      "id": "1eca46ac-4718-42d7-8364-f6638a5608fa",
       "name": "Fail: Script Generation Exhausted",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        25696,
-        14784
+        14752,
+        8448
       ]
     },
     {
       "parameters": {
-        "url": "=https://api.pexels.com/v1/search",
+        "url": "=https://api.pexels.com/v1/videos/search",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
@@ -630,7 +619,7 @@
             },
             {
               "name": "per_page",
-              "value": "10"
+              "value": "5"
             }
           ]
         },
@@ -638,102 +627,35 @@
           "timeout": 20000
         }
       },
-      "id": "7f22558c-7289-43ad-a7c3-97ca9fc5ec4f",
-      "name": "Pexels: Search Photo",
+      "id": "8c231b58-691f-4352-bcd1-3f12944d086e",
+      "name": "Pexels: Search Video",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        26800,
-        14928
+        15344,
+        9312
       ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "x1lbrY0csVKdvFB5",
           "name": "Pexels"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "const sceneIndex = $('Split Out Scenes').item.json.scene_index;\nconst photos = $input.item.json.photos || [];\nif (!photos.length) {\n  throw new Error(`Pexels returned zero results for scene_index ${sceneIndex} (query: \"${$('Split Out Scenes').item.json.stock_search_query}\"). No paid fallback is configured - adjust the stock_search_query or topic and retry.`);\n}\nconst urls = photos\n  .map(p => p?.src?.portrait || p?.src?.large2x || p?.src?.original)\n  .filter(Boolean);\nif (!urls.length) {\n  throw new Error(`Pexels results for scene_index ${sceneIndex} had no usable image URLs`);\n}\nreturn { json: { scene_index: sceneIndex, images: urls, _source: 'pexels' } };"
+        "jsCode": "const sceneIndex = $('Split Out Scenes').item.json.scene_index;\nconst videos = $input.item.json.videos || [];\nif (!videos.length) {\n  throw new Error(`Pexels returned zero video results for scene_index ${sceneIndex} (query: \"${$('Split Out Scenes').item.json.stock_search_query}\"). No paid fallback is configured - adjust the stock_search_query or topic and retry.`);\n}\n\n// Real Pexels Video Resource shape: video_files[] = {id, quality: 'hd'|'sd'|'hls', file_type, width, height, fps, link}\nfunction usableFiles(video) {\n  return (video.video_files || []).filter(f => f.file_type === 'video/mp4' && f.quality !== 'hls' && f.width && f.height);\n}\nfunction bestOf(files) {\n  const sorted = [...files].sort((a, b) => {\n    if (a.quality !== b.quality) return a.quality === 'hd' ? -1 : 1;\n    return Math.abs(a.width - 1080) - Math.abs(b.width - 1080);\n  });\n  return sorted[0];\n}\n\n// Pass 1: check EVERY candidate video for a genuine portrait file before\n// accepting anything else - a later video's portrait option must win over\n// an earlier video's landscape fallback, not get short-circuited.\nlet chosen = null;\nfor (const v of videos) {\n  const portrait = usableFiles(v).filter(f => f.height > f.width);\n  if (portrait.length) { chosen = { file: bestOf(portrait), duration: v.duration }; break; }\n}\n// Pass 2: only if NO video in the whole list had a portrait option, fall\n// back to the first video with any usable mp4 file at all.\nif (!chosen) {\n  for (const v of videos) {\n    const files = usableFiles(v);\n    if (files.length) { chosen = { file: bestOf(files), duration: v.duration }; break; }\n  }\n}\nif (!chosen) {\n  throw new Error(`Pexels video results for scene_index ${sceneIndex} had no usable mp4 file`);\n}\n\nreturn { json: { scene_index: sceneIndex, video_url: chosen.file.link, source_duration: chosen.duration, source_width: chosen.file.width, source_height: chosen.file.height, _source: 'pexels_video' } };"
       },
-      "id": "7894347a-33a9-4534-aad5-e86b966b696e",
-      "name": "Tag Pexels Image",
+      "id": "6cc80a0f-9064-45f9-bf26-163d703ad391",
+      "name": "Tag Pexels Video",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        27216,
-        15184
-      ]
-    },
-    {
-      "parameters": {
-        "url": "https://www.googleapis.com/youtube/v3/search",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "youTubeOAuth2Api",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "part",
-              "value": "snippet"
-            },
-            {
-              "name": "type",
-              "value": "video"
-            },
-            {
-              "name": "order",
-              "value": "viewCount"
-            },
-            {
-              "name": "videoDuration",
-              "value": "short"
-            },
-            {
-              "name": "maxResults",
-              "value": "15"
-            },
-            {
-              "name": "publishedAfter",
-              "value": "={{ new Date(Date.now() - 7*24*60*60*1000).toISOString() }}"
-            },
-            {
-              "name": "q",
-              "value": "={{ ['amazing facts shorts','did you know facts','mind blowing facts'][Math.floor(Math.random()*3)] }}"
-            }
-          ]
-        },
-        "options": {
-          "timeout": 15000
-        }
-      },
-      "id": "d5cee90b-1fa8-4db7-b13a-d6f9d7872a4d",
-      "name": "YouTube: Search Trending Facts Shorts",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        23648,
-        14480
-      ],
-      "credentials": {
-        "youTubeOAuth2Api": {
-          "id": "b5LyysZ3nzI8MW0V",
-          "name": "YouTube account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "let titles = [];\ntry {\n  const items = $input.first().json.items || [];\n  titles = items\n    .map(it => it?.snippet?.title)\n    .filter(Boolean)\n    .slice(0, 12);\n} catch (e) {\n  console.log('Trending search parse failed, continuing with no trending context: ' + e.message);\n}\nreturn { json: { trending_titles: titles } };"
-      },
-      "id": "62226b98-e8bb-403b-8517-ac2c0c06df31",
-      "name": "Extract Trending Titles",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        23856,
-        14480
+        15536,
+        9312
       ]
     },
     {
@@ -759,39 +681,26 @@
         },
         "options": {}
       },
-      "id": "227bfdda-ecf0-4656-a2af-c822cb27fc2c",
+      "id": "853e7d07-53e9-44a6-b809-de1aaa4253c0",
       "name": "If Scene Uses Template",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        26688,
-        14320
+        15232,
+        8704
       ]
     },
     {
       "parameters": {
         "jsCode": "const scene = $('Split Out Scenes').item.json;\nreturn {\n  json: {\n    scene_index: scene.scene_index,\n    visual_source: 'template',\n    template_name: scene.template_name,\n    template_data: scene.template_data,\n  }\n};"
       },
-      "id": "5347cbbf-bd74-4055-bb1d-1209a965e8aa",
+      "id": "0bc750c4-f592-4321-9420-b0508a0ba685",
       "name": "Tag Template Video",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        27136,
-        14320
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const forceHistory = Math.random() < 0.25; // ~1 in 4 topics, genuinely random\nconsole.log('History roll this run:', forceHistory);\nreturn { json: { forceHistory } };"
-      },
-      "id": "8550843f-c03c-42d6-af76-c7f58618b75e",
-      "name": "Roll: Force History Topic",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        24048,
-        14480
+        15680,
+        8704
       ]
     },
     {
@@ -800,15 +709,168 @@
         "url": "={{ 'https://shorts.interviewbuddy.cloud/cleanup/' + $('Validate Compose Result').item.json.output_path.split('/').pop().split('.')[0] }}",
         "options": {}
       },
-      "id": "35b1efee-3a2d-4327-9a12-079699a31829",
+      "id": "33b0901b-f17c-4f1f-be16-5175e5c1046b",
       "name": "Cleanup: Delete Local Render",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        28512,
-        14624
+        17696,
+        9024
       ],
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://shorts.interviewbuddy.cloud/compose",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "fd346fa1-1781-40b2-b736-f6eab1471d6a",
+      "name": "Start Compose Job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        16000,
+        9008
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return { json: { jobId: $json.job_id, pollAttempt: 0 } };"
+      },
+      "id": "adb6484c-1418-44b0-a3b8-44323dcd9751",
+      "name": "Init Poll Counter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16064,
+        9408
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 8
+      },
+      "id": "ddb976e3-5c42-4ca9-a406-7795b8614813",
+      "name": "Wait Before Poll",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        16368,
+        9408
+      ],
+      "webhookId": "c6b97319-18f8-4e2e-ac0c-29d796c01e7c"
+    },
+    {
+      "parameters": {
+        "url": "=https://shorts.interviewbuddy.cloud/compose-status/{{ $('Init Poll Counter').item.json.jobId }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a84fc9bb-c1bf-4e0a-8a11-e4151fc2ac29",
+      "name": "Check Compose Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        16656,
+        9408
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "processing",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "39b2f6ee-fc47-4136-bc3b-6a1a2afc24f0",
+      "name": "If Compose Still Processing",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        16864,
+        9408
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prevAttempt = $('Init Poll Counter').item.json.pollAttempt ?? 0;\nreturn { json: { jobId: $('Init Poll Counter').item.json.jobId, pollAttempt: prevAttempt + 1 } };"
+      },
+      "id": "dd83e0b2-47dd-465c-a6f7-a1edc3a5130e",
+      "name": "Increment Poll Attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        17088,
+        9392
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.pollAttempt }}",
+              "rightValue": 40,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "74f58fc4-216c-4ad2-a93e-f95f3fe79dbe",
+      "name": "If Under Max Poll Attempts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        17344,
+        9392
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "throw new Error('Compose job did not finish within 40 poll attempts (~320s) - job_id: ' + $json.jobId + '. The render may be stuck; check shorts-compose logs directly.');"
+      },
+      "id": "f113c1ee-e1c2-4c52-82ef-981e5338a240",
+      "name": "Fail: Compose Polling Timeout",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        17568,
+        9408
+      ]
     }
   ],
   "pinData": {},
@@ -987,18 +1049,7 @@
       "main": [
         [
           {
-            "node": "Node.js: FFmpeg Compose",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Node.js: FFmpeg Compose": {
-      "main": [
-        [
-          {
-            "node": "Validate Compose Result",
+            "node": "Start Compose Job",
             "type": "main",
             "index": 0
           }
@@ -1071,7 +1122,7 @@
       "main": [
         [
           {
-            "node": "YouTube: Search Trending Facts Shorts",
+            "node": "Claude: Generate Topic",
             "type": "main",
             "index": 0
           }
@@ -1130,44 +1181,22 @@
         ]
       ]
     },
-    "Pexels: Search Photo": {
+    "Pexels: Search Video": {
       "main": [
         [
           {
-            "node": "Tag Pexels Image",
+            "node": "Tag Pexels Video",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Tag Pexels Image": {
+    "Tag Pexels Video": {
       "main": [
         [
           {
             "node": "Loop Over Scenes",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "YouTube: Search Trending Facts Shorts": {
-      "main": [
-        [
-          {
-            "node": "Extract Trending Titles",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Extract Trending Titles": {
-      "main": [
-        [
-          {
-            "node": "Roll: Force History Topic",
             "type": "main",
             "index": 0
           }
@@ -1185,7 +1214,7 @@
         ],
         [
           {
-            "node": "Pexels: Search Photo",
+            "node": "Pexels: Search Video",
             "type": "main",
             "index": 0
           }
@@ -1203,22 +1232,102 @@
         ]
       ]
     },
-    "Roll: Force History Topic": {
+    "Disclose AI-Generated Content": {
       "main": [
         [
           {
-            "node": "Claude: Generate Topic",
+            "node": "Cleanup: Delete Local Render",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Disclose AI-Generated Content": {
+    "Start Compose Job": {
       "main": [
         [
           {
-            "node": "Cleanup: Delete Local Render",
+            "node": "Init Poll Counter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Poll Counter": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Poll": {
+      "main": [
+        [
+          {
+            "node": "Check Compose Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Compose Status": {
+      "main": [
+        [
+          {
+            "node": "If Compose Still Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Compose Still Processing": {
+      "main": [
+        [
+          {
+            "node": "Increment Poll Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validate Compose Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Increment Poll Attempt": {
+      "main": [
+        [
+          {
+            "node": "If Under Max Poll Attempts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Under Max Poll Attempts": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Poll",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail: Compose Polling Timeout",
             "type": "main",
             "index": 0
           }
@@ -1234,7 +1343,7 @@
     "timeSavedMode": "fixed",
     "callerPolicy": "workflowsFromSameOwner"
   },
-  "versionId": "a013c785-6a04-4426-8be9-9c8d10f6e5bd",
+  "versionId": "382fee02-e8f5-4739-908b-6a7af7feb394",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "c441ed724af600bcf396af78358d646f151afea1426a1c9416affa3d64f52895"
