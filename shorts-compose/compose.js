@@ -553,7 +553,7 @@ async function concatWithTransitions(scenePaths, durations, transitionDuration, 
   }
 
   // xfade requires sequential chaining: each pair of scenes gets a crossfade
-  const xfadeDur = Math.min(transitionDuration, 0.8);
+  const xfadeDur = Math.min(transitionDuration, 0.5);
   let currentInput = scenePaths[0];
 
   for (let i = 1; i < scenePaths.length; i++) {
@@ -657,7 +657,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const durations = sceneResults.map((r) => r.duration);
 
     // ===== PHASE 2: Concatenate with crossfade transitions =====
-    const TRANSITION_DURATION = 0.7; // seconds - studio-standard crossfade
+    const TRANSITION_DURATION = 0.4; // seconds - studio-standard crossfade
     const concatPath = path.join(tmpDir, "concat.mp4");
     await concatWithTransitions(scenePaths, durations, TRANSITION_DURATION, concatPath);
 
@@ -694,14 +694,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const sfxEvents = [];
     for (let i = 1; i < scenes.length; i++) {
       // Whoosh + sub-bass thump on every scene cut (not just templates)
-      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.20 });
-      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.15 });
+      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.30 });
+      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.25 });
     }
     // Extra emphasis on template reveals
     scenes.forEach((s, i) => {
       if (s.visual_source === "template") {
-        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.32 });
-        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.18 });
+        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.45 });
+        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.25 });
       }
     });
 
