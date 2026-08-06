@@ -132,22 +132,22 @@ function getColorGrade(mood) {
     upbeat: [
       "eq=contrast=1.15:saturation=1.45:brightness=0.02",
       "colorbalance=rs=0.12:gs=0.04:bs=-0.08:rh=0.06:gh=0.02:bh=-0.04",
-      "curves=m='0/0.06:0.25/0.30:0.5/0.52:0.75/0.78:1/0.95'",
+      "curves=m='0/0.06 0.25/0.30 0.5/0.52 0.75/0.78 1/0.95'",
     ].join(","),
     serious: [
       "eq=contrast=1.18:saturation=0.90:brightness=-0.01",
       "colorbalance=rs=-0.04:gs=0.0:bs=0.06:rh=0.02:gh=-0.01:bh=0.04",
-      "curves=m='0/0.05:0.25/0.28:0.5/0.50:0.75/0.76:1/0.93'",
+      "curves=m='0/0.05 0.25/0.28 0.5/0.50 0.75/0.76 1/0.93'",
     ].join(","),
     funny: [
       "eq=contrast=1.10:saturation=1.60:brightness=0.03",
       "colorbalance=rs=0.10:gs=0.08:bs=-0.06:rh=0.04:gh=0.06:bh=-0.02",
-      "curves=m='0/0.07:0.25/0.31:0.5/0.53:0.75/0.79:1/0.96'",
+      "curves=m='0/0.07 0.25/0.31 0.5/0.53 0.75/0.79 1/0.96'",
     ].join(","),
     neutral: [
       "eq=contrast=1.10:saturation=1.15:brightness=0.01",
       "colorbalance=rs=0.02:gs=0.0:bs=0.02:rh=0.03:gh=0.01:bh=-0.01",
-      "curves=m='0/0.05:0.25/0.29:0.5/0.51:0.75/0.77:1/0.94'",
+      "curves=m='0/0.05 0.25/0.29 0.5/0.51 0.75/0.77 1/0.94'",
     ].join(","),
   };
   return grades[mood] || grades.neutral;
@@ -268,7 +268,7 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
     // Punch-in on first few frames for "snap" feel at each cut
     const punchFrames = Math.min(8, Math.round(totalFrames * 0.15));
     const finalZoom = sceneIdx === 0 && seg === 0
-      ? `'if(lte(on,${punchFrames}),1.18-0.06*on/${punchFrames},${zoomExpr.slice(1)}`
+      ? `'if(lte(on,${punchFrames}),1.18-0.06*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
       : zoomExpr;
 
     const filterGraph = [
