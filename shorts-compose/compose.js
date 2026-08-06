@@ -254,25 +254,25 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
     const segOutPath = path.join(path.dirname(outPath), `seg_${sceneIdx}_${seg}.mp4`);
     const panLeftToRight = seg % 2 === 0;
 
-    // Sinusoidal easing: slow start, fast middle, slow end
+    // Sinusoidal easing: slow start, slow end, gentle drift through the middle
     // zoompan expressions use on/d for normalized progress
     const xExpr = panLeftToRight
-      ? `'iw*0.07*(1-cos(PI*on/${totalFrames}))/2'`
-      : `'iw*0.07*(1+cos(PI*on/${totalFrames}))/2'`;
+      ? `'iw*0.035*(1-cos(PI*on/${totalFrames}))/2'`
+      : `'iw*0.035*(1+cos(PI*on/${totalFrames}))/2'`;
 
-    // Subtle zoom drift (1.12 -> 1.08 or vice versa) for organic feel
+    // Subtle zoom drift (1.09 -> 1.07 or vice versa) for organic feel
     const zoomExpr = seg % 2 === 0
-      ? `'1.12-0.04*(1-cos(PI*on/${totalFrames}))/2'`
-      : `'1.08+0.04*(1-cos(PI*on/${totalFrames}))/2'`;
+      ? `'1.09-0.02*(1-cos(PI*on/${totalFrames}))/2'`
+      : `'1.07+0.02*(1-cos(PI*on/${totalFrames}))/2'`;
 
-    // Punch-in on first few frames for "snap" feel at each cut
+    // Gentle punch-in on the first segment only, eased over its own window
     const punchFrames = Math.min(18, Math.round(totalFrames * 0.3));
     const finalZoom = sceneIdx === 0 && seg === 0
-      ? `'if(lte(on,${punchFrames}),1.18-0.06*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
+      ? `'if(lte(on,${punchFrames}),1.13-0.04*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
       : zoomExpr;
 
     const filterGraph = [
-      `[0:v]zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.04*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
+      `[0:v]zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.02*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
       `[zoomed]${gradeFilter}[graded]`,
       `[graded]vignette=angle=PI/10:aspect=9/16[vignetted]`,
       `[vignetted]unsharp=5:5:0.4:5:5:0.0[final]`,
@@ -553,7 +553,7 @@ async function concatWithTransitions(scenePaths, durations, transitionDuration, 
   }
 
   // xfade requires sequential chaining: each pair of scenes gets a crossfade
-  const xfadeDur = Math.min(transitionDuration, 0.5);
+  const xfadeDur = Math.min(transitionDuration, 0.8);
   let currentInput = scenePaths[0];
 
   for (let i = 1; i < scenePaths.length; i++) {
@@ -657,7 +657,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const durations = sceneResults.map((r) => r.duration);
 
     // ===== PHASE 2: Concatenate with crossfade transitions =====
-    const TRANSITION_DURATION = 0.4; // seconds - studio-standard crossfade
+    const TRANSITION_DURATION = 0.7; // seconds - studio-standard crossfade
     const concatPath = path.join(tmpDir, "concat.mp4");
     await concatWithTransitions(scenePaths, durations, TRANSITION_DURATION, concatPath);
 
@@ -694,14 +694,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const sfxEvents = [];
     for (let i = 1; i < scenes.length; i++) {
       // Whoosh + sub-bass thump on every scene cut (not just templates)
-      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.30 });
-      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.25 });
+      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.20 });
+      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.15 });
     }
     // Extra emphasis on template reveals
     scenes.forEach((s, i) => {
       if (s.visual_source === "template") {
-        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.45 });
-        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.25 });
+        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.32 });
+        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.18 });
       }
     });
 
