@@ -22,11 +22,16 @@ jobs:
         run: |
           set -e
 
+          echo "=== Stopping existing shorts-compose (if running) ==="
+          docker compose down shorts-compose || true
+          # Also kill any orphan container holding port 4000
+          docker ps -q --filter "publish=4000" | xargs -r docker stop || true
+
           echo "=== Building shorts-compose ==="
           docker compose build --no-cache shorts-compose
 
           echo "=== Deploying ==="
-          docker compose up -d --force-recreate shorts-compose
+          docker compose up -d shorts-compose
 
       - name: Health check
         run: |
