@@ -22,11 +22,19 @@ services:
       - "4000:4000"
     environment:
       - OUTPUT_DIR=/app/outputs
+      - TOPIC_HISTORY_PATH=/app/data/topic_history.json
       - NODE_OPTIONS=--max-old-space-size=4096
     volumes:
+      # outputs are ephemeral rendered videos (downloaded then cleaned up),
+      # so a bind mount that git-clean wipes each deploy is fine here.
       - ./shorts-compose/outputs:/app/outputs
-      - ./shorts-compose/topic_history.json:/app/topic_history.json
-      - ./shorts-compose/music:/app/music
+      # topic history and music are PERSISTENT state. They must NOT live in
+      # the git checkout dir - deploy.yml checks out with clean:true, which
+      # runs `git clean -ffdx` and wipes any bind mount sourced from there
+      # (this reset topic dedup history and deleted music on every deploy).
+      # Named volumes live outside the checkout and survive, same as n8n_data.
+      - shorts_data:/app/data
+      - shorts_music:/app/music
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4000/topic-history"]
       interval: 30s
@@ -43,3 +51,5 @@ services:
 
 volumes:
   n8n_data:
+  shorts_data:
+  shorts_music:

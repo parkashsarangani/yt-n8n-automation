@@ -75,6 +75,9 @@ app.post("/topic-history", async (req, res) => {
     if (topics.length > TOPIC_HISTORY_MAX) {
       topics = topics.slice(topics.length - TOPIC_HISTORY_MAX);
     }
+    // TOPIC_HISTORY_PATH may live in a mounted data dir (/app/data); ensure
+    // the parent exists so the write works regardless of how the app is run.
+    await fsp.mkdir(path.dirname(TOPIC_HISTORY_PATH), { recursive: true });
     await fsp.writeFile(TOPIC_HISTORY_PATH, JSON.stringify(topics, null, 2));
     return res.json({ success: true, count: topics.length });
   } catch (err) {
