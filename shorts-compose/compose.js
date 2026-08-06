@@ -41,9 +41,11 @@ const FPS = 30;
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
-// Fixed follow/subscribe outro appended to every video
-const OUTRO_DURATION_SEC = 2.0;
-const DEFAULT_OUTRO_LINE = "Follow for more";
+// Fixed engagement outro appended to every video. 2.5s gives the four
+// asks (comment, like, share, follow) room to land - the KineticText
+// template reveals words one at a time, so a bare 2s felt rushed.
+const OUTRO_DURATION_SEC = 2.5;
+const DEFAULT_OUTRO_LINE = "Comment, like, share, and follow";
 
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
@@ -628,7 +630,12 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes (mood: ${mood})`);
 
     // ===== PHASE 1: Build individual scenes in parallel =====
-    const sceneResults = await Promise.all(
+    // Use allSettled, not all: if one scene throws, all() rejects
+    // immediately while sibling scenes' ffmpeg processes keep running - and
+    // the job's finally block then deletes tmpDir out from under them,
+    // producing confusing "No such file" errors and orphaned processes.
+    // Wait for every scene to settle first, then fail with a clear message.
+    const settled = await Promise.allSettled(
       scenes.map(async (scene, i) => {
         const audioPath = path.join(tmpDir, `voice_${i}.mp3`);
         if (scene?.audio?.audio_base64) {
@@ -670,6 +677,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       })
     );
 
+    const failures = settled
+      .map((r, i) => (r.status === "rejected" ? `scene ${i}: ${r.reason?.message || r.reason}` : null))
+      .filter(Boolean);
+    if (failures.length) {
+      throw new Error(`Scene build failed - ${failures.join("; ")}`);
+    }
+
+    const sceneResults = settled.map((r) => r.value);
     const scenePaths = sceneResults.map((r) => r.path);
     const durations = sceneResults.map((r) => r.duration);
 
