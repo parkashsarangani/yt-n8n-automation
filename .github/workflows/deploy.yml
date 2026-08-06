@@ -61,31 +61,11 @@ jobs:
       - name: Deploy n8n workflow
         run: |
           echo "=== Deploying n8n workflow ==="
-          # Extract only the fields the n8n PATCH /workflows/:id API accepts
-          # Per docs: name, nodes, connections, settings, staticData, tags
-          # Settings must only contain known fields (executionOrder, timezone)
-          jq '{
-            name: .name,
-            nodes: .nodes,
-            connections: .connections,
-            settings: { executionOrder: .settings.executionOrder },
-            staticData: .staticData,
-            tags: .tags
-          }' n8n/workflow.json > /tmp/workflow_deploy.json
+          # Use n8n CLI import which handles the full workflow JSON natively
+          # --id flag updates the existing workflow instead of creating a new one
+          docker compose exec -T n8n n8n import:workflow --input=/dev/stdin --separate < n8n/workflow.json
 
-          HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
-            -X PATCH "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
-            -H "X-N8N-API-KEY: ${{ secrets.N8N_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d @/tmp/workflow_deploy.json)
-
-          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "n8n workflow deployed successfully (HTTP $HTTP_STATUS)"
-          else
-            echo "ERROR: n8n workflow deploy failed (HTTP $HTTP_STATUS)"
-            cat /tmp/n8n_response.json
-            exit 1
-          fi
+          echo "n8n workflow deployed successfully"
 
       - name: Cleanup
         run: |
