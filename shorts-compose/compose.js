@@ -401,7 +401,95 @@ async function buildTemplateScene(templateName, templateData, duration, audioPat
 }
 
 // ---------------------------------------------------------------------------
-// Caption Overlay via Remotion
+// Karaoke ASS Caption Builder (burn-in via ffmpeg — no transparency issues)
+// ---------------------------------------------------------------------------
+
+function toAssTime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = (sec % 60).toFixed(2);
+  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(5, "0")}`;
+}
+
+function buildAssFromAlignment(scenes, offsets, commentHook, totalDuration) {
+  const header = `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${TARGET_W}
+PlayResY: ${TARGET_H}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Caption,Inter Black,76,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,8,2,60,60,420,1
+Style: CaptionHL,Inter Black,80,&H0000FFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,110,110,0,0,1,4,8,2,60,60,420,1
+Style: CommentHook,Inter Black,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,-1,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  let events = "";
+  const WORDS_PER_CHUNK = 2;
+
+  scenes.forEach((scene, sceneIdx) => {
+    const alignment = scene?.audio?.alignment;
+    if (!alignment) return;
+
+    const chars = alignment.characters;
+    const starts = alignment.character_start_times_seconds;
+    const ends = alignment.character_end_times_seconds;
+
+    const words = [];
+    let current = "";
+    let wordStart = null;
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (ch === " " || ch === "\n") {
+        if (current) {
+          words.push({ text: current, start: wordStart, end: ends[i - 1] });
+          current = "";
+          wordStart = null;
+        }
+        continue;
+      }
+      if (wordStart === null) wordStart = starts[i];
+      current += ch;
+    }
+    if (current) words.push({ text: current, start: wordStart, end: ends[ends.length - 1] });
+
+    for (let i = 0; i < words.length; i += WORDS_PER_CHUNK) {
+      const chunk = words.slice(i, i + WORDS_PER_CHUNK);
+      if (!chunk.length || chunk[0].start == null) continue;
+
+      chunk.forEach((w) => {
+        const wStart = w.start + offsets[sceneIdx];
+        const wEnd = w.end + offsets[sceneIdx];
+        const highlightText = chunk
+          .map((item) => {
+            if (item === w) {
+              return `{\\rCaptionHL}${item.text.toUpperCase()}{\\r}`;
+            }
+            return item.text.toUpperCase();
+          })
+          .join(" ");
+
+        events += `Dialogue: 0,${toAssTime(wStart)},${toAssTime(wEnd)},Caption,,0,0,0,,${highlightText}\n`;
+      });
+    }
+  });
+
+  if (commentHook && totalDuration) {
+    const hookDuration = Math.min(1.8, totalDuration * 0.4);
+    const hookStart = Math.max(0, totalDuration - hookDuration);
+    const escaped = commentHook.toUpperCase().replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
+    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
+  }
+
+  return header + events;
+}
+
+// ---------------------------------------------------------------------------
+// Caption Overlay via Remotion (kept for future use with VP9/RGBA output)
 // ---------------------------------------------------------------------------
 
 function extractWordsFromAlignment(scenes, offsets) {
@@ -580,9 +668,13 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     }
     const totalVideoDuration = durations.reduce((a, b) => a + b, 0) - (TRANSITION_DURATION * (durations.length - 1));
 
-    // ===== PHASE 3: Render caption overlay via Remotion =====
-    const captionOverlayPath = path.join(tmpDir, "captions_overlay.mp4");
-    await renderCaptionOverlay(scenes, offsets, comment_hook, totalVideoDuration, captionOverlayPath);
+    // ===== PHASE 3: Burn-in captions via ASS (proven approach) =====
+    // Remotion caption overlay requires VP9/RGBA to preserve transparency,
+    // which adds complexity. ASS captions burned in by ffmpeg are reliable,
+    // fast, and visually good enough with proper styling.
+    const assPath = path.join(tmpDir, "captions.ass");
+    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, totalVideoDuration);
+    await fsp.writeFile(assPath, assContent);
 
     // ===== PHASE 4: Sound design + Audio mixing + Final composite =====
     const musicPath = pickMusicTrack(mood);
@@ -620,34 +712,23 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     await fsp.mkdir(OUTPUT_DIR, { recursive: true });
 
     const hasMusic = fs.existsSync(musicPath);
-    const hasCaptions = fs.existsSync(captionOverlayPath);
+    const hasAss = fs.existsSync(assPath);
+    const safeAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
     const finalCmd = ffmpeg().input(concatPath);
-    if (hasCaptions) finalCmd.input(captionOverlayPath);
     if (hasMusic) finalCmd.input(musicPath);
     sfxEvents.forEach((ev) => finalCmd.input(sfxFiles[ev.type]));
 
     // Track input indices
     let nextIdx = 1;
-    const captionIdx = hasCaptions ? nextIdx++ : null;
     const musicIdx = hasMusic ? nextIdx++ : null;
     const sfxIndices = sfxEvents.map(() => nextIdx++);
 
-    // Build video filter: overlay transparent captions + fade in/out
-    const videoFilters = [];
-    let currentVideoLabel = "0:v";
-
-    if (hasCaptions) {
-      videoFilters.push(`[${currentVideoLabel}][${captionIdx}:v]overlay=0:0:shortest=1[captioned]`);
-      currentVideoLabel = "captioned";
-    }
-
-    // Fade in (0.3s) and fade out (0.5s) for cinematic bookends
-    const fadeInFrames = Math.round(0.3 * FPS);
+    // Build video filter: ASS caption burn-in + fade in/out
     const fadeOutStart = Math.max(0, totalVideoDuration - 0.5);
-    videoFilters.push(
-      `[${currentVideoLabel}]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`
-    );
+    const videoFilter = hasAss
+      ? `[0:v]ass=${safeAssPath},fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`
+      : `[0:v]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`;
 
     // Build audio filter: ducked music + synced SFX
     const audioFilters = [];
@@ -672,7 +753,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       audioFilters.push(`[${mixLabels.join("][")}]amix=inputs=${mixLabels.length}:duration=first:normalize=0[final_a]`);
     }
 
-    const allFilters = [...videoFilters, ...audioFilters];
+    const allFilters = [videoFilter, ...audioFilters];
     finalCmd.complexFilter(allFilters);
 
     // Studio-grade final encoding:
