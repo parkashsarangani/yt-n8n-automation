@@ -272,7 +272,11 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
       : zoomExpr;
 
     const filterGraph = [
-      `[0:v]zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.02*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
+      // Upscale well past the output resolution before zoompan - cropping
+      // from a source close to the output size makes the per-frame crop
+      // window round to whole pixels unevenly, which reads as flicker/
+      // vibration. The extra sub-pixel headroom eliminates that jitter.
+      `[0:v]scale=-2:6000,zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.02*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
       `[zoomed]${gradeFilter}[graded]`,
       `[graded]vignette=angle=PI/10:aspect=9/16[vignetted]`,
       `[vignetted]unsharp=5:5:0.4:5:5:0.0[final]`,
@@ -543,55 +547,26 @@ async function renderCaptionOverlay(scenes, offsets, commentHook, totalDuration,
 }
 
 // ---------------------------------------------------------------------------
-// Scene Transitions (crossfade via ffmpeg xfade filter)
+// Scene Concatenation (hard cuts - no crossfade)
 // ---------------------------------------------------------------------------
 
-async function concatWithTransitions(scenePaths, durations, transitionDuration, outPath) {
+async function concatScenes(scenePaths, outPath) {
   if (scenePaths.length === 1) {
     fs.copyFileSync(scenePaths[0], outPath);
     return outPath;
   }
 
-  // xfade requires sequential chaining: each pair of scenes gets a crossfade
-  const xfadeDur = Math.min(transitionDuration, 0.8);
-  let currentInput = scenePaths[0];
+  const listPath = path.join(path.dirname(outPath), "concat_scenes.txt");
+  const listContent = scenePaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
+  await fsp.writeFile(listPath, listContent);
 
-  for (let i = 1; i < scenePaths.length; i++) {
-    const isLast = i === scenePaths.length - 1;
-    const stepOut = path.join(path.dirname(outPath), `xfade_step_${i}.mp4`);
-    const outputForStep = isLast ? outPath : stepOut;
-
-    // Calculate offset: where in the accumulated video the transition starts
-    let accumulatedDuration = durations[0];
-    for (let j = 1; j < i; j++) {
-      accumulatedDuration += durations[j] - xfadeDur;
-    }
-    const offset = Math.max(0, accumulatedDuration - xfadeDur);
-
-    await run(
-      ffmpeg()
-        .input(currentInput)
-        .input(scenePaths[i])
-        .complexFilter([
-          `[0:v][1:v]xfade=transition=fade:duration=${xfadeDur}:offset=${offset.toFixed(3)}[vout]`,
-          `[0:a][1:a]acrossfade=d=${xfadeDur}:c1=tri:c2=tri[aout]`,
-        ])
-        .outputOptions([
-          "-map", "[vout]",
-          "-map", "[aout]",
-          "-c:v", V_ENCODER,
-          "-r", String(FPS),
-          "-preset", "veryfast",
-          "-crf", "18",
-          "-pix_fmt", "yuv420p",
-          "-c:a", "aac",
-          "-b:a", "192k",
-        ])
-        .output(outputForStep)
-    );
-
-    currentInput = outputForStep;
-  }
+  await run(
+    ffmpeg()
+      .input(listPath)
+      .inputOptions(["-f", "concat", "-safe", "0"])
+      .outputOptions(["-c", "copy"])
+      .output(outPath)
+  );
 
   return outPath;
 }
@@ -656,17 +631,16 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const scenePaths = sceneResults.map((r) => r.path);
     const durations = sceneResults.map((r) => r.duration);
 
-    // ===== PHASE 2: Concatenate with crossfade transitions =====
-    const TRANSITION_DURATION = 0.7; // seconds - studio-standard crossfade
+    // ===== PHASE 2: Concatenate scenes (hard cuts) =====
     const concatPath = path.join(tmpDir, "concat.mp4");
-    await concatWithTransitions(scenePaths, durations, TRANSITION_DURATION, concatPath);
+    await concatScenes(scenePaths, concatPath);
 
-    // Calculate actual scene offsets (accounting for crossfade overlap)
+    // Calculate actual scene offsets (no overlap - hard cuts)
     const offsets = [0];
     for (let i = 1; i < durations.length; i++) {
-      offsets.push(offsets[i - 1] + durations[i - 1] - TRANSITION_DURATION);
+      offsets.push(offsets[i - 1] + durations[i - 1]);
     }
-    const totalVideoDuration = durations.reduce((a, b) => a + b, 0) - (TRANSITION_DURATION * (durations.length - 1));
+    const totalVideoDuration = durations.reduce((a, b) => a + b, 0);
 
     // ===== PHASE 3: Burn-in captions via ASS (proven approach) =====
     // Remotion caption overlay requires VP9/RGBA to preserve transparency,
@@ -694,14 +668,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const sfxEvents = [];
     for (let i = 1; i < scenes.length; i++) {
       // Whoosh + sub-bass thump on every scene cut (not just templates)
-      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.20 });
-      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.15 });
+      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.30 });
+      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.25 });
     }
     // Extra emphasis on template reveals
     scenes.forEach((s, i) => {
       if (s.visual_source === "template") {
-        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.32 });
-        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.18 });
+        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.45 });
+        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.25 });
       }
     });
 
