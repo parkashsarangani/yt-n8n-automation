@@ -134,6 +134,21 @@ function run(cmdBuilder) {
   });
 }
 
+// loudnorm computes a gain from the input's measured LUFS to the -16 LUFS
+// target - on true digital silence (e.g. the outro's generated silent
+// track) or other near-silent audio, measured loudness is -infinity, and
+// the resulting gain is NaN, which crashes the AAC encoder entirely. Try
+// with loudnorm first (normal case); if it fails, retry the identical
+// encode without it rather than losing the whole scene.
+async function runAudioMux(cmdFactory) {
+  try {
+    await run(cmdFactory(true));
+  } catch (err) {
+    console.warn(`[loudnorm] normalization failed (${err.message}), retrying without it`);
+    await run(cmdFactory(false));
+  }
+}
+
 function ffprobeDuration(filePath) {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, data) => {
@@ -236,26 +251,25 @@ async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath
     `unsharp=5:5:0.4:5:5:0.0`,
   ].join(",") + "[processed]";
 
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[processed]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push(
+      "-c:v", V_ENCODER,
+      "-r", String(FPS),
+      "-preset", "veryfast",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+    );
+    return ffmpeg()
       .input(stockVideoPath)
       .input(audioPath)
       .complexFilter([videoFilter])
-      .outputOptions([
-        "-map", "[processed]",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", V_ENCODER,
-        "-r", String(FPS),
-        "-preset", "veryfast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -341,21 +355,16 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
   }
 
   // Mux with audio
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "0:v", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push("-c:v", "copy", "-c:a", "aac", "-b:a", "192k");
+    return ffmpeg()
       .input(sceneVideoPath)
       .input(audioPath)
-      .outputOptions([
-        "-map", "0:v",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -402,26 +411,25 @@ async function buildTemplateScene(templateName, templateData, duration, audioPat
     ? `[0:v]tpad=stop_mode=clone:stop_duration=${(duration - templateDuration + 0.1).toFixed(3)}[padded]`
     : `[0:v]null[padded]`;
 
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[padded]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push(
+      "-c:v", V_ENCODER,
+      "-r", String(FPS),
+      "-preset", "veryfast",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+    );
+    return ffmpeg()
       .input(templateVideoPath)
       .input(audioPath)
       .complexFilter([videoFilter])
-      .outputOptions([
-        "-map", "[padded]",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", V_ENCODER,
-        "-r", String(FPS),
-        "-preset", "veryfast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
