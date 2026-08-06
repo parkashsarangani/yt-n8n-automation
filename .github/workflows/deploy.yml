@@ -61,11 +61,14 @@ jobs:
       - name: Deploy n8n workflow
         run: |
           echo "=== Deploying n8n workflow ==="
+          # Strip read-only fields (id) that the n8n API rejects on PUT
+          jq 'del(.id)' n8n/workflow.json > /tmp/workflow_deploy.json
+
           HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
             -X PUT "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
             -H "X-N8N-API-KEY: ${{ secrets.N8N_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d @n8n/workflow.json)
+            -d @/tmp/workflow_deploy.json)
 
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
             echo "n8n workflow deployed successfully (HTTP $HTTP_STATUS)"
