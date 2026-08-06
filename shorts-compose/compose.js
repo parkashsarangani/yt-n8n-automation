@@ -242,7 +242,7 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
   // Eased Ken Burns with sinusoidal motion (not linear)
   // Creates organic, handheld-feeling camera movement
   const fps = FPS;
-  const CUT_INTERVAL_SEC = sceneIdx === 0 ? 1.8 : 2.5;
+  const CUT_INTERVAL_SEC = sceneIdx === 0 ? 3.5 : 4.5;
   const numSegments = Math.max(1, Math.round(duration / CUT_INTERVAL_SEC));
   const segDuration = duration / numSegments;
   const totalFrames = Math.ceil(segDuration * fps);
@@ -266,7 +266,7 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
       : `'1.08+0.04*(1-cos(PI*on/${totalFrames}))/2'`;
 
     // Punch-in on first few frames for "snap" feel at each cut
-    const punchFrames = Math.min(8, Math.round(totalFrames * 0.15));
+    const punchFrames = Math.min(18, Math.round(totalFrames * 0.3));
     const finalZoom = sceneIdx === 0 && seg === 0
       ? `'if(lte(on,${punchFrames}),1.18-0.06*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
       : zoomExpr;
