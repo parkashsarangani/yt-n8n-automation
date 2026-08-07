@@ -25,14 +25,18 @@ services:
       - TOPIC_HISTORY_PATH=/app/data/topic_history.json
       - NODE_OPTIONS=--max-old-space-size=4096
     volumes:
-      # outputs are ephemeral rendered videos (downloaded then cleaned up),
-      # so a bind mount that git-clean wipes each deploy is fine here.
-      - ./shorts-compose/outputs:/app/outputs
-      # topic history is PERSISTENT runtime state. It must NOT live in the
-      # git checkout dir - deploy.yml checks out with clean:true, which runs
-      # `git clean -ffdx` and wipes any bind mount sourced from there (this
-      # reset topic dedup history on every deploy). A named volume lives
-      # outside the checkout and survives, same as n8n_data.
+      # NOTHING bind-mounted from the git checkout dir. deploy.yml checks out
+      # with clean:true (`git clean -ffdx`), which deletes any such dir - and
+      # deleting a bind-mount source out from under a running container leaves
+      # a STALE mount: the path still resolves inside the container but every
+      # write fails with ENOENT. That broke outputs (final render copy) and
+      # reset topic history. All app-writable paths are named volumes, which
+      # live outside the checkout and are immune to git clean - like n8n_data.
+      #
+      # outputs: ephemeral rendered videos, downloaded via the /outputs HTTP
+      # route (nothing on the host reads this dir), then cleaned up per job.
+      - shorts_outputs:/app/outputs
+      # topic history: PERSISTENT dedup state, must survive every deploy.
       - shorts_data:/app/data
       # No music mount by design: there are currently no music tracks, so the
       # renderer runs without a soundtrack (pickMusicTrack finds none and
@@ -56,3 +60,4 @@ services:
 volumes:
   n8n_data:
   shorts_data:
+  shorts_outputs:
