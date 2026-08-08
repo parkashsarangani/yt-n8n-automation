@@ -278,12 +278,15 @@ async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath
   return outPath;
 }
 
-async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneIdx, mood) {
+async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneIdx, mood, isEmphasis = false) {
   // Eased Ken Burns with sinusoidal motion (not linear)
   // Creates organic, handheld-feeling camera movement
   const fps = FPS;
   const CUT_INTERVAL_SEC = sceneIdx === 0 ? 3.5 : 4.5;
-  const numSegments = Math.max(1, Math.round(duration / CUT_INTERVAL_SEC));
+  // Emphasis (payoff) scene: hold as ONE continuous shot with a strong,
+  // deliberate slow push-in - the visual equivalent of leaning in for the
+  // reveal, instead of the usual gentle drift.
+  const numSegments = isEmphasis ? 1 : Math.max(1, Math.round(duration / CUT_INTERVAL_SEC));
   const segDuration = duration / numSegments;
   const totalFrames = Math.ceil(segDuration * fps);
   const gradeFilter = getColorGrade(mood);
@@ -300,16 +303,22 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
       ? `'iw*0.035*(1-cos(PI*on/${totalFrames}))/2'`
       : `'iw*0.035*(1+cos(PI*on/${totalFrames}))/2'`;
 
-    // Subtle zoom drift (1.09 -> 1.07 or vice versa) for organic feel
-    const zoomExpr = seg % 2 === 0
-      ? `'1.09-0.02*(1-cos(PI*on/${totalFrames}))/2'`
-      : `'1.07+0.02*(1-cos(PI*on/${totalFrames}))/2'`;
+    // Alternate the camera move per SCENE for variety: even scenes slowly
+    // push IN, odd scenes pull OUT (gently eased). Breaks the "same subtle
+    // drift on every scene" monotony without speeding anything up, and keeps
+    // the motion coherent within a scene (all its segments move the same way).
+    const pushIn = sceneIdx % 2 === 0;
+    const zoomExpr = pushIn
+      ? `'1.05+0.05*(1-cos(PI*on/${totalFrames}))/2'`
+      : `'1.10-0.05*(1-cos(PI*on/${totalFrames}))/2'`;
 
     // Gentle punch-in on the first segment only, eased over its own window
     const punchFrames = Math.min(18, Math.round(totalFrames * 0.3));
-    const finalZoom = sceneIdx === 0 && seg === 0
-      ? `'if(lte(on,${punchFrames}),1.13-0.04*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
-      : zoomExpr;
+    const finalZoom = isEmphasis
+      ? `'1.02+0.18*(1-cos(PI*on/${totalFrames}))/2'`
+      : sceneIdx === 0 && seg === 0
+        ? `'if(lte(on,${punchFrames}),1.13-0.04*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
+        : zoomExpr;
 
     const filterGraph = [
       // Upscale well past the output resolution before zoompan - cropping
@@ -459,6 +468,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Inter Bold,64,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,0,0,0,0,100,100,0,0,1,3,4,2,60,60,420,1
 Style: CaptionHL,Inter Bold,68,&H0096E0FF,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
+Style: CaptionKey,Inter Bold,68,&H0080FF60,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
 Style: CommentHook,Inter Bold,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,0,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
 
 [Events]
@@ -504,7 +514,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const highlightText = chunk
           .map((item) => {
             if (item === w) {
-              return `{\\rCaptionHL}${item.text}{\\r}`;
+              // Active word "pops": snaps to 128% then settles to the style's
+              // 105% over ~100ms as it's spoken - a karaoke bounce that makes
+              // the captions feel alive and draws the eye to the current word.
+              // A word containing a number (the key fact in this niche) pops in
+              // a distinct green so stats stand out from ordinary highlights.
+              const hlStyle = /\d/.test(item.text) ? "CaptionKey" : "CaptionHL";
+              return `{\\r${hlStyle}\\fscx128\\fscy128\\t(0,100,\\fscx105\\fscy105)}${item.text}{\\r}`;
             }
             return item.text;
           })
@@ -668,6 +684,10 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       audio: { audio_base64: outroAudioBase64 },
     });
 
+    // The payoff/reveal scene = the last content scene before the outro card.
+    // It gets a stronger emphasis push-in (video) and a riser+impact accent.
+    const emphasisIdx = scenes.length - 2;
+
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes (mood: ${mood})`);
 
     // ===== PHASE 1: Build individual scenes in parallel =====
@@ -711,7 +731,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
               return await downloadFile(url, p);
             })
           );
-          await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood);
+          await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood, i === emphasisIdx);
         }
 
         return { path: outPath, duration };
@@ -765,10 +785,16 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       riser: fs.existsSync(sfxFiles.riser),
     };
 
-    // Transition SFX removed: a whoosh + impact on every scene cut clashed
-    // with the documentary/story tone and got repetitive over a 60-90s video.
-    // The ducked background music and voice carry the pacing instead.
+    // Sound design: NO per-cut SFX (that whoosh-on-every-cut clashed with the
+    // tone). Instead, ONE tasteful accent at the payoff/reveal - a soft riser
+    // building into it, then a gentle impact as it lands. This is the single
+    // intentional audio beat that punctuates the climax without the noise.
     const sfxEvents = [];
+    const emphasisOffset = offsets[emphasisIdx];
+    if (emphasisIdx >= 1 && emphasisOffset != null) {
+      if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, emphasisOffset - 1.3), volume: 0.18 });
+      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: emphasisOffset, volume: 0.22 });
+    }
 
     // Gapless voiceover: rejoin the per-scene voice cleanly (no boundary
     // clicks) with a single loudnorm (consistent levels), used as the voice
