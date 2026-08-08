@@ -19,6 +19,11 @@ jobs:
           clean: true
 
       - name: Build and deploy
+        env:
+          # fal.ai key for hybrid image->video (hook/payoff animation). Add it
+          # as a repo/environment secret named FAL_KEY. If the secret is unset,
+          # this is empty and compose skips animation (falls back to stills).
+          FAL_KEY: ${{ secrets.FAL_KEY }}
         run: |
           set -e
 
