@@ -24,6 +24,12 @@ services:
       - OUTPUT_DIR=/app/outputs
       - TOPIC_HISTORY_PATH=/app/data/topic_history.json
       - NODE_OPTIONS=--max-old-space-size=4096
+      # fal.ai key for hybrid image->video (hook/payoff animation). Set it in
+      # the server's environment/.env. If unset, animation is skipped and the
+      # pipeline uses Ken-Burns stills (no breakage). Model is swappable:
+      # FAL_VIDEO_MODEL (default fal-ai/ltx-video/image-to-video, ~$0.02/clip).
+      - FAL_KEY=${FAL_KEY:-}
+      - FAL_VIDEO_MODEL=${FAL_VIDEO_MODEL:-fal-ai/ltx-video/image-to-video}
     volumes:
       # NOTHING bind-mounted from the git checkout dir. deploy.yml checks out
       # with clean:true (`git clean -ffdx`), which deletes any such dir - and
