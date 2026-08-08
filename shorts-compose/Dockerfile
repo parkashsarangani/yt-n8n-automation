@@ -32,9 +32,19 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --production
 
-# Install Remotion project dependencies
+# Install Remotion project dependencies.
+# Remotion's bundler pulls @rspack/core, whose platform-native binding
+# (@rspack/binding-linux-x64-gnu) is an OPTIONAL dependency that npm's
+# optional-deps bug (npm/cli#4828) can silently skip - causing a runtime
+# "Cannot find native binding" that breaks every template/caption render.
+# Force-install the Linux binding at the exact version npm resolved for
+# @rspack/binding so it always matches.
 COPY remotion/package*.json ./remotion/
-RUN cd remotion && npm install
+RUN cd remotion && npm install && \
+    RSPACK_VER="$(node -p "require('@rspack/binding/package.json').version")" && \
+    echo "Ensuring @rspack/binding-linux-x64-gnu@${RSPACK_VER}" && \
+    npm install --no-save "@rspack/binding-linux-x64-gnu@${RSPACK_VER}" && \
+    node -e "require('@rspack/binding'); console.log('rspack binding OK')"
 
 # Copy all source
 COPY . .
