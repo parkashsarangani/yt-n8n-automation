@@ -296,7 +296,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ text: $json.narration, model_id: \"eleven_multilingual_v2\" }) }}",
+        "jsonBody": "={{ JSON.stringify({ text: $json.narration, model_id: \"eleven_multilingual_v2\", voice_settings: ({ serious: {stability:0.35,similarity_boost:0.8,style:0.5,use_speaker_boost:true,speed:0.97}, upbeat: {stability:0.4,similarity_boost:0.8,style:0.55,use_speaker_boost:true,speed:1.05}, funny: {stability:0.4,similarity_boost:0.8,style:0.6,use_speaker_boost:true,speed:1.04}, neutral: {stability:0.42,similarity_boost:0.8,style:0.4,use_speaker_boost:true,speed:1.0} }[($('Validate Final Script').first().json.caption_style || 'neutral')] || {stability:0.42,similarity_boost:0.8,style:0.4,use_speaker_boost:true,speed:1.0}) }) }}",
         "options": {
           "batching": {
             "batch": {
@@ -319,7 +319,10 @@
           "id": "KhI01ameaMcInb84",
           "name": "ElevenLabs"
         }
-      }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
