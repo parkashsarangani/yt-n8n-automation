@@ -241,8 +241,8 @@ async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath
   const stockDuration = await ffprobeDuration(stockVideoPath);
   const needsPad = stockDuration < duration;
 
-  // Cinematic processing: scale to fill, crop, split-tone grade,
-  // vignette, and subtle film grain (very low to avoid bitrate bloat)
+  // Cinematic processing: scale to fill, crop, split-tone grade, and a
+  // subtle unsharp for crispness (vignette removed - it read too heavy).
   const gradeFilter = getColorGrade(mood);
   const padFilter = needsPad
     ? `,tpad=stop_mode=clone:stop_duration=${(duration - stockDuration + 0.1).toFixed(3)}`
@@ -252,7 +252,6 @@ async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath
     `[0:v]scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase`,
     `crop=${TARGET_W}:${TARGET_H}${padFilter}`,
     gradeFilter,
-    `vignette=angle=PI/10:aspect=9/16`,
     `unsharp=5:5:0.4:5:5:0.0`,
   ].join(",") + "[processed]";
 
@@ -319,8 +318,7 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
       // vibration. The extra sub-pixel headroom eliminates that jitter.
       `[0:v]scale=-2:6000,zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.02*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
       `[zoomed]${gradeFilter}[graded]`,
-      `[graded]vignette=angle=PI/10:aspect=9/16[vignetted]`,
-      `[vignetted]unsharp=5:5:0.4:5:5:0.0[final]`,
+      `[graded]unsharp=5:5:0.4:5:5:0.0[final]`,
     ];
 
     await run(
@@ -610,6 +608,42 @@ async function concatScenes(scenePaths, outPath) {
   return outPath;
 }
 
+// Rebuild the voiceover as ONE gapless track. Each scene's audio was AAC-
+// encoded separately and then copy-concatenated, which stacks every segment's
+// ~23ms encoder-priming silence at the joins - an audible click/hiccup at each
+// scene cut. Decoding the raw per-scene voice and re-joining them with the
+// concat filter produces a clean, sample-accurate join (no click), and a
+// single loudnorm pass over the whole track removes the per-scene level jumps
+// the old per-scene loudnorm caused. Total duration is unchanged, so it stays
+// in sync with the concatenated video.
+async function buildGaplessVoice(audioPaths, outPath) {
+  if (audioPaths.length === 1) {
+    await runAudioMux((normalize) => {
+      const opts = ["-c:a", "aac", "-b:a", "192k", "-ar", "44100"];
+      const c = ffmpeg().input(audioPaths[0]);
+      if (normalize) c.audioFilters("loudnorm=I=-16:TP=-1.5:LRA=11");
+      return c.outputOptions(opts).output(outPath);
+    });
+    return outPath;
+  }
+  await runAudioMux((normalize) => {
+    const cmd = ffmpeg();
+    audioPaths.forEach((p) => cmd.input(p));
+    // Normalize each input to a common format before concat (defensive), then
+    // join sample-accurately; optionally a single loudnorm over the whole thing.
+    const norm = audioPaths.map((_, i) => `[${i}:a]aformat=sample_rates=44100:channel_layouts=mono[a${i}]`).join(";");
+    const ins = audioPaths.map((_, i) => `[a${i}]`).join("");
+    const tail = normalize
+      ? `concat=n=${audioPaths.length}:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11[a]`
+      : `concat=n=${audioPaths.length}:v=0:a=1[a]`;
+    return cmd
+      .complexFilter([`${norm};${ins}${tail}`])
+      .outputOptions(["-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", "44100"])
+      .output(outPath);
+  });
+  return outPath;
+}
+
 // ---------------------------------------------------------------------------
 // Main Compose Pipeline
 // ---------------------------------------------------------------------------
@@ -731,20 +765,19 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       riser: fs.existsSync(sfxFiles.riser),
     };
 
-    // SFX events synced to real scene transitions
+    // Transition SFX removed: a whoosh + impact on every scene cut clashed
+    // with the documentary/story tone and got repetitive over a 60-90s video.
+    // The ducked background music and voice carry the pacing instead.
     const sfxEvents = [];
-    for (let i = 1; i < scenes.length; i++) {
-      // Whoosh + sub-bass thump on every scene cut (not just templates)
-      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.30 });
-      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.25 });
-    }
-    // Extra emphasis on template reveals
-    scenes.forEach((s, i) => {
-      if (s.visual_source === "template") {
-        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.45 });
-        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.25 });
-      }
-    });
+
+    // Gapless voiceover: rejoin the per-scene voice cleanly (no boundary
+    // clicks) with a single loudnorm (consistent levels), used as the voice
+    // track below instead of the concatenated video's gappy audio.
+    const voicePath = path.join(tmpDir, "voice_full.m4a");
+    await buildGaplessVoice(
+      scenes.map((_, i) => path.join(tmpDir, `voice_${i}.mp3`)),
+      voicePath
+    );
 
     // ===== PHASE 5: Final composite — video + captions + music + SFX =====
     const finalPath = path.join(tmpDir, "final.mp4");
@@ -756,12 +789,13 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const hasAss = fs.existsSync(assPath);
     const safeAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
-    const finalCmd = ffmpeg().input(concatPath);
+    const finalCmd = ffmpeg().input(concatPath);   // [0] = video (+ ignored audio)
+    finalCmd.input(voicePath);                     // [1] = gapless voiceover
     if (hasMusic) finalCmd.input(musicPath);
     sfxEvents.forEach((ev) => finalCmd.input(sfxFiles[ev.type]));
 
-    // Track input indices
-    let nextIdx = 1;
+    // Track input indices ([0]=video, [1]=voice already taken)
+    let nextIdx = 2;
     const musicIdx = hasMusic ? nextIdx++ : null;
     const sfxIndices = sfxEvents.map(() => nextIdx++);
 
@@ -771,14 +805,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       ? `[0:v]ass=${safeAssPath},fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`
       : `[0:v]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`;
 
-    // Build audio filter: ducked music + synced SFX
+    // Build audio filter: gapless voice ([1:a]) + ducked music
     const audioFilters = [];
-    const mixLabels = ["0:a"];
+    const mixLabels = ["1:a"];
 
     if (hasMusic) {
       // Gentler ducking: ratio 4 instead of 10, shaped attack/release
       audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=0.15[music]`);
-      audioFilters.push(`[music][0:a]sidechaincompress=threshold=0.04:ratio=4:attack=20:release=200[duckedmusic]`);
+      audioFilters.push(`[music][1:a]sidechaincompress=threshold=0.04:ratio=4:attack=20:release=200[duckedmusic]`);
       mixLabels.push("duckedmusic");
     }
 
@@ -803,7 +837,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     // - High profile for maximum quality at 1080p30
     finalCmd.outputOptions([
       "-map", "[final_v]",
-      "-map", mixLabels.length > 1 ? "[final_a]" : "0:a",
+      "-map", mixLabels.length > 1 ? "[final_a]" : "1:a",
       "-c:v", V_ENCODER,
       "-preset", "medium",
       "-crf", "16",
