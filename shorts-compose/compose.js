@@ -518,10 +518,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   });
 
   if (commentHook && totalDuration) {
-    const hookDuration = Math.min(1.8, totalDuration * 0.4);
-    const hookStart = Math.max(0, totalDuration - hookDuration);
+    // Surface the comment prompt at ~62% of the content - while retention is
+    // still high - instead of the final seconds, when most viewers have
+    // already swiped away. Hold it ~5s so it's readable, ending before the
+    // kicker so it doesn't collide with the payoff.
+    const hookStart = totalDuration * 0.62;
+    const hookEnd = Math.min(totalDuration, hookStart + 5);
     const escaped = commentHook.replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
-    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
+    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(hookEnd)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
   }
 
   return header + events;
