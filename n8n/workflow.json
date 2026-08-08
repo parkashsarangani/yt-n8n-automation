@@ -379,7 +379,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// This node is downstream of a real Merge node with TWO input connections\n// (images + audio), so n8n guarantees both branches have fully completed\n// before this runs - no race condition from cross-branch $() references.\nconst allItems = $input.all().map(i => i.json);\n\n// Each scene's visual asset is EITHER a Pexels stock array (.images) OR a\n// template scene descriptor (.visual_source === 'template') - shape-detect\n// on whichever field is present.\nconst imageAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && (i.data[0].images || i.data[0].video_url || i.data[0].visual_source === 'template'));\nconst audioAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && i.data[0].audio);\n\nif (!imageAgg) throw new Error('Could not find the visual branch in merged input - check \"Aggregate All Videos\" output shape');\nif (!audioAgg) throw new Error('Could not find the audio branch in merged input - check \"Aggregate All Audio\" output shape');\n\nconst visuals = imageAgg.data;\nconst audios = audioAgg.data;\n\nconst merged = visuals.map((v) => {\n  const match = audios.find((a) => a.scene_index === v.scene_index);\n  if (!match) {\n    throw new Error(`No audio found for scene_index ${v.scene_index} - visual/audio counts likely mismatched`);\n  }\n  return {\n    scene_index: v.scene_index,\n    images: v.images,\n    video_url: v.video_url,\n    source_duration: v.source_duration,\n    source_width: v.source_width,\n    source_height: v.source_height,\n    visual_source: v.visual_source,\n    template_name: v.template_name,\n    template_data: v.template_data,\n    audio: match.audio,\n  };\n});\n\nmerged.sort((a, b) => a.scene_index - b.scene_index);\n\nreturn {\n  json: {\n    hook: $('Validate Final Script').item.json.hook,\n    comment_hook: $('Validate Final Script').item.json.comment_hook,\n    full_script: $('Validate Final Script').item.json.full_script,\n    caption_style: $('Validate Final Script').item.json.caption_style,\n    data: merged\n  }\n};"
+        "jsCode": "// This node is downstream of a real Merge node with TWO input connections\n// (images + audio), so n8n guarantees both branches have fully completed\n// before this runs - no race condition from cross-branch $() references.\nconst allItems = $input.all().map(i => i.json);\n\n// Each scene's visual asset is EITHER a generated image array (.images) OR a\n// template scene descriptor (.visual_source === 'template') - shape-detect\n// on whichever field is present.\nconst imageAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && (i.data[0].images || i.data[0].video_url || i.data[0].visual_source === 'template'));\nconst audioAgg = allItems.find(i => Array.isArray(i.data) && i.data[0] && i.data[0].audio);\n\nif (!imageAgg) throw new Error('Could not find the visual branch in merged input - check \"Aggregate All Videos\" output shape');\nif (!audioAgg) throw new Error('Could not find the audio branch in merged input - check \"Aggregate All Audio\" output shape');\n\nconst visuals = imageAgg.data;\nconst audios = audioAgg.data;\n\nconst merged = visuals.map((v) => {\n  const match = audios.find((a) => a.scene_index === v.scene_index);\n  if (!match) {\n    throw new Error(`No audio found for scene_index ${v.scene_index} - visual/audio counts likely mismatched`);\n  }\n  return {\n    scene_index: v.scene_index,\n    images: v.images,\n    video_url: v.video_url,\n    source_duration: v.source_duration,\n    source_width: v.source_width,\n    source_height: v.source_height,\n    visual_source: v.visual_source,\n    template_name: v.template_name,\n    template_data: v.template_data,\n    audio: match.audio,\n  };\n});\n\nmerged.sort((a, b) => a.scene_index - b.scene_index);\n\nreturn {\n  json: {\n    hook: $('Validate Final Script').item.json.hook,\n    comment_hook: $('Validate Final Script').item.json.comment_hook,\n    full_script: $('Validate Final Script').item.json.full_script,\n    caption_style: $('Validate Final Script').item.json.caption_style,\n    data: merged\n  }\n};"
       },
       "id": "25f5d3c3-ba5a-45b6-b7f2-39059d261b8f",
       "name": "Merge By scene_index (not position)",
@@ -608,32 +608,28 @@
     },
     {
       "parameters": {
-        "url": "=https://api.pexels.com/v1/search",
+        "method": "POST",
+        "url": "https://fal.run/fal-ai/flux/dev",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
-        "sendQuery": true,
-        "queryParameters": {
+        "sendHeaders": true,
+        "headerParameters": {
           "parameters": [
             {
-              "name": "query",
-              "value": "={{ $('Split Out Scenes').item.json.stock_search_query }}"
-            },
-            {
-              "name": "orientation",
-              "value": "portrait"
-            },
-            {
-              "name": "per_page",
-              "value": "5"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
         },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ prompt: \"Ultra-realistic ultra-detailed photograph, bright and vibrant with rich saturated colours, bold high contrast, crisp sharp focus, punchy eye-catching lighting, one striking focal subject that pops off the screen, clean high-energy composition, vertical 9:16. \" + $('Split Out Scenes').item.json.visual_prompt + \" No text, no words, no letters, no captions, no watermark, no logos.\", image_size: { width: 768, height: 1344 }, num_images: 1, num_inference_steps: 28, enable_safety_checker: true }) }}",
         "options": {
-          "timeout": 20000
+          "timeout": 90000
         }
       },
       "id": "8c231b58-691f-4352-bcd1-3f12944d086e",
-      "name": "Pexels: Search Photos",
+      "name": "Fal: Generate Image",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -642,8 +638,8 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "x1lbrY0csVKdvFB5",
-          "name": "Pexels"
+          "id": "ZDBSbVz4IJ6GLBiT",
+          "name": "fal.ai"
         }
       },
       "retryOnFail": true,
@@ -652,10 +648,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const sceneIndex = $('Split Out Scenes').item.json.scene_index;\nconst photos = $input.item.json.photos || [];\nif (!photos.length) {\n  throw new Error(`Pexels returned zero photo results for scene_index ${sceneIndex} (query: \"${$('Split Out Scenes').item.json.stock_search_query}\"). No paid fallback is configured - adjust the stock_search_query or topic and retry.`);\n}\n\n// Pass 1: prefer genuine portrait photos - the orientation=portrait query\n// param should already guarantee this, but verify defensively rather than\n// trust it blindly (mirrors the video-search fallback pattern).\nlet usable = photos.filter(p => p.src && p.height > p.width);\n// Pass 2: if none are portrait, fall back to whatever photos exist.\nif (!usable.length) usable = photos.filter(p => p.src);\nif (!usable.length) {\n  throw new Error(`Pexels photo results for scene_index ${sceneIndex} had no usable image`);\n}\n\n// Use ONLY the top 2 most-relevant photos. Pexels returns results by\n// relevance, so #1-2 match the query but #3-5 drift into loosely-related\n// shots - and buildImageScene was cycling through that weak tail, which is\n// why frames stopped matching the narration. Two tight matches read far\n// better than five drifting ones (Ken Burns still gives motion).\nconst images = usable.slice(0, 2).map(p => p.src.large2x || p.src.large || p.src.original);\n\nreturn { json: { scene_index: sceneIndex, images, _source: 'pexels_photo' } };"
+        "jsCode": "const sceneIndex = $('Split Out Scenes').item.json.scene_index;\nconst imgs = $input.item.json.images || [];\nif (!imgs.length || !imgs[0] || !imgs[0].url) {\n  throw new Error(`fal.ai returned no image for scene_index ${sceneIndex}. Raw response: ` + JSON.stringify($input.item.json).slice(0, 400));\n}\n// One generated image per scene; buildImageScene applies the Ken Burns\n// pan/zoom over it. The image is rendered from this scene's visual_prompt,\n// so it matches the narration instead of being a loose stock match.\nreturn { json: { scene_index: sceneIndex, images: [imgs[0].url], _source: 'fal_flux' } };"
       },
       "id": "6cc80a0f-9064-45f9-bf26-163d703ad391",
-      "name": "Tag Pexels Photos",
+      "name": "Tag Generated Image",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -1186,18 +1182,18 @@
         ]
       ]
     },
-    "Pexels: Search Photos": {
+    "Fal: Generate Image": {
       "main": [
         [
           {
-            "node": "Tag Pexels Photos",
+            "node": "Tag Generated Image",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Tag Pexels Photos": {
+    "Tag Generated Image": {
       "main": [
         [
           {
@@ -1219,7 +1215,7 @@
         ],
         [
           {
-            "node": "Pexels: Search Photos",
+            "node": "Fal: Generate Image",
             "type": "main",
             "index": 0
           }
