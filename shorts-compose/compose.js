@@ -41,6 +41,16 @@ const FPS = 30;
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
+// Hybrid AI-video: animate the hook + payoff stills into short clips for real
+// motion (the rest stay Ken-Burns stills). Only runs if FAL_KEY is set; any
+// failure falls back to the still, so a bad/blocked clip never kills a video.
+// Model is swappable via env (default = LTX Video, ~$0.02/clip; step up to
+// fal-ai/wan/v2.2-a14b/image-to-video or kling for higher quality).
+const FAL_KEY = process.env.FAL_KEY || "";
+const FAL_VIDEO_MODEL = process.env.FAL_VIDEO_MODEL || "fal-ai/ltx-video/image-to-video";
+const FAL_VIDEO_PROMPT =
+  "Subtle cinematic camera motion, gentle parallax and natural drift, lifelike movement, no warping, no morphing";
+
 // Fixed engagement outro appended to every video. 2.5s gives the four
 // asks (comment, like, share, follow) room to land - the KineticText
 // template reveals words one at a time, so a bare 2s felt rushed.
@@ -231,6 +241,28 @@ function renderRemotion(compositionId, outputPath, durationSec, props) {
       resolve(outputPath);
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// AI Image -> Video (fal image-to-video, e.g. LTX) for hook/payoff motion
+// ---------------------------------------------------------------------------
+
+// Animate a still (the fal image URL) into a short clip. Uses the synchronous
+// fal.run endpoint; returns the downloaded clip path. Callers wrap this in a
+// try/catch and fall back to the Ken-Burns still on any failure.
+async function generateVideoFromImage(imageUrl, outPath) {
+  const res = await axios.post(
+    `https://fal.run/${FAL_VIDEO_MODEL}`,
+    { image_url: imageUrl, prompt: FAL_VIDEO_PROMPT },
+    {
+      headers: { Authorization: `Key ${FAL_KEY}`, "Content-Type": "application/json" },
+      timeout: 180000,
+    }
+  );
+  const url = res.data?.video?.url || res.data?.videos?.[0]?.url;
+  if (!url) throw new Error("fal video model returned no video url: " + JSON.stringify(res.data).slice(0, 300));
+  await downloadFile(url, outPath);
+  return outPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -731,7 +763,27 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
               return await downloadFile(url, p);
             })
           );
-          await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood, i === emphasisIdx);
+
+          // Hybrid: animate the hook (first) and payoff scenes into real
+          // motion clips; keep the middle as Ken-Burns stills. Any failure
+          // (no key, model error, timeout) falls back to the still so a bad
+          // clip never breaks the video.
+          const animate = FAL_KEY && (i === 0 || i === emphasisIdx);
+          let animated = false;
+          if (animate) {
+            try {
+              const clipPath = path.join(tmpDir, `clip_${i}.mp4`);
+              await generateVideoFromImage(imageUrls[0], clipPath);
+              await buildStockVideoScene(clipPath, audioPath, duration, outPath, i, mood);
+              animated = true;
+              console.log(`[ltx] animated scene ${i} (${i === 0 ? "hook" : "payoff"})`);
+            } catch (e) {
+              console.warn(`[ltx] animation failed for scene ${i} (${e.message}) - using still`);
+            }
+          }
+          if (!animated) {
+            await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood, i === emphasisIdx);
+          }
         }
 
         return { path: outPath, duration };
