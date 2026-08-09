@@ -178,28 +178,32 @@ function ffprobeDuration(filePath) {
 // ---------------------------------------------------------------------------
 
 function getColorGrade(mood) {
-  // Split-tone: warm highlights + cool shadows, shadow lift to prevent
-  // crushed blacks on OLED screens, soft highlight rolloff for film look.
+  // Bright, punchy, realistic - NOT the old hazy "film" look. The previous
+  // curves lifted blacks to ~0.06 (milky/foggy shadows) and capped whites at
+  // ~0.94 (never fully bright), which read as dull and washed out. These use a
+  // contrast S-curve with near-true blacks (tiny 0.01 lift to avoid crushing)
+  // and full whites for a crisp, vivid, scroll-stopping image.
+  const punchCurve = (b, s, m, h) => `curves=m='0/${b} 0.25/${s} 0.5/${m} 0.75/${h} 1/1.0'`;
   const grades = {
     upbeat: [
-      "eq=contrast=1.15:saturation=1.45:brightness=0.02",
-      "colorbalance=rs=0.12:gs=0.04:bs=-0.08:rh=0.06:gh=0.02:bh=-0.04",
-      "curves=m='0/0.06 0.25/0.30 0.5/0.52 0.75/0.78 1/0.95'",
+      "eq=contrast=1.18:saturation=1.42:brightness=0.03",
+      "colorbalance=rs=0.10:gs=0.03:bs=-0.06:rh=0.05:gh=0.02:bh=-0.03",
+      punchCurve("0.01", "0.20", "0.53", "0.86"),
     ].join(","),
     serious: [
-      "eq=contrast=1.18:saturation=0.90:brightness=-0.01",
-      "colorbalance=rs=-0.04:gs=0.0:bs=0.06:rh=0.02:gh=-0.01:bh=0.04",
-      "curves=m='0/0.05 0.25/0.28 0.5/0.50 0.75/0.76 1/0.93'",
+      "eq=contrast=1.20:saturation=1.05:brightness=0.01",
+      "colorbalance=rs=-0.03:gs=0.0:bs=0.05:rh=0.02:gh=-0.01:bh=0.03",
+      punchCurve("0.01", "0.19", "0.51", "0.84"),
     ].join(","),
     funny: [
-      "eq=contrast=1.10:saturation=1.60:brightness=0.03",
-      "colorbalance=rs=0.10:gs=0.08:bs=-0.06:rh=0.04:gh=0.06:bh=-0.02",
-      "curves=m='0/0.07 0.25/0.31 0.5/0.53 0.75/0.79 1/0.96'",
+      "eq=contrast=1.16:saturation=1.55:brightness=0.04",
+      "colorbalance=rs=0.09:gs=0.06:bs=-0.05:rh=0.04:gh=0.05:bh=-0.02",
+      punchCurve("0.02", "0.21", "0.54", "0.87"),
     ].join(","),
     neutral: [
-      "eq=contrast=1.10:saturation=1.15:brightness=0.01",
-      "colorbalance=rs=0.02:gs=0.0:bs=0.02:rh=0.03:gh=0.01:bh=-0.01",
-      "curves=m='0/0.05 0.25/0.29 0.5/0.51 0.75/0.77 1/0.94'",
+      "eq=contrast=1.16:saturation=1.28:brightness=0.03",
+      "colorbalance=rs=0.02:gs=0.0:bs=0.01:rh=0.03:gh=0.01:bh=-0.01",
+      punchCurve("0.01", "0.20", "0.52", "0.85"),
     ].join(","),
   };
   return grades[mood] || grades.neutral;
@@ -314,11 +318,13 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
   // Eased Ken Burns with sinusoidal motion (not linear)
   // Creates organic, handheld-feeling camera movement
   const fps = FPS;
-  const CUT_INTERVAL_SEC = sceneIdx === 0 ? 3.5 : 4.5;
-  // Emphasis (payoff) scene: hold as ONE continuous shot with a strong,
-  // deliberate slow push-in - the visual equivalent of leaning in for the
-  // reveal, instead of the usual gentle drift.
-  const numSegments = isEmphasis ? 1 : Math.max(1, Math.round(duration / CUT_INTERVAL_SEC));
+  // ONE continuous Ken Burns move per distinct image - not one per time slice.
+  // The old code split every scene into 3.5-4.5s segments and, with a single
+  // image, re-ran the zoom FROM THE START in each segment, so one photo looked
+  // like it zoomed over and over. Now a scene with 1 image is one smooth move
+  // across the whole scene; a scene with 2 images cuts once between them.
+  // Emphasis (payoff) scene is always a single deliberate push-in.
+  const numSegments = isEmphasis ? 1 : Math.max(1, imagePaths.length);
   const segDuration = duration / numSegments;
   const totalFrames = Math.ceil(segDuration * fps);
   const gradeFilter = getColorGrade(mood);
