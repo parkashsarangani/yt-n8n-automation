@@ -12,6 +12,10 @@
             {
               "field": "cronExpression",
               "expression": "0 19 * * *"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 22 * * *"
             }
           ]
         }

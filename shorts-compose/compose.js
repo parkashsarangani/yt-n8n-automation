@@ -49,7 +49,7 @@ const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 const FAL_KEY = process.env.FAL_KEY || "";
 const FAL_VIDEO_MODEL = process.env.FAL_VIDEO_MODEL || "fal-ai/ltx-video/image-to-video";
 const FAL_VIDEO_PROMPT =
-  "Subtle cinematic camera motion, gentle parallax and natural drift, lifelike movement, no warping, no morphing";
+  "Subtle cinematic camera motion - a slow push-in with gentle parallax. Keep the subject, composition and scene EXACTLY as in the source image; only add natural camera movement and soft ambient motion. Photorealistic and stable. No warping, no morphing, no new or changing objects, no distortion of faces or text.";
 
 // Fixed engagement outro appended to every video. 2.5s gives the four
 // asks (comment, like, share, follow) room to land - the KineticText
@@ -275,18 +275,25 @@ async function generateVideoFromImage(imageUrl, outPath) {
 
 async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath, sceneIdx, mood) {
   const stockDuration = await ffprobeDuration(stockVideoPath);
-  const needsPad = stockDuration < duration;
+
+  // The AI clip (~5s) is usually SHORTER than the scene's narration. The old
+  // behaviour froze the last frame (tpad clone) to fill the gap, so the motion
+  // visibly STOPPED partway through the scene. Instead, slow the clip with
+  // setpts so its movement spans the entire scene - continuous motion, never a
+  // freeze. (+0.15s of headroom so the final -t trims cleanly at the end.)
+  const stretch =
+    stockDuration > 0.1 && stockDuration < duration
+      ? (duration + 0.15) / stockDuration
+      : 1;
+  const stretchFilter = stretch > 1.01 ? `setpts=${stretch.toFixed(4)}*PTS,` : "";
 
   // Cinematic processing: scale to fill, crop, split-tone grade, and a
   // subtle unsharp for crispness (vignette removed - it read too heavy).
   const gradeFilter = getColorGrade(mood);
-  const padFilter = needsPad
-    ? `,tpad=stop_mode=clone:stop_duration=${(duration - stockDuration + 0.1).toFixed(3)}`
-    : "";
 
   const videoFilter = [
-    `[0:v]scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase`,
-    `crop=${TARGET_W}:${TARGET_H}${padFilter}`,
+    `[0:v]${stretchFilter}scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase`,
+    `crop=${TARGET_W}:${TARGET_H}`,
     gradeFilter,
     `unsharp=5:5:0.4:5:5:0.0`,
   ].join(",") + "[processed]";
