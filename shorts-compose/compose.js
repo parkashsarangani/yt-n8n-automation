@@ -529,6 +529,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const WORDS_PER_CHUNK = 2;
 
   scenes.forEach((scene, sceneIdx) => {
+    // The outro is a branded KineticText card (Like / Share / Follow) with a
+    // spoken share line - let the template + voice carry it, no burned captions.
+    if (scene?.template_data?.is_outro) return;
     const alignment = scene?.audio?.alignment;
     if (!alignment) return;
 
@@ -723,16 +726,23 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
 
     const mood = caption_style || "neutral";
 
-    // Append a fixed follow/subscribe outro card as the final scene of
-    // every video - a designed template CTA, not AI-varied per video.
-    const outroAudioBase64 = await generateSilentAudioBase64(OUTRO_DURATION_SEC);
-    scenes.push({
-      scene_index: scenes.length,
-      visual_source: "template",
-      template_name: "kinetic_text",
-      template_data: { line: reqBody.outro_line || DEFAULT_OUTRO_LINE },
-      audio: { audio_base64: outroAudioBase64 },
-    });
+    // Outro card. The pipeline now injects a SPOKEN outro as the final scene -
+    // a real narrated share CTA, voiced in the same voice as the narration and
+    // flagged template_data.is_outro. When that scene is present we use it as-is
+    // (voice + branded KineticText card). Only when it is absent (legacy payload
+    // or fallback) do we append the old SILENT branded card, so a render never
+    // ends without an outro.
+    const hasScriptOutro = scenes.some((s) => s?.template_data?.is_outro);
+    if (!hasScriptOutro) {
+      const outroAudioBase64 = await generateSilentAudioBase64(OUTRO_DURATION_SEC);
+      scenes.push({
+        scene_index: scenes.length,
+        visual_source: "template",
+        template_name: "kinetic_text",
+        template_data: { line: reqBody.outro_line || DEFAULT_OUTRO_LINE, is_outro: true },
+        audio: { audio_base64: outroAudioBase64 },
+      });
+    }
 
     // The payoff/reveal scene = the last content scene before the outro card.
     // It gets a stronger emphasis push-in (video) and a riser+impact accent.
@@ -835,9 +845,11 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     // which adds complexity. ASS captions burned in by ffmpeg are reliable,
     // fast, and visually good enough with proper styling.
     const assPath = path.join(tmpDir, "captions.ass");
-    // comment_hook should land in the last moments of the actual content,
-    // not the appended outro card - exclude the outro from its timing window.
-    const contentDuration = totalVideoDuration - OUTRO_DURATION_SEC;
+    // comment_hook should land in the last moments of the actual content, not
+    // over the outro card. The outro is now a variable-length SPOKEN scene, so
+    // exclude the actual last-scene duration (not the old fixed 2.5s constant).
+    const outroDuration = durations.length > 1 ? durations[durations.length - 1] : 0;
+    const contentDuration = totalVideoDuration - outroDuration;
     const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, contentDuration);
     await fsp.writeFile(assPath, assContent);
 
