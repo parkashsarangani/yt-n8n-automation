@@ -42,11 +42,16 @@ const FPS = 30;
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
 // Hybrid AI-video: animate the hook + payoff stills into short clips for real
-// motion (the rest stay Ken-Burns stills). Only runs if FAL_KEY is set; any
-// failure falls back to the still, so a bad/blocked clip never kills a video.
-// Model is swappable via env (default = LTX Video, ~$0.02/clip; step up to
-// fal-ai/wan/v2.2-a14b/image-to-video or kling for higher quality).
+// motion (the rest stay Ken-Burns stills). Any failure falls back to the
+// still, so a bad/blocked clip never kills a video.
+//
+// OFF BY DEFAULT. The budget LTX model warped stills into irrelevant footage,
+// so we ship the (much-improved) Ken-Burns stills instead. To re-enable, set
+// FAL_VIDEO_ENABLED=true AND provide FAL_KEY - and ideally step FAL_VIDEO_MODEL
+// up to a higher-fidelity model (e.g. fal-ai/wan/v2.2-a14b/image-to-video)
+// since LTX's coherence is the reason it was turned off.
 const FAL_KEY = process.env.FAL_KEY || "";
+const FAL_VIDEO_ENABLED = /^(1|true|yes)$/i.test(process.env.FAL_VIDEO_ENABLED || "");
 const FAL_VIDEO_MODEL = process.env.FAL_VIDEO_MODEL || "fal-ai/ltx-video/image-to-video";
 const FAL_VIDEO_PROMPT =
   "Subtle cinematic camera motion - a slow push-in with gentle parallax. Keep the subject, composition and scene EXACTLY as in the source image; only add natural camera movement and soft ambient motion. Photorealistic and stable. No warping, no morphing, no new or changing objects, no distortion of faces or text.";
@@ -781,7 +786,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
           // motion clips; keep the middle as Ken-Burns stills. Any failure
           // (no key, model error, timeout) falls back to the still so a bad
           // clip never breaks the video.
-          const animate = FAL_KEY && (i === 0 || i === emphasisIdx);
+          const animate = FAL_VIDEO_ENABLED && FAL_KEY && (i === 0 || i === emphasisIdx);
           let animated = false;
           if (animate) {
             try {

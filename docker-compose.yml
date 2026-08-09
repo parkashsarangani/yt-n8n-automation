@@ -24,10 +24,13 @@ services:
       - OUTPUT_DIR=/app/outputs
       - TOPIC_HISTORY_PATH=/app/data/topic_history.json
       - NODE_OPTIONS=--max-old-space-size=4096
-      # fal.ai key for hybrid image->video (hook/payoff animation). Set it in
-      # the server's environment/.env. If unset, animation is skipped and the
-      # pipeline uses Ken-Burns stills (no breakage). Model is swappable:
-      # FAL_VIDEO_MODEL (default fal-ai/ltx-video/image-to-video, ~$0.02/clip).
+      # Hybrid image->video (hook/payoff animation) is OFF BY DEFAULT: the cheap
+      # LTX model warped stills into irrelevant footage, so the pipeline ships
+      # the improved Ken-Burns stills. To re-enable, set FAL_VIDEO_ENABLED=true
+      # AND FAL_KEY, and ideally point FAL_VIDEO_MODEL at a higher-fidelity model
+      # (e.g. fal-ai/wan/v2.2-a14b/image-to-video). Any clip failure still falls
+      # back to the still, so it can never break a render.
+      - FAL_VIDEO_ENABLED=${FAL_VIDEO_ENABLED:-}
       - FAL_KEY=${FAL_KEY:-}
       - FAL_VIDEO_MODEL=${FAL_VIDEO_MODEL:-fal-ai/ltx-video/image-to-video}
     volumes:
