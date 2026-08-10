@@ -615,7 +615,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ prompt: \"Ultra-realistic ultra-detailed photograph, bright and vibrant with rich saturated colours, bold high contrast, crisp sharp focus, punchy eye-catching lighting, one striking focal subject that pops off the screen, clean high-energy composition, vertical 9:16. \" + $('Split Out Scenes').item.json.visual_prompt + \" No text, no words, no letters, no captions, no watermark, no logos.\", image_size: { width: 1024, height: 1792 }, num_images: 1, num_inference_steps: 28, enable_safety_checker: true }) }}",
+        "jsonBody": "={{ JSON.stringify({ prompt: \"Natural, true-to-life documentary photograph, shot on a full-frame camera with a fast prime lens. Realistic natural lighting, natural true-to-life colours, real-world textures and fine detail, believable shallow depth of field. Candid, photojournalistic, ordinary and authentic - looks like a real photo a person actually took, indistinguishable from genuine stock photography. Vertical 9:16 framing. \" + $('Split Out Scenes').item.json.visual_prompt + \" Not an illustration, not digital art, not a 3D render, not CGI, not a painting; not oversaturated, not glossy, not over-processed, not surreal. No text, no words, no letters, no captions, no watermark, no logos.\", image_size: { width: 1024, height: 1792 }, num_images: 1, num_inference_steps: 28, enable_safety_checker: true }) }}",
         "options": {
           "timeout": 90000
         }

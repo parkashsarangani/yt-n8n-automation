@@ -183,32 +183,33 @@ function ffprobeDuration(filePath) {
 // ---------------------------------------------------------------------------
 
 function getColorGrade(mood) {
-  // Bright, punchy, realistic - NOT the old hazy "film" look. The previous
-  // curves lifted blacks to ~0.06 (milky/foggy shadows) and capped whites at
-  // ~0.94 (never fully bright), which read as dull and washed out. These use a
-  // contrast S-curve with near-true blacks (tiny 0.01 lift to avoid crushing)
-  // and full whites for a crisp, vivid, scroll-stopping image.
-  const punchCurve = (b, s, m, h) => `curves=m='0/${b} 0.25/${s} 0.5/${m} 0.75/${h} 1/1.0'`;
+  // Natural, believable grade - deliberately NOT the old hyper-saturated
+  // "punchy" look (sat 1.3-1.55), which stacked on the AI-art image prompt and
+  // read as synthetic/AI-slop. Real photos aren't oversaturated. We keep clean
+  // contrast (near-true blacks, full whites, so nothing looks foggy) but pull
+  // saturation and colour tints back toward true-to-life, and gentle the mid
+  // S-curve so it reads as a real, well-exposed photograph rather than AI art.
+  const filmCurve = (b, s, m, h) => `curves=m='0/${b} 0.25/${s} 0.5/${m} 0.75/${h} 1/1.0'`;
   const grades = {
     upbeat: [
-      "eq=contrast=1.18:saturation=1.42:brightness=0.03",
-      "colorbalance=rs=0.10:gs=0.03:bs=-0.06:rh=0.05:gh=0.02:bh=-0.03",
-      punchCurve("0.01", "0.20", "0.53", "0.86"),
+      "eq=contrast=1.09:saturation=1.16:brightness=0.02",
+      "colorbalance=rs=0.05:gs=0.01:bs=-0.03:rh=0.02:gh=0.01:bh=-0.01",
+      filmCurve("0.02", "0.23", "0.50", "0.80"),
     ].join(","),
     serious: [
-      "eq=contrast=1.20:saturation=1.05:brightness=0.01",
-      "colorbalance=rs=-0.03:gs=0.0:bs=0.05:rh=0.02:gh=-0.01:bh=0.03",
-      punchCurve("0.01", "0.19", "0.51", "0.84"),
+      "eq=contrast=1.10:saturation=1.02:brightness=0.01",
+      "colorbalance=rs=-0.02:gs=0.0:bs=0.03:rh=0.01:gh=0.0:bh=0.02",
+      filmCurve("0.02", "0.22", "0.50", "0.79"),
     ].join(","),
     funny: [
-      "eq=contrast=1.16:saturation=1.55:brightness=0.04",
-      "colorbalance=rs=0.09:gs=0.06:bs=-0.05:rh=0.04:gh=0.05:bh=-0.02",
-      punchCurve("0.02", "0.21", "0.54", "0.87"),
+      "eq=contrast=1.08:saturation=1.18:brightness=0.02",
+      "colorbalance=rs=0.05:gs=0.03:bs=-0.03:rh=0.02:gh=0.02:bh=-0.01",
+      filmCurve("0.02", "0.23", "0.50", "0.81"),
     ].join(","),
     neutral: [
-      "eq=contrast=1.16:saturation=1.28:brightness=0.03",
-      "colorbalance=rs=0.02:gs=0.0:bs=0.01:rh=0.03:gh=0.01:bh=-0.01",
-      punchCurve("0.01", "0.20", "0.52", "0.85"),
+      "eq=contrast=1.08:saturation=1.10:brightness=0.02",
+      "colorbalance=rs=0.01:gs=0.0:bs=0.01:rh=0.02:gh=0.0:bh=-0.01",
+      filmCurve("0.02", "0.23", "0.50", "0.80"),
     ].join(","),
   };
   return grades[mood] || grades.neutral;
