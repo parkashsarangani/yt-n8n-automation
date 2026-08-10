@@ -909,16 +909,33 @@
       "onError": "continueRegularOutput",
       "parameters": {
         "method": "GET",
-        "url": "={{ 'https://api.pexels.com/v1/search?query=' + encodeURIComponent($('Split Out Scenes').item.json.stock_search_query || $('Split Out Scenes').item.json.visual_prompt || 'nature') + '&orientation=portrait&per_page=1&size=large' }}",
+        "url": "=https://api.pexels.com/v1/search",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $('Split Out Scenes').item.json.stock_search_query || $('Split Out Scenes').item.json.visual_prompt || 'nature' }}"
+            },
+            {
+              "name": "orientation",
+              "value": "portrait"
+            },
+            {
+              "name": "per_page",
+              "value": "5"
+            }
+          ]
+        },
         "options": {
-          "timeout": 30000
+          "timeout": 20000
         }
       },
       "credentials": {
         "httpHeaderAuth": {
-          "id": "PLACEHOLDER_PEXELS_CRED",
+          "id": "x1lbrY0csVKdvFB5",
           "name": "Pexels"
         }
       }
