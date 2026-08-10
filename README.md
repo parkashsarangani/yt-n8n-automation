@@ -1,16 +1,17 @@
 # YouTube Shorts Facts Automation Pipeline
 
 A fully automated pipeline that generates, voices, composes, and uploads
-story-driven YouTube Shorts — posting **3×/day** with zero manual intervention.
-Each video is a **60–90s mini-documentary** built around a famous, recognizable
-subject, with cinematic stills, per-word captions, and a spoken engagement beat.
+YouTube Shorts — posting **3×/day** with zero manual intervention. Each video is
+a punchy **20–30s single-fact Short**: one surprising, counterintuitive fact
+about an instantly recognizable subject, with cinematic stills, per-word
+captions, and a spoken engagement beat.
 
 ## Architecture
 
 ```
 n8n (workflow orchestration, Europe/Berlin, 3× daily: 14:00 / 19:00 / 22:00)
   │
-  ├─ Claude API — topic selection (famous subjects), 2-stage script
+  ├─ Claude API — topic selection (single curiosity facts), 2-stage script
   │    (draft → editorial rewrite), validation with auto-retry
   ├─ ElevenLabs — text-to-speech with word-level timestamps (per scene)
   ├─ fal.ai (Flux [dev]) — text-to-image, one still per scene, matched to
@@ -147,14 +148,16 @@ npx remotion studio
 
 ## Content pipeline, briefly
 
-1. **Topic generation** — starts from a **famous, recognizable subject** (a
-   celebrity, athlete, king/queen, historical figure, iconic event, place, or
-   world record) and reveals a surprising fact about it. Recognition stops the
-   scroll; the twist holds it. Hard exclusion on medical/health content.
-   Anti-clustering on both subject and category. History capped at 90 entries.
+1. **Topic generation** — one **surprising, counterintuitive fact** about an
+   **instantly recognizable** subject (the human body, space, well-known
+   animals, everyday objects, famous places, money, sport, common tech, big
+   historical events). Two hard bans: **no biographies/life stories** and **no
+   obscure subjects**. Hard exclusion on medical/health content. Anti-clustering
+   on both subject and category. History capped at 90 entries.
 2. **Stage 1 (draft) + Stage 2 (editorial rewrite)** — two-pass script
-   generation. **60–90s, ≤270 words, 5–7 scenes**, each a story beat that
-   depends on the one before it (BUT/THEREFORE tension, never and-then listing).
+   generation. **20–30s, ~60–90 words, 3–4 scenes**, with the fact landing in
+   the **first 3 seconds** and each beat carrying BUT/THEREFORE tension (never
+   and-then listing).
 3. **Titles** lead with **stakes and emotion**, not just the topic, while
    withholding the resolution (no payoff numbers). ≤60 chars, front-loaded.
 4. **Engagement** — a one-tap comment question (yes/no or single word) is woven
