@@ -460,12 +460,12 @@
     {
       "parameters": {
         "method": "PUT",
-        "url": "https://www.googleapis.com/youtube/v3/videos?part=status",
+        "url": "https://www.googleapis.com/youtube/v3/videos?part=status,snippet",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "youTubeOAuth2Api",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ id: $json.uploadId || $json.id, status: { privacyStatus: $json.status?.privacyStatus || 'public', selfDeclaredMadeForKids: $json.status?.selfDeclaredMadeForKids ?? false, containsSyntheticMedia: true } }) }}",
+        "jsonBody": "={{ JSON.stringify({ id: $json.uploadId || $json.id, status: { privacyStatus: $json.status?.privacyStatus || 'public', selfDeclaredMadeForKids: $json.status?.selfDeclaredMadeForKids ?? false, containsSyntheticMedia: true }, snippet: { title: (($('Validate Final Script').item.json.title || $('Validate Final Script').item.json.hook) || '').slice(0, 50), categoryId: '22', description: (($('Validate Final Script').item.json.seo_description || '') + '\\n\\n' + ($('Validate Final Script').item.json.full_script || '')), tags: ($('Validate Final Script').item.json.tags || []), defaultLanguage: 'en', defaultAudioLanguage: 'en' } }) }}",
         "options": {}
       },
       "id": "c9aece85-fc66-4b18-a3e1-16226e31b635",
@@ -1071,6 +1071,38 @@
       "parameters": {
         "jsCode": "const j = $json;\nif (!j.pexels_url) { throw new Error('Pexels tag: missing url for scene_index ' + j.scene_index); }\nreturn { json: { scene_index: j.scene_index, images: [j.pexels_url], _source: 'pexels' } };"
       }
+    },
+    {
+      "id": "6085bb90-c7a4-492c-99f2-187962b51c48",
+      "name": "Post First Comment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        17280,
+        9024
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 20000,
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/youtube/v3/commentThreads?part=snippet",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ snippet: { videoId: ($('YouTube: Upload Draft').item.json.uploadId || $('YouTube: Upload Draft').item.json.id), topLevelComment: { snippet: { textOriginal: (($('Validate Final Script').item.json.comment_hook || 'Did this surprise you?') + '\\n\\n👇 Drop your answer below - and send this to someone who needs to see it.') } } } }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "b5LyysZ3nzI8MW0V",
+          "name": "YouTube account"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -1436,7 +1468,7 @@
       "main": [
         [
           {
-            "node": "Cleanup: Delete Local Render",
+            "node": "Post First Comment",
             "type": "main",
             "index": 0
           }
@@ -1626,6 +1658,17 @@
         [
           {
             "node": "Loop Over Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post First Comment": {
+      "main": [
+        [
+          {
+            "node": "Cleanup: Delete Local Render",
             "type": "main",
             "index": 0
           }
