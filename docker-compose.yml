@@ -33,6 +33,13 @@ services:
       - FAL_VIDEO_ENABLED=${FAL_VIDEO_ENABLED:-}
       - FAL_KEY=${FAL_KEY:-}
       - FAL_VIDEO_MODEL=${FAL_VIDEO_MODEL:-fal-ai/ltx-video/image-to-video}
+      # Multi-source b-roll resolver (/resolve-broll): free real-media sources +
+      # AI-vision relevance ranking. Real footage is the default, AI the
+      # fallback. Set these in the server env/.env. If a key is empty that
+      # source is skipped; ANTHROPIC_KEY is required for the relevance scoring.
+      - PEXELS_KEY=${PEXELS_KEY:-}
+      - UNSPLASH_KEY=${UNSPLASH_KEY:-}
+      - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
     volumes:
       # NOTHING bind-mounted from the git checkout dir. deploy.yml checks out
       # with clean:true (`git clean -ffdx`), which deletes any such dir - and
