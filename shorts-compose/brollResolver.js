@@ -88,22 +88,37 @@ async function fromUnsplash(query) {
     .filter((c) => c.url);
 }
 
-async function fromWikipedia(subject) {
-  if (!subject) return [];
+async function wikiSummaryImage(title) {
   const d = await safeGet(
-    `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(subject)}`,
+    `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`,
     { headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" } }
   );
   const url = d?.originalimage?.source;
-  if (!url) return [];
+  return url ? { url, thumb: d?.thumbnail?.source || url, title: d?.title || title } : null;
+}
+
+async function fromWikipedia(subject) {
+  if (!subject) return [];
+  // 1) direct page summary (handles exact names + redirects, e.g. "Walt Disney")
+  let hit = await wikiSummaryImage(subject);
+  // 2) fallback: full-text search for the best-matching page, then its lead image
+  if (!hit) {
+    const s = await safeGet(
+      `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(subject)}&srlimit=1&format=json&origin=*`,
+      { headers: { "User-Agent": "yt-shorts-broll/1.0" } }
+    );
+    const title = s?.query?.search?.[0]?.title;
+    if (title) hit = await wikiSummaryImage(title);
+  }
+  if (!hit) return [];
   return [
     {
       type: "image",
-      url,
-      thumb: d?.thumbnail?.source || url,
-      alt: d?.title || subject,
+      url: hit.url,
+      thumb: hit.thumb,
+      alt: hit.title,
       source: "wikipedia",
-      attribution: `Image via Wikipedia: ${d?.title || subject}`,
+      attribution: `Image via Wikipedia: ${hit.title}`,
     },
   ];
 }
@@ -122,8 +137,9 @@ async function scoreRelevance(imageUrl, description) {
           {
             type: "text",
             text:
-              `This asset is meant to illustrate this scene: "${description}". ` +
-              `On a scale of 0 to 100, how well does it actually match that scene? Reply with ONLY the number.`,
+              `This image should clearly depict or directly relate to: "${description}". ` +
+              `On a scale of 0 to 100, how well does it? A generic or unrelated stock photo scores low; ` +
+              `an image of the actual named subject scores high. Reply with ONLY the number.`,
           },
         ],
       },
@@ -145,9 +161,12 @@ async function scoreRelevance(imageUrl, description) {
 
 // --- main resolver ---
 async function resolveBroll({ query, subject, description }) {
-  const q = String(query || subject || description || "").trim();
-  const desc = String(description || query || subject || "").trim();
-  const subj = String(subject || query || "").trim();
+  const q = String(query || subject || description || "").trim(); // stock search terms
+  const desc = String(description || query || "").trim(); // scene description
+  const subj = String(subject || "").trim(); // the EXACT named entity (e.g. "Walt Disney"), or ""
+  // Score against the named subject when we have one, so a real Wikipedia photo
+  // of Walt Disney beats a generic pencil that only matched the stock query.
+  const target = subj || desc;
 
   const groups = await Promise.all([
     fromPexelsPhotos(q),
@@ -158,20 +177,22 @@ async function resolveBroll({ query, subject, description }) {
   let candidates = groups.flat().filter((c) => c && c.url);
   if (!candidates.length) return { ok: false, reason: "no_candidates" };
 
-  // cheap metadata pre-rank: keyword overlap of alt/title with the query, so the
-  // vision model only has to score the most promising few (cost control).
-  const qWords = q.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  // Pre-rank the stock pool by metadata overlap with the target, but ALWAYS keep
+  // the Wikipedia (named-subject) hit in the scored set - it IS the subject, and
+  // must get a chance to win over a loosely-matching stock photo.
+  const tWords = target.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
   const overlap = (alt) => {
     const a = String(alt || "").toLowerCase();
-    return qWords.reduce((n, w) => n + (a.includes(w) ? 1 : 0), 0);
+    return tWords.reduce((n, w) => n + (a.includes(w) ? 1 : 0), 0);
   };
-  candidates.sort((a, b) => overlap(b.alt) - overlap(a.alt));
+  const wiki = candidates.filter((c) => c.source === "wikipedia");
+  const rest = candidates.filter((c) => c.source !== "wikipedia").sort((a, b) => overlap(b.alt) - overlap(a.alt));
 
-  // vision-score the top few and pick the best
-  const top = candidates.slice(0, Math.max(1, VISION_TOP_N));
+  // vision-score the Wikipedia hit + the best stock candidates, then pick the best
+  const top = [...wiki, ...rest].slice(0, Math.max(1, VISION_TOP_N));
   const scored = [];
   for (const c of top) {
-    const score = await scoreRelevance(c.thumb || c.url, desc);
+    const score = await scoreRelevance(c.thumb || c.url, target);
     scored.push({ ...c, score });
   }
   scored.sort((a, b) => b.score - a.score);
