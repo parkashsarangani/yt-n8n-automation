@@ -18,6 +18,7 @@ const axios = require("axios");
 const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const { execFile } = require("child_process");
+const { resolveBroll } = require("./brollResolver");
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
@@ -978,6 +979,23 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// B-roll resolution: pick the best REAL asset for a scene from multiple free
+// sources (Pexels photos/videos, Unsplash, Wikipedia), ranked by AI-vision
+// relevance. Returns { ok:true, type, url, source, attribution } or
+// { ok:false } - the caller (n8n) then falls back to AI generation.
+// ---------------------------------------------------------------------------
+app.post("/resolve-broll", async (req, res) => {
+  try {
+    const { query, subject, description } = req.body || {};
+    const result = await resolveBroll({ query, subject, description });
+    res.json(result);
+  } catch (e) {
+    // never hard-fail: on error, tell the caller to use the AI fallback
+    res.json({ ok: false, reason: "error", error: String((e && e.message) || e) });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Async Job API
