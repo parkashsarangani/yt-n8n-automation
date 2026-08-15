@@ -20,15 +20,11 @@ jobs:
 
       - name: Build and deploy
         env:
-          # fal.ai key for hybrid image->video (hook/payoff animation). Add it
-          # as a repo/environment secret named FAL_KEY. If the secret is unset,
-          # this is empty and compose skips animation (falls back to stills).
-          FAL_KEY: ${{ secrets.FAL_KEY }}
           # Multi-source b-roll resolver keys. docker-compose reads these via
           # ${VAR:-} at `docker compose up`, so they flow into the shorts-compose
           # container. Add each as a repo secret (Settings > Secrets and variables
           # > Actions). Empty = that source is skipped; ANTHROPIC_KEY drives the
-          # AI-vision relevance scoring.
+          # AI-vision relevance scoring. (fal.ai has been removed entirely.)
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}

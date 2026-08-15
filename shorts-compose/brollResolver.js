@@ -9,7 +9,8 @@
 //
 // Sources (all free): Pexels photos, Pexels videos, Unsplash photos (photos
 // only - Unsplash has no video), Wikipedia lead image (best for famous named
-// people/places/things). Keys live in the compose service env alongside FAL_KEY.
+// people/places/things). Keys live in the compose service env (PEXELS_KEY,
+// UNSPLASH_KEY, ANTHROPIC_KEY). There is no AI image generation.
 // ---------------------------------------------------------------------------
 const axios = require("axios");
 
@@ -175,7 +176,13 @@ async function resolveBroll({ query, subject, description }) {
     fromWikipedia(subj),
   ]);
   let candidates = groups.flat().filter((c) => c && c.url);
-  if (!candidates.length) return { ok: false, reason: "no_candidates" };
+  if (!candidates.length) {
+    // No AI fallback anymore, so never leave a scene without a real image:
+    // last-resort broad Pexels photo search on the first keyword.
+    const kw = q.split(/\s+/)[0] || "abstract background";
+    candidates = (await fromPexelsPhotos(kw)).filter((c) => c && c.url);
+    if (!candidates.length) return { ok: false, reason: "no_candidates" };
+  }
 
   // Pre-rank the stock pool by metadata overlap with the target, but ALWAYS keep
   // the Wikipedia (named-subject) hit in the scored set - it IS the subject, and
@@ -198,17 +205,19 @@ async function resolveBroll({ query, subject, description }) {
   scored.sort((a, b) => b.score - a.score);
   const best = scored[0];
 
-  if (best && best.score >= SCORE_THRESHOLD) {
-    return {
-      ok: true,
-      type: best.type,
-      url: best.url,
-      source: best.source,
-      score: best.score,
-      attribution: best.attribution || "",
-    };
-  }
-  return { ok: false, reason: "below_threshold", best_score: best ? best.score : 0, best_source: best ? best.source : null };
+  // fal/AI generation has been removed: real footage is the ONLY source, so
+  // always return the best real asset we found. We prefer >= threshold, but
+  // rather than an AI fallback we use the top-scored real candidate even below
+  // it - a slightly loose real photo beats an empty scene.
+  return {
+    ok: true,
+    type: best.type,
+    url: best.url,
+    source: best.source,
+    score: best.score,
+    below_threshold: best.score < SCORE_THRESHOLD,
+    attribution: best.attribution || "",
+  };
 }
 
 module.exports = { resolveBroll };
