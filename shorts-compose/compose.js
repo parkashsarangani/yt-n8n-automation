@@ -54,6 +54,11 @@ const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 const OUTRO_DURATION_SEC = 2.5;
 const DEFAULT_OUTRO_LINE = "Comment, like, share, and follow";
 
+// Channel identity: a persistent gold wordmark (matching the lightbulb brand)
+// burned on every frame, and a consistent signature music bed. Both build
+// recognition / a returning audience without delaying the hook.
+const CHANNEL_WORDMARK = process.env.CHANNEL_WORDMARK || "Favourite Facts";
+
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
 // ---------------------------------------------------------------------------
@@ -242,6 +247,11 @@ function getColorGrade(mood) {
 }
 
 function pickMusicTrack(mood) {
+  // A single signature track across every video is a sonic identity - people
+  // recognise (and return to) a channel by its consistent sound. If present it
+  // always wins over the per-mood tracks.
+  const signature = path.join(MUSIC_DIR, "signature.mp3");
+  if (fs.existsSync(signature)) return signature;
   const candidate = path.join(MUSIC_DIR, `${(mood || "neutral").toLowerCase()}.mp3`);
   if (fs.existsSync(candidate)) return candidate;
   return path.join(MUSIC_DIR, "neutral.mp3");
@@ -525,12 +535,16 @@ Style: Caption,Inter Bold,64,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,0,0,0,0
 Style: CaptionHL,Inter Bold,68,&H0096E0FF,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
 Style: CaptionKey,Inter Bold,68,&H0080FF60,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
 Style: CommentHook,Inter Bold,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,0,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
+Style: Wordmark,Inter Bold,36,&H6046BEFF,&H000000FF,&HB0000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,8,40,40,55,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  let events = "";
+  // Persistent channel wordmark (top, gold, semi-transparent) on every frame -
+  // brand recognition without delaying the hook. Spans the whole video.
+  const wm = String(CHANNEL_WORDMARK).replace(/[{}]/g, "");
+  let events = `Dialogue: 0,${toAssTime(0)},${toAssTime(totalDuration)},Wordmark,,0,0,0,,${wm}\n`;
   const WORDS_PER_CHUNK = 2;
 
   scenes.forEach((scene, sceneIdx) => {

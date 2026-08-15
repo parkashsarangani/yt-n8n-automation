@@ -31,6 +31,8 @@ services:
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
+      # Channel identity: the persistent on-screen wordmark (gold, top of frame).
+      - CHANNEL_WORDMARK=${CHANNEL_WORDMARK:-Favourite Facts}
     volumes:
       # NOTHING bind-mounted from the git checkout dir. deploy.yml checks out
       # with clean:true (`git clean -ffdx`), which deletes any such dir - and
