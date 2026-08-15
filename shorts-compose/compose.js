@@ -984,6 +984,28 @@ app.post("/resolve-broll", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Feedback loop. SHORTS-ONLY by construction: only videos this pipeline logs
+// here are ever measured or strategized, so long-form videos on the same
+// channel never enter the loop.
+// ---------------------------------------------------------------------------
+app.post("/performance/log", async (req, res) => {
+  try { res.json(await feedback.logPublished(req.body || {})); }
+  catch (e) { res.status(400).json({ error: String((e && e.message) || e) }); }
+});
+app.get("/performance/measure-ids", async (req, res) => {
+  try { res.json({ video_ids: await feedback.getMeasureIds() }); }
+  catch (e) { res.status(500).json({ video_ids: [], error: String((e && e.message) || e) }); }
+});
+app.post("/performance/ingest", async (req, res) => {
+  try { res.json(await feedback.ingestAnalytics(req.body || {})); }
+  catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+});
+app.get("/channel-insights", async (req, res) => {
+  try { res.json(await feedback.getInsights()); }
+  catch (e) { res.status(500).json({ sample_size: 0, guidance: [], avoid: [], error: String((e && e.message) || e) }); }
+});
+
+// ---------------------------------------------------------------------------
 // Async Job API
 // ---------------------------------------------------------------------------
 

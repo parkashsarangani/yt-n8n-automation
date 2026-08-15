@@ -176,4 +176,18 @@ async function getInsights() {
   return await readJson(INSIGHTS_PATH, { sample_size: 0, confidence_note: "No videos measured yet.", guidance: [], avoid: [] });
 }
 
-module.exports = { logPublished, ingestAnalytics, getInsights, runStrategist, parseAnalytics, PERF_PATH, INSIGHTS_PATH };
+// SHORTS-ONLY: the only video IDs the loop ever touches are the ones THIS
+// pipeline logged here. Long-form videos on the same YouTube channel are never
+// logged, so they can never be measured or reach the strategist. This returns
+// the shorts to measure, and the analytics query is filtered to exactly these
+// IDs - so channel-wide numbers never leak long videos into the feedback.
+async function getMeasureIds({ maxDays = 60, limit = 200 } = {}) {
+  const hist = await readJson(PERF_PATH, []);
+  const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
+  return hist
+    .filter((h) => h.video_id && (!h.published_at || new Date(h.published_at).getTime() >= cutoff))
+    .map((h) => h.video_id)
+    .slice(-limit); // most recent
+}
+
+module.exports = { logPublished, ingestAnalytics, getInsights, getMeasureIds, runStrategist, parseAnalytics, PERF_PATH, INSIGHTS_PATH };
