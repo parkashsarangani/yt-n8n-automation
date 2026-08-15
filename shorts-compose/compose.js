@@ -1005,6 +1005,30 @@ app.get("/channel-insights", async (req, res) => {
   catch (e) { res.status(500).json({ sample_size: 0, guidance: [], avoid: [], error: String((e && e.message) || e) }); }
 });
 
+// Topic intelligence store: every run generates many scored candidates and
+// publishes the top one; we persist the whole ranked list (+ which was picked)
+// so scored candidates accumulate. Joined later with the feedback loop's
+// measured outcomes, this becomes a {predicted score -> actual performance}
+// dataset - the foundation for real topic scoring once there's enough data.
+app.post("/topic-backlog", async (req, res) => {
+  try {
+    const bp = path.join(path.dirname(TOPIC_HISTORY_PATH), "topic_candidates.json");
+    const { candidates, picked, picked_score } = req.body || {};
+    let log = [];
+    if (fs.existsSync(bp)) log = JSON.parse(await fsp.readFile(bp, "utf8"));
+    log.push({
+      created_at: new Date().toISOString(),
+      picked: picked || null,
+      picked_score: picked_score != null ? picked_score : null,
+      candidates: Array.isArray(candidates) ? candidates : [],
+    });
+    if (log.length > 500) log = log.slice(log.length - 500);
+    await fsp.mkdir(path.dirname(bp), { recursive: true });
+    await fsp.writeFile(bp, JSON.stringify(log, null, 2));
+    res.json({ success: true, runs: log.length });
+  } catch (e) { res.status(500).json({ success: false, error: String((e && e.message) || e) }); }
+});
+
 // ---------------------------------------------------------------------------
 // Async Job API
 // ---------------------------------------------------------------------------
