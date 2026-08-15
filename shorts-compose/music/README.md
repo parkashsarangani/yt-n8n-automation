@@ -1,5 +1,10 @@
 # Signature music (channel identity)
 
+> **Current `signature.mp3`:** "Quirky" from [Pixabay Music](https://pixabay.com/music/)
+> — Pixabay Content License (free for commercial use, **no attribution required**).
+> Swap it any time by replacing this file.
+
+
 Drop a single track here named **`signature.mp3`**. Whenever it exists,
 `pickMusicTrack()` uses it as the background bed on **every** video — a
 consistent sonic identity people recognise and return to. Without it, videos
