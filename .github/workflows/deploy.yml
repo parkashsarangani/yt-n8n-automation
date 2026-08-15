@@ -1,0 +1,102 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: self-hosted
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Build and deploy
+        env:
+          # fal.ai key for hybrid image->video (hook/payoff animation). Add it
+          # as a repo/environment secret named FAL_KEY. If the secret is unset,
+          # this is empty and compose skips animation (falls back to stills).
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          # Multi-source b-roll resolver keys. docker-compose reads these via
+          # ${VAR:-} at `docker compose up`, so they flow into the shorts-compose
+          # container. Add each as a repo secret (Settings > Secrets and variables
+          # > Actions). Empty = that source is skipped; ANTHROPIC_KEY drives the
+          # AI-vision relevance scoring.
+          PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
+          UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+        run: |
+          set -e
+
+          echo "=== Stopping existing shorts-compose (if running) ==="
+          docker compose down shorts-compose || true
+          # Also kill any orphan container holding port 4000
+          docker ps -q --filter "publish=4000" | xargs -r docker stop || true
+
+          # No pre-create step: all app-writable paths (outputs, topic history)
+          # are named volumes now, so nothing needs a host dir under the git
+          # checkout - and clean:true can no longer break a bind mount.
+
+          echo "=== Building shorts-compose ==="
+          docker compose build --no-cache shorts-compose
+
+          echo "=== Deploying ==="
+          docker compose up -d shorts-compose
+
+      - name: Health check
+        run: |
+          set -e
+          sleep 5
+          RETRY=0
+          MAX_RETRY=12
+          until curl -sf http://localhost:4000/topic-history > /dev/null 2>&1; do
+            RETRY=$((RETRY + 1))
+            if [ $RETRY -ge $MAX_RETRY ]; then
+              echo "ERROR: shorts-compose failed to start after 60s"
+              docker compose logs --tail=50 shorts-compose
+              exit 1
+            fi
+            echo "Waiting for shorts-compose to be ready... ($RETRY/$MAX_RETRY)"
+            sleep 5
+          done
+          echo "Health check passed"
+
+      - name: Deploy n8n workflow
+        run: |
+          echo "=== Deploying n8n workflow ==="
+          # n8n PUT requires: name, nodes, connections, settings
+          # settings only accepts: executionOrder, timezone, saveManualExecutions,
+          # callerPolicy, errorWorkflow — strip all others to avoid validation errors
+          jq '{
+            name,
+            nodes,
+            connections,
+            settings: {executionOrder: (.settings.executionOrder // "v1")}
+          }' n8n/workflow.json > /tmp/workflow_deploy.json
+
+          HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
+            -X PUT "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
+            -H "X-N8N-API-KEY: ${{ secrets.N8N_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/workflow_deploy.json)
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "n8n workflow deployed successfully (HTTP $HTTP_STATUS)"
+          else
+            echo "ERROR: n8n workflow deploy failed (HTTP $HTTP_STATUS)"
+            cat /tmp/n8n_response.json
+            exit 1
+          fi
+
+      - name: Cleanup
+        run: |
+          docker image prune -f
+          echo "=== Deploy complete ==="
+          docker compose ps

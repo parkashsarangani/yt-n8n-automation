@@ -402,7 +402,7 @@ describe("Template scenes render correctly", { timeout: TEST_TIMEOUT }, () => {
 // ---------------------------------------------------------------------------
 
 describe("Multi-scene composition", { timeout: TEST_TIMEOUT * 2 }, () => {
-    it("2-scene video has crossfade transition (duration shorter than sum)", async () => {
+    it("2-scene video is a hard cut (duration == sum of scenes + outro)", async () => {
         const audioBase64 = generateSilentAudioBase64(3);
         const alignment = {
             characters: "T e s t".split(""),
@@ -439,15 +439,16 @@ describe("Multi-scene composition", { timeout: TEST_TIMEOUT * 2 }, () => {
         const probe = ffprobeJSON(result.output_path);
         const duration = parseFloat(probe.format.duration);
 
-        // With crossfade, total should be less than 6s (3+3)
-        // Crossfade is 0.4s, so expected ~5.6s
+        // Hard cuts (no crossfade): duration == sum of scene durations,
+        // plus the fixed 2s follow/subscribe outro appended to every video.
+        // 3s + 3s + 2s outro = 8s, with some tolerance for encoding rounding.
         assert.ok(
-            duration < 6.0,
-            `Duration ${duration}s suggests crossfade not applied (expected < 6s)`
+            duration > 7.0,
+            `Duration ${duration}s is too short — outro or a scene may be missing`
         );
         assert.ok(
-            duration > 4.5,
-            `Duration ${duration}s is too short — something is missing`
+            duration < 9.0,
+            `Duration ${duration}s is too long for 2x3s scenes + 2s outro`
         );
     });
 });

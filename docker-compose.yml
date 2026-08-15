@@ -22,11 +22,43 @@ services:
       - "4000:4000"
     environment:
       - OUTPUT_DIR=/app/outputs
+      - TOPIC_HISTORY_PATH=/app/data/topic_history.json
       - NODE_OPTIONS=--max-old-space-size=4096
+      # Hybrid image->video (hook/payoff animation) is OFF BY DEFAULT: the cheap
+      # LTX model warped stills into irrelevant footage, so the pipeline ships
+      # the improved Ken-Burns stills. To re-enable, set FAL_VIDEO_ENABLED=true
+      # AND FAL_KEY, and ideally point FAL_VIDEO_MODEL at a higher-fidelity model
+      # (e.g. fal-ai/wan/v2.2-a14b/image-to-video). Any clip failure still falls
+      # back to the still, so it can never break a render.
+      - FAL_VIDEO_ENABLED=${FAL_VIDEO_ENABLED:-}
+      - FAL_KEY=${FAL_KEY:-}
+      - FAL_VIDEO_MODEL=${FAL_VIDEO_MODEL:-fal-ai/ltx-video/image-to-video}
+      # Multi-source b-roll resolver (/resolve-broll): free real-media sources +
+      # AI-vision relevance ranking. Real footage is the default, AI the
+      # fallback. Set these in the server env/.env. If a key is empty that
+      # source is skipped; ANTHROPIC_KEY is required for the relevance scoring.
+      - PEXELS_KEY=${PEXELS_KEY:-}
+      - UNSPLASH_KEY=${UNSPLASH_KEY:-}
+      - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
     volumes:
-      - ./shorts-compose/outputs:/app/outputs
-      - ./shorts-compose/topic_history.json:/app/topic_history.json
-      - ./shorts-compose/music:/app/music
+      # NOTHING bind-mounted from the git checkout dir. deploy.yml checks out
+      # with clean:true (`git clean -ffdx`), which deletes any such dir - and
+      # deleting a bind-mount source out from under a running container leaves
+      # a STALE mount: the path still resolves inside the container but every
+      # write fails with ENOENT. That broke outputs (final render copy) and
+      # reset topic history. All app-writable paths are named volumes, which
+      # live outside the checkout and are immune to git clean - like n8n_data.
+      #
+      # outputs: ephemeral rendered videos, downloaded via the /outputs HTTP
+      # route (nothing on the host reads this dir), then cleaned up per job.
+      - shorts_outputs:/app/outputs
+      # topic history: PERSISTENT dedup state, must survive every deploy.
+      - shorts_data:/app/data
+      # No music mount by design: there are currently no music tracks, so the
+      # renderer runs without a soundtrack (pickMusicTrack finds none and
+      # skips it). To add music later, commit tracks to shorts-compose/music/
+      # - the Dockerfile's `COPY . .` bakes them into the image, so they are
+      # version-controlled and survive every deploy with no volume needed.
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:4000/topic-history"]
       interval: 30s
@@ -43,3 +75,5 @@ services:
 
 volumes:
   n8n_data:
+  shorts_data:
+  shorts_outputs:

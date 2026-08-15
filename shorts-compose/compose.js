@@ -18,6 +18,7 @@ const axios = require("axios");
 const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const { execFile } = require("child_process");
+const { resolveBroll } = require("./brollResolver");
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
@@ -40,6 +41,27 @@ const FPS = 30;
 
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
+
+// Hybrid AI-video: animate the hook + payoff stills into short clips for real
+// motion (the rest stay Ken-Burns stills). Any failure falls back to the
+// still, so a bad/blocked clip never kills a video.
+//
+// OFF BY DEFAULT. The budget LTX model warped stills into irrelevant footage,
+// so we ship the (much-improved) Ken-Burns stills instead. To re-enable, set
+// FAL_VIDEO_ENABLED=true AND provide FAL_KEY - and ideally step FAL_VIDEO_MODEL
+// up to a higher-fidelity model (e.g. fal-ai/wan/v2.2-a14b/image-to-video)
+// since LTX's coherence is the reason it was turned off.
+const FAL_KEY = process.env.FAL_KEY || "";
+const FAL_VIDEO_ENABLED = /^(1|true|yes)$/i.test(process.env.FAL_VIDEO_ENABLED || "");
+const FAL_VIDEO_MODEL = process.env.FAL_VIDEO_MODEL || "fal-ai/ltx-video/image-to-video";
+const FAL_VIDEO_PROMPT =
+  "Subtle cinematic camera motion - a slow push-in with gentle parallax. Keep the subject, composition and scene EXACTLY as in the source image; only add natural camera movement and soft ambient motion. Photorealistic and stable. No warping, no morphing, no new or changing objects, no distortion of faces or text.";
+
+// Fixed engagement outro appended to every video. 2.5s gives the four
+// asks (comment, like, share, follow) room to land - the KineticText
+// template reveals words one at a time, so a bare 2s felt rushed.
+const OUTRO_DURATION_SEC = 2.5;
+const DEFAULT_OUTRO_LINE = "Comment, like, share, and follow";
 
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
@@ -69,6 +91,9 @@ app.post("/topic-history", async (req, res) => {
     if (topics.length > TOPIC_HISTORY_MAX) {
       topics = topics.slice(topics.length - TOPIC_HISTORY_MAX);
     }
+    // TOPIC_HISTORY_PATH may live in a mounted data dir (/app/data); ensure
+    // the parent exists so the write works regardless of how the app is run.
+    await fsp.mkdir(path.dirname(TOPIC_HISTORY_PATH), { recursive: true });
     await fsp.writeFile(TOPIC_HISTORY_PATH, JSON.stringify(topics, null, 2));
     return res.json({ success: true, count: topics.length });
   } catch (err) {
@@ -98,6 +123,24 @@ async function writeBase64(base64, destPath) {
   return destPath;
 }
 
+function generateSilentAudioBase64(durationSec) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = path.join(os.tmpdir(), `silence-${crypto.randomUUID()}.mp3`);
+    execFile(
+      ffmpegPath,
+      ["-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", String(durationSec), "-c:a", "libmp3lame", "-b:a", "64k", tmpPath],
+      (err) => {
+        if (err) return reject(err);
+        fs.readFile(tmpPath, (readErr, data) => {
+          fs.unlink(tmpPath, () => {});
+          if (readErr) return reject(readErr);
+          resolve(data.toString("base64"));
+        });
+      }
+    );
+  });
+}
+
 function run(cmdBuilder) {
   return new Promise((resolve, reject) => {
     cmdBuilder
@@ -110,6 +153,21 @@ function run(cmdBuilder) {
       .on("end", () => resolve())
       .run();
   });
+}
+
+// loudnorm computes a gain from the input's measured LUFS to the -16 LUFS
+// target - on true digital silence (e.g. the outro's generated silent
+// track) or other near-silent audio, measured loudness is -infinity, and
+// the resulting gain is NaN, which crashes the AAC encoder entirely. Try
+// with loudnorm first (normal case); if it fails, retry the identical
+// encode without it rather than losing the whole scene.
+async function runAudioMux(cmdFactory) {
+  try {
+    await run(cmdFactory(true));
+  } catch (err) {
+    console.warn(`[loudnorm] normalization failed (${err.message}), retrying without it`);
+    await run(cmdFactory(false));
+  }
 }
 
 function ffprobeDuration(filePath) {
@@ -126,28 +184,33 @@ function ffprobeDuration(filePath) {
 // ---------------------------------------------------------------------------
 
 function getColorGrade(mood) {
-  // Split-tone: warm highlights + cool shadows, shadow lift to prevent
-  // crushed blacks on OLED screens, soft highlight rolloff for film look.
+  // Natural, believable grade - deliberately NOT the old hyper-saturated
+  // "punchy" look (sat 1.3-1.55), which stacked on the AI-art image prompt and
+  // read as synthetic/AI-slop. Real photos aren't oversaturated. We keep clean
+  // contrast (near-true blacks, full whites, so nothing looks foggy) but pull
+  // saturation and colour tints back toward true-to-life, and gentle the mid
+  // S-curve so it reads as a real, well-exposed photograph rather than AI art.
+  const filmCurve = (b, s, m, h) => `curves=m='0/${b} 0.25/${s} 0.5/${m} 0.75/${h} 1/1.0'`;
   const grades = {
     upbeat: [
-      "eq=contrast=1.15:saturation=1.45:brightness=0.02",
-      "colorbalance=rs=0.12:gs=0.04:bs=-0.08:rh=0.06:gh=0.02:bh=-0.04",
-      "curves=m='0/0.06:0.25/0.30:0.5/0.52:0.75/0.78:1/0.95'",
+      "eq=contrast=1.09:saturation=1.16:brightness=0.02",
+      "colorbalance=rs=0.05:gs=0.01:bs=-0.03:rh=0.02:gh=0.01:bh=-0.01",
+      filmCurve("0.02", "0.23", "0.50", "0.80"),
     ].join(","),
     serious: [
-      "eq=contrast=1.18:saturation=0.90:brightness=-0.01",
-      "colorbalance=rs=-0.04:gs=0.0:bs=0.06:rh=0.02:gh=-0.01:bh=0.04",
-      "curves=m='0/0.05:0.25/0.28:0.5/0.50:0.75/0.76:1/0.93'",
+      "eq=contrast=1.10:saturation=1.02:brightness=0.01",
+      "colorbalance=rs=-0.02:gs=0.0:bs=0.03:rh=0.01:gh=0.0:bh=0.02",
+      filmCurve("0.02", "0.22", "0.50", "0.79"),
     ].join(","),
     funny: [
-      "eq=contrast=1.10:saturation=1.60:brightness=0.03",
-      "colorbalance=rs=0.10:gs=0.08:bs=-0.06:rh=0.04:gh=0.06:bh=-0.02",
-      "curves=m='0/0.07:0.25/0.31:0.5/0.53:0.75/0.79:1/0.96'",
+      "eq=contrast=1.08:saturation=1.18:brightness=0.02",
+      "colorbalance=rs=0.05:gs=0.03:bs=-0.03:rh=0.02:gh=0.02:bh=-0.01",
+      filmCurve("0.02", "0.23", "0.50", "0.81"),
     ].join(","),
     neutral: [
-      "eq=contrast=1.10:saturation=1.15:brightness=0.01",
-      "colorbalance=rs=0.02:gs=0.0:bs=0.02:rh=0.03:gh=0.01:bh=-0.01",
-      "curves=m='0/0.05:0.25/0.29:0.5/0.51:0.75/0.77:1/0.94'",
+      "eq=contrast=1.08:saturation=1.10:brightness=0.02",
+      "colorbalance=rs=0.01:gs=0.0:bs=0.01:rh=0.02:gh=0.0:bh=-0.01",
+      filmCurve("0.02", "0.23", "0.50", "0.80"),
     ].join(","),
   };
   return grades[mood] || grades.neutral;
@@ -192,58 +255,90 @@ function renderRemotion(compositionId, outputPath, durationSec, props) {
 }
 
 // ---------------------------------------------------------------------------
+// AI Image -> Video (fal image-to-video, e.g. LTX) for hook/payoff motion
+// ---------------------------------------------------------------------------
+
+// Animate a still (the fal image URL) into a short clip. Uses the synchronous
+// fal.run endpoint; returns the downloaded clip path. Callers wrap this in a
+// try/catch and fall back to the Ken-Burns still on any failure.
+async function generateVideoFromImage(imageUrl, outPath) {
+  const res = await axios.post(
+    `https://fal.run/${FAL_VIDEO_MODEL}`,
+    { image_url: imageUrl, prompt: FAL_VIDEO_PROMPT },
+    {
+      headers: { Authorization: `Key ${FAL_KEY}`, "Content-Type": "application/json" },
+      timeout: 180000,
+    }
+  );
+  const url = res.data?.video?.url || res.data?.videos?.[0]?.url;
+  if (!url) throw new Error("fal video model returned no video url: " + JSON.stringify(res.data).slice(0, 300));
+  await downloadFile(url, outPath);
+  return outPath;
+}
+
+// ---------------------------------------------------------------------------
 // Stock Scene Processing (ffmpeg — eased zoompan, cinematic grading)
 // ---------------------------------------------------------------------------
 
 async function buildStockVideoScene(stockVideoPath, audioPath, duration, outPath, sceneIdx, mood) {
   const stockDuration = await ffprobeDuration(stockVideoPath);
-  const needsPad = stockDuration < duration;
 
-  // Cinematic processing: scale to fill, crop, split-tone grade,
-  // vignette, and subtle film grain (very low to avoid bitrate bloat)
+  // The AI clip (~5s) is usually SHORTER than the scene's narration. The old
+  // behaviour froze the last frame (tpad clone) to fill the gap, so the motion
+  // visibly STOPPED partway through the scene. Instead, slow the clip with
+  // setpts so its movement spans the entire scene - continuous motion, never a
+  // freeze. (+0.15s of headroom so the final -t trims cleanly at the end.)
+  const stretch =
+    stockDuration > 0.1 && stockDuration < duration
+      ? (duration + 0.15) / stockDuration
+      : 1;
+  const stretchFilter = stretch > 1.01 ? `setpts=${stretch.toFixed(4)}*PTS,` : "";
+
+  // Cinematic processing: scale to fill, crop, split-tone grade, and a
+  // subtle unsharp for crispness (vignette removed - it read too heavy).
   const gradeFilter = getColorGrade(mood);
-  const padFilter = needsPad
-    ? `,tpad=stop_mode=clone:stop_duration=${(duration - stockDuration + 0.1).toFixed(3)}`
-    : "";
 
   const videoFilter = [
-    `[0:v]scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase`,
-    `crop=${TARGET_W}:${TARGET_H}${padFilter}`,
+    `[0:v]${stretchFilter}scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=increase`,
+    `crop=${TARGET_W}:${TARGET_H}`,
     gradeFilter,
-    `vignette=angle=PI/10:aspect=9/16`,
     `unsharp=5:5:0.4:5:5:0.0`,
   ].join(",") + "[processed]";
 
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[processed]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push(
+      "-c:v", V_ENCODER,
+      "-r", String(FPS),
+      "-preset", "veryfast",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+    );
+    return ffmpeg()
       .input(stockVideoPath)
       .input(audioPath)
       .complexFilter([videoFilter])
-      .outputOptions([
-        "-map", "[processed]",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", V_ENCODER,
-        "-r", String(FPS),
-        "-preset", "veryfast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
 
-async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneIdx, mood) {
+async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneIdx, mood, isEmphasis = false) {
   // Eased Ken Burns with sinusoidal motion (not linear)
   // Creates organic, handheld-feeling camera movement
   const fps = FPS;
-  const CUT_INTERVAL_SEC = sceneIdx === 0 ? 1.8 : 2.5;
-  const numSegments = Math.max(1, Math.round(duration / CUT_INTERVAL_SEC));
+  // ONE continuous Ken Burns move per distinct image - not one per time slice.
+  // The old code split every scene into 3.5-4.5s segments and, with a single
+  // image, re-ran the zoom FROM THE START in each segment, so one photo looked
+  // like it zoomed over and over. Now a scene with 1 image is one smooth move
+  // across the whole scene; a scene with 2 images cuts once between them.
+  // Emphasis (payoff) scene is always a single deliberate push-in.
+  const numSegments = isEmphasis ? 1 : Math.max(1, imagePaths.length);
   const segDuration = duration / numSegments;
   const totalFrames = Math.ceil(segDuration * fps);
   const gradeFilter = getColorGrade(mood);
@@ -254,28 +349,37 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
     const segOutPath = path.join(path.dirname(outPath), `seg_${sceneIdx}_${seg}.mp4`);
     const panLeftToRight = seg % 2 === 0;
 
-    // Sinusoidal easing: slow start, fast middle, slow end
+    // Sinusoidal easing: slow start, slow end, gentle drift through the middle
     // zoompan expressions use on/d for normalized progress
     const xExpr = panLeftToRight
-      ? `'iw*0.07*(1-cos(PI*on/${totalFrames}))/2'`
-      : `'iw*0.07*(1+cos(PI*on/${totalFrames}))/2'`;
+      ? `'iw*0.035*(1-cos(PI*on/${totalFrames}))/2'`
+      : `'iw*0.035*(1+cos(PI*on/${totalFrames}))/2'`;
 
-    // Subtle zoom drift (1.12 -> 1.08 or vice versa) for organic feel
-    const zoomExpr = seg % 2 === 0
-      ? `'1.12-0.04*(1-cos(PI*on/${totalFrames}))/2'`
-      : `'1.08+0.04*(1-cos(PI*on/${totalFrames}))/2'`;
+    // Alternate the camera move per SCENE for variety: even scenes slowly
+    // push IN, odd scenes pull OUT (gently eased). Breaks the "same subtle
+    // drift on every scene" monotony without speeding anything up, and keeps
+    // the motion coherent within a scene (all its segments move the same way).
+    const pushIn = sceneIdx % 2 === 0;
+    const zoomExpr = pushIn
+      ? `'1.05+0.05*(1-cos(PI*on/${totalFrames}))/2'`
+      : `'1.10-0.05*(1-cos(PI*on/${totalFrames}))/2'`;
 
-    // Punch-in on first few frames for "snap" feel at each cut
-    const punchFrames = Math.min(8, Math.round(totalFrames * 0.15));
-    const finalZoom = sceneIdx === 0 && seg === 0
-      ? `'if(lte(on,${punchFrames}),1.18-0.06*on/${punchFrames},${zoomExpr.slice(1)}`
-      : zoomExpr;
+    // Gentle punch-in on the first segment only, eased over its own window
+    const punchFrames = Math.min(18, Math.round(totalFrames * 0.3));
+    const finalZoom = isEmphasis
+      ? `'1.02+0.18*(1-cos(PI*on/${totalFrames}))/2'`
+      : sceneIdx === 0 && seg === 0
+        ? `'if(lte(on,${punchFrames}),1.13-0.04*on/${punchFrames},${zoomExpr.slice(1, -1)})'`
+        : zoomExpr;
 
     const filterGraph = [
-      `[0:v]zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.04*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
+      // Upscale well past the output resolution before zoompan - cropping
+      // from a source close to the output size makes the per-frame crop
+      // window round to whole pixels unevenly, which reads as flicker/
+      // vibration. The extra sub-pixel headroom eliminates that jitter.
+      `[0:v]scale=-2:6000,zoompan=z=${finalZoom}:x=${xExpr}:y='ih*0.02*(1-cos(PI*on/${totalFrames}))/2':d=${totalFrames}:s=${TARGET_W}x${TARGET_H}:fps=${fps}[zoomed]`,
       `[zoomed]${gradeFilter}[graded]`,
-      `[graded]vignette=angle=PI/10:aspect=9/16[vignetted]`,
-      `[vignetted]unsharp=5:5:0.4:5:5:0.0[final]`,
+      `[graded]unsharp=5:5:0.4:5:5:0.0[final]`,
     ];
 
     await run(
@@ -315,21 +419,16 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
   }
 
   // Mux with audio
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "0:v", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push("-c:v", "copy", "-c:a", "aac", "-b:a", "192k");
+    return ffmpeg()
       .input(sceneVideoPath)
       .input(audioPath)
-      .outputOptions([
-        "-map", "0:v",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -376,26 +475,25 @@ async function buildTemplateScene(templateName, templateData, duration, audioPat
     ? `[0:v]tpad=stop_mode=clone:stop_duration=${(duration - templateDuration + 0.1).toFixed(3)}[padded]`
     : `[0:v]null[padded]`;
 
-  await run(
-    ffmpeg()
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[padded]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push(
+      "-c:v", V_ENCODER,
+      "-r", String(FPS),
+      "-preset", "veryfast",
+      "-crf", "18",
+      "-pix_fmt", "yuv420p",
+      "-c:a", "aac",
+      "-b:a", "192k",
+    );
+    return ffmpeg()
       .input(templateVideoPath)
       .input(audioPath)
       .complexFilter([videoFilter])
-      .outputOptions([
-        "-map", "[padded]",
-        "-map", "1:a",
-        "-t", String(duration),
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-c:v", V_ENCODER,
-        "-r", String(FPS),
-        "-preset", "veryfast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-      ])
-      .output(outPath)
-  );
+      .outputOptions(opts)
+      .output(outPath);
+  });
 
   return outPath;
 }
@@ -420,9 +518,10 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Inter Black,76,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,8,2,60,60,420,1
-Style: CaptionHL,Inter Black,80,&H0000FFFF,&H000000FF,&H40000000,&H80000000,-1,0,0,0,110,110,0,0,1,4,8,2,60,60,420,1
-Style: CommentHook,Inter Black,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,-1,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
+Style: Caption,Inter Bold,64,&H00FFFFFF,&H000000FF,&H40000000,&H80000000,0,0,0,0,100,100,0,0,1,3,4,2,60,60,420,1
+Style: CaptionHL,Inter Bold,68,&H0096E0FF,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
+Style: CaptionKey,Inter Bold,68,&H0080FF60,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
+Style: CommentHook,Inter Bold,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,0,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -432,6 +531,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const WORDS_PER_CHUNK = 2;
 
   scenes.forEach((scene, sceneIdx) => {
+    // The outro is a branded KineticText card (Like / Share / Follow) with a
+    // spoken share line - let the template + voice carry it, no burned captions.
+    if (scene?.template_data?.is_outro) return;
     const alignment = scene?.audio?.alignment;
     if (!alignment) return;
 
@@ -467,9 +569,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const highlightText = chunk
           .map((item) => {
             if (item === w) {
-              return `{\\rCaptionHL}${item.text.toUpperCase()}{\\r}`;
+              // Active word "pops": snaps to 128% then settles to the style's
+              // 105% over ~100ms as it's spoken - a karaoke bounce that makes
+              // the captions feel alive and draws the eye to the current word.
+              // A word containing a number (the key fact in this niche) pops in
+              // a distinct green so stats stand out from ordinary highlights.
+              const hlStyle = /\d/.test(item.text) ? "CaptionKey" : "CaptionHL";
+              return `{\\r${hlStyle}\\fscx128\\fscy128\\t(0,100,\\fscx105\\fscy105)}${item.text}{\\r}`;
             }
-            return item.text.toUpperCase();
+            return item.text;
           })
           .join(" ");
 
@@ -479,10 +587,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   });
 
   if (commentHook && totalDuration) {
-    const hookDuration = Math.min(1.8, totalDuration * 0.4);
-    const hookStart = Math.max(0, totalDuration - hookDuration);
-    const escaped = commentHook.toUpperCase().replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
-    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(totalDuration)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
+    // Surface the comment prompt at ~62% of the content - while retention is
+    // still high - instead of the final seconds, when most viewers have
+    // already swiped away. Hold it ~5s so it's readable, ending before the
+    // kicker so it doesn't collide with the payoff.
+    const hookStart = totalDuration * 0.62;
+    const hookEnd = Math.min(totalDuration, hookStart + 5);
+    const escaped = commentHook.replace(/\\/g, "").replace(/\{/g, "").replace(/\}/g, "");
+    events += `Dialogue: 1,${toAssTime(hookStart)},${toAssTime(hookEnd)},CommentHook,,0,0,0,,{\\fscx0\\fscy0\\t(0,200,\\fscx120\\fscy120)\\t(200,300,\\fscx100\\fscy100)}${escaped}\n`;
   }
 
   return header + events;
@@ -543,56 +655,63 @@ async function renderCaptionOverlay(scenes, offsets, commentHook, totalDuration,
 }
 
 // ---------------------------------------------------------------------------
-// Scene Transitions (crossfade via ffmpeg xfade filter)
+// Scene Concatenation (hard cuts - no crossfade)
 // ---------------------------------------------------------------------------
 
-async function concatWithTransitions(scenePaths, durations, transitionDuration, outPath) {
+async function concatScenes(scenePaths, outPath) {
   if (scenePaths.length === 1) {
     fs.copyFileSync(scenePaths[0], outPath);
     return outPath;
   }
 
-  // xfade requires sequential chaining: each pair of scenes gets a crossfade
-  const xfadeDur = Math.min(transitionDuration, 0.5);
-  let currentInput = scenePaths[0];
+  const listPath = path.join(path.dirname(outPath), "concat_scenes.txt");
+  const listContent = scenePaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
+  await fsp.writeFile(listPath, listContent);
 
-  for (let i = 1; i < scenePaths.length; i++) {
-    const isLast = i === scenePaths.length - 1;
-    const stepOut = path.join(path.dirname(outPath), `xfade_step_${i}.mp4`);
-    const outputForStep = isLast ? outPath : stepOut;
+  await run(
+    ffmpeg()
+      .input(listPath)
+      .inputOptions(["-f", "concat", "-safe", "0"])
+      .outputOptions(["-c", "copy"])
+      .output(outPath)
+  );
 
-    // Calculate offset: where in the accumulated video the transition starts
-    let accumulatedDuration = durations[0];
-    for (let j = 1; j < i; j++) {
-      accumulatedDuration += durations[j] - xfadeDur;
-    }
-    const offset = Math.max(0, accumulatedDuration - xfadeDur);
+  return outPath;
+}
 
-    await run(
-      ffmpeg()
-        .input(currentInput)
-        .input(scenePaths[i])
-        .complexFilter([
-          `[0:v][1:v]xfade=transition=fade:duration=${xfadeDur}:offset=${offset.toFixed(3)}[vout]`,
-          `[0:a][1:a]acrossfade=d=${xfadeDur}:c1=tri:c2=tri[aout]`,
-        ])
-        .outputOptions([
-          "-map", "[vout]",
-          "-map", "[aout]",
-          "-c:v", V_ENCODER,
-          "-r", String(FPS),
-          "-preset", "veryfast",
-          "-crf", "18",
-          "-pix_fmt", "yuv420p",
-          "-c:a", "aac",
-          "-b:a", "192k",
-        ])
-        .output(outputForStep)
-    );
-
-    currentInput = outputForStep;
+// Rebuild the voiceover as ONE gapless track. Each scene's audio was AAC-
+// encoded separately and then copy-concatenated, which stacks every segment's
+// ~23ms encoder-priming silence at the joins - an audible click/hiccup at each
+// scene cut. Decoding the raw per-scene voice and re-joining them with the
+// concat filter produces a clean, sample-accurate join (no click), and a
+// single loudnorm pass over the whole track removes the per-scene level jumps
+// the old per-scene loudnorm caused. Total duration is unchanged, so it stays
+// in sync with the concatenated video.
+async function buildGaplessVoice(audioPaths, outPath) {
+  if (audioPaths.length === 1) {
+    await runAudioMux((normalize) => {
+      const opts = ["-c:a", "aac", "-b:a", "192k", "-ar", "44100"];
+      const c = ffmpeg().input(audioPaths[0]);
+      if (normalize) c.audioFilters("loudnorm=I=-16:TP=-1.5:LRA=11");
+      return c.outputOptions(opts).output(outPath);
+    });
+    return outPath;
   }
-
+  await runAudioMux((normalize) => {
+    const cmd = ffmpeg();
+    audioPaths.forEach((p) => cmd.input(p));
+    // Normalize each input to a common format before concat (defensive), then
+    // join sample-accurately; optionally a single loudnorm over the whole thing.
+    const norm = audioPaths.map((_, i) => `[${i}:a]aformat=sample_rates=44100:channel_layouts=mono[a${i}]`).join(";");
+    const ins = audioPaths.map((_, i) => `[a${i}]`).join("");
+    const tail = normalize
+      ? `concat=n=${audioPaths.length}:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11[a]`
+      : `concat=n=${audioPaths.length}:v=0:a=1[a]`;
+    return cmd
+      .complexFilter([`${norm};${ins}${tail}`])
+      .outputOptions(["-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", "44100"])
+      .output(outPath);
+  });
   return outPath;
 }
 
@@ -608,10 +727,38 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     }
 
     const mood = caption_style || "neutral";
+
+    // Outro card. The pipeline now injects a SPOKEN outro as the final scene -
+    // a real narrated share CTA, voiced in the same voice as the narration and
+    // flagged template_data.is_outro. When that scene is present we use it as-is
+    // (voice + branded KineticText card). Only when it is absent (legacy payload
+    // or fallback) do we append the old SILENT branded card, so a render never
+    // ends without an outro.
+    const hasScriptOutro = scenes.some((s) => s?.template_data?.is_outro);
+    if (!hasScriptOutro) {
+      const outroAudioBase64 = await generateSilentAudioBase64(OUTRO_DURATION_SEC);
+      scenes.push({
+        scene_index: scenes.length,
+        visual_source: "template",
+        template_name: "kinetic_text",
+        template_data: { line: reqBody.outro_line || DEFAULT_OUTRO_LINE, is_outro: true },
+        audio: { audio_base64: outroAudioBase64 },
+      });
+    }
+
+    // The payoff/reveal scene = the last content scene before the outro card.
+    // It gets a stronger emphasis push-in (video) and a riser+impact accent.
+    const emphasisIdx = scenes.length - 2;
+
     console.log(`[job ${jobId}] Composing ${scenes.length} scenes (mood: ${mood})`);
 
     // ===== PHASE 1: Build individual scenes in parallel =====
-    const sceneResults = await Promise.all(
+    // Use allSettled, not all: if one scene throws, all() rejects
+    // immediately while sibling scenes' ffmpeg processes keep running - and
+    // the job's finally block then deletes tmpDir out from under them,
+    // producing confusing "No such file" errors and orphaned processes.
+    // Wait for every scene to settle first, then fail with a clear message.
+    const settled = await Promise.allSettled(
       scenes.map(async (scene, i) => {
         const audioPath = path.join(tmpDir, `voice_${i}.mp3`);
         if (scene?.audio?.audio_base64) {
@@ -646,34 +793,66 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
               return await downloadFile(url, p);
             })
           );
-          await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood);
+
+          // Hybrid: animate the hook (first) and payoff scenes into real
+          // motion clips; keep the middle as Ken-Burns stills. Any failure
+          // (no key, model error, timeout) falls back to the still so a bad
+          // clip never breaks the video.
+          const animate = FAL_VIDEO_ENABLED && FAL_KEY && (i === 0 || i === emphasisIdx);
+          let animated = false;
+          if (animate) {
+            try {
+              const clipPath = path.join(tmpDir, `clip_${i}.mp4`);
+              await generateVideoFromImage(imageUrls[0], clipPath);
+              await buildStockVideoScene(clipPath, audioPath, duration, outPath, i, mood);
+              animated = true;
+              console.log(`[ltx] animated scene ${i} (${i === 0 ? "hook" : "payoff"})`);
+            } catch (e) {
+              console.warn(`[ltx] animation failed for scene ${i} (${e.message}) - using still`);
+            }
+          }
+          if (!animated) {
+            await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood, i === emphasisIdx);
+          }
         }
 
         return { path: outPath, duration };
       })
     );
 
+    const failures = settled
+      .map((r, i) => (r.status === "rejected" ? `scene ${i}: ${r.reason?.message || r.reason}` : null))
+      .filter(Boolean);
+    if (failures.length) {
+      throw new Error(`Scene build failed - ${failures.join("; ")}`);
+    }
+
+    const sceneResults = settled.map((r) => r.value);
     const scenePaths = sceneResults.map((r) => r.path);
     const durations = sceneResults.map((r) => r.duration);
 
-    // ===== PHASE 2: Concatenate with crossfade transitions =====
-    const TRANSITION_DURATION = 0.4; // seconds - studio-standard crossfade
+    // ===== PHASE 2: Concatenate scenes (hard cuts) =====
     const concatPath = path.join(tmpDir, "concat.mp4");
-    await concatWithTransitions(scenePaths, durations, TRANSITION_DURATION, concatPath);
+    await concatScenes(scenePaths, concatPath);
 
-    // Calculate actual scene offsets (accounting for crossfade overlap)
+    // Calculate actual scene offsets (no overlap - hard cuts)
     const offsets = [0];
     for (let i = 1; i < durations.length; i++) {
-      offsets.push(offsets[i - 1] + durations[i - 1] - TRANSITION_DURATION);
+      offsets.push(offsets[i - 1] + durations[i - 1]);
     }
-    const totalVideoDuration = durations.reduce((a, b) => a + b, 0) - (TRANSITION_DURATION * (durations.length - 1));
+    const totalVideoDuration = durations.reduce((a, b) => a + b, 0);
 
     // ===== PHASE 3: Burn-in captions via ASS (proven approach) =====
     // Remotion caption overlay requires VP9/RGBA to preserve transparency,
     // which adds complexity. ASS captions burned in by ffmpeg are reliable,
     // fast, and visually good enough with proper styling.
     const assPath = path.join(tmpDir, "captions.ass");
-    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, totalVideoDuration);
+    // comment_hook should land in the last moments of the actual content, not
+    // over the outro card. The outro is now a variable-length SPOKEN scene, so
+    // exclude the actual last-scene duration (not the old fixed 2.5s constant).
+    const outroDuration = durations.length > 1 ? durations[durations.length - 1] : 0;
+    const contentDuration = totalVideoDuration - outroDuration;
+    const assContent = buildAssFromAlignment(scenes, offsets, comment_hook, contentDuration);
     await fsp.writeFile(assPath, assContent);
 
     // ===== PHASE 4: Sound design + Audio mixing + Final composite =====
@@ -690,20 +869,25 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       riser: fs.existsSync(sfxFiles.riser),
     };
 
-    // SFX events synced to real scene transitions
+    // Sound design: NO per-cut SFX (that whoosh-on-every-cut clashed with the
+    // tone). Instead, ONE tasteful accent at the payoff/reveal - a soft riser
+    // building into it, then a gentle impact as it lands. This is the single
+    // intentional audio beat that punctuates the climax without the noise.
     const sfxEvents = [];
-    for (let i = 1; i < scenes.length; i++) {
-      // Whoosh + sub-bass thump on every scene cut (not just templates)
-      if (sfxAvailable.whoosh) sfxEvents.push({ type: "whoosh", time: offsets[i], volume: 0.30 });
-      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.25 });
+    const emphasisOffset = offsets[emphasisIdx];
+    if (emphasisIdx >= 1 && emphasisOffset != null) {
+      if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, emphasisOffset - 1.3), volume: 0.18 });
+      if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: emphasisOffset, volume: 0.22 });
     }
-    // Extra emphasis on template reveals
-    scenes.forEach((s, i) => {
-      if (s.visual_source === "template") {
-        if (sfxAvailable.impact) sfxEvents.push({ type: "impact", time: offsets[i], volume: 0.45 });
-        if (sfxAvailable.riser) sfxEvents.push({ type: "riser", time: Math.max(0, offsets[i] - 0.8), volume: 0.25 });
-      }
-    });
+
+    // Gapless voiceover: rejoin the per-scene voice cleanly (no boundary
+    // clicks) with a single loudnorm (consistent levels), used as the voice
+    // track below instead of the concatenated video's gappy audio.
+    const voicePath = path.join(tmpDir, "voice_full.m4a");
+    await buildGaplessVoice(
+      scenes.map((_, i) => path.join(tmpDir, `voice_${i}.mp3`)),
+      voicePath
+    );
 
     // ===== PHASE 5: Final composite — video + captions + music + SFX =====
     const finalPath = path.join(tmpDir, "final.mp4");
@@ -715,12 +899,13 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const hasAss = fs.existsSync(assPath);
     const safeAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
-    const finalCmd = ffmpeg().input(concatPath);
+    const finalCmd = ffmpeg().input(concatPath);   // [0] = video (+ ignored audio)
+    finalCmd.input(voicePath);                     // [1] = gapless voiceover
     if (hasMusic) finalCmd.input(musicPath);
     sfxEvents.forEach((ev) => finalCmd.input(sfxFiles[ev.type]));
 
-    // Track input indices
-    let nextIdx = 1;
+    // Track input indices ([0]=video, [1]=voice already taken)
+    let nextIdx = 2;
     const musicIdx = hasMusic ? nextIdx++ : null;
     const sfxIndices = sfxEvents.map(() => nextIdx++);
 
@@ -730,14 +915,14 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       ? `[0:v]ass=${safeAssPath},fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`
       : `[0:v]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`;
 
-    // Build audio filter: ducked music + synced SFX
+    // Build audio filter: gapless voice ([1:a]) + ducked music
     const audioFilters = [];
-    const mixLabels = ["0:a"];
+    const mixLabels = ["1:a"];
 
     if (hasMusic) {
       // Gentler ducking: ratio 4 instead of 10, shaped attack/release
       audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=0.15[music]`);
-      audioFilters.push(`[music][0:a]sidechaincompress=threshold=0.04:ratio=4:attack=20:release=200[duckedmusic]`);
+      audioFilters.push(`[music][1:a]sidechaincompress=threshold=0.04:ratio=4:attack=20:release=200[duckedmusic]`);
       mixLabels.push("duckedmusic");
     }
 
@@ -762,7 +947,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     // - High profile for maximum quality at 1080p30
     finalCmd.outputOptions([
       "-map", "[final_v]",
-      "-map", mixLabels.length > 1 ? "[final_a]" : "0:a",
+      "-map", mixLabels.length > 1 ? "[final_a]" : "1:a",
       "-c:v", V_ENCODER,
       "-preset", "medium",
       "-crf", "16",
@@ -794,6 +979,23 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// B-roll resolution: pick the best REAL asset for a scene from multiple free
+// sources (Pexels photos/videos, Unsplash, Wikipedia), ranked by AI-vision
+// relevance. Returns { ok:true, type, url, source, attribution } or
+// { ok:false } - the caller (n8n) then falls back to AI generation.
+// ---------------------------------------------------------------------------
+app.post("/resolve-broll", async (req, res) => {
+  try {
+    const { query, subject, description } = req.body || {};
+    const result = await resolveBroll({ query, subject, description });
+    res.json(result);
+  } catch (e) {
+    // never hard-fail: on error, tell the caller to use the AI fallback
+    res.json({ ok: false, reason: "error", error: String((e && e.message) || e) });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Async Job API
