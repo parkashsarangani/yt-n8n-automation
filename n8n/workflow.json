@@ -963,16 +963,16 @@
       "parameters": {
         "method": "GET",
         "url": "=https://youtubeanalytics.googleapis.com/v2/reports?ids=channel==MINE&startDate={{ $json.startDate }}&endDate={{ $json.endDate }}&metrics=views,averageViewPercentage,averageViewDuration,subscribersGained,likes,comments,shares&dimensions=video&maxResults=50&sort=-views",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "youTubeOAuth2Api",
+        "authentication": "genericCredentialType",
         "options": {
           "timeout": 30000
-        }
+        },
+        "genericAuthType": "oAuth2Api"
       },
       "credentials": {
-        "youTubeOAuth2Api": {
-          "id": "b5LyysZ3nzI8MW0V",
-          "name": "YouTube account"
+        "oAuth2Api": {
+          "id": "REPLACE_WITH_ANALYTICS_OAUTH_CRED",
+          "name": "YouTube Analytics OAuth2"
         }
       }
     },
