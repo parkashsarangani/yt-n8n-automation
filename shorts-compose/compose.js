@@ -19,6 +19,7 @@ const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const { execFile } = require("child_process");
 const { resolveBroll } = require("./brollResolver");
+const feedback = require("./feedbackLoop");
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
@@ -89,6 +90,40 @@ app.post("/topic-history", async (req, res) => {
   } catch (err) {
     console.error("Failed to write topic history:", err);
     return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Feedback loop: log published videos, ingest analytics, serve learned insights
+// ---------------------------------------------------------------------------
+
+// After a Short is published, record the metadata that produced it.
+app.post("/performance/log", async (req, res) => {
+  try {
+    const result = await feedback.logPublished(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Daily: n8n posts the raw YouTube Analytics (dimensions=video) response; we
+// join it onto the log and re-run the strategist to refresh channel_insights.
+app.post("/performance/ingest", async (req, res) => {
+  try {
+    const result = await feedback.ingestAnalytics(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// The topic generator reads this before picking a topic.
+app.get("/channel-insights", async (req, res) => {
+  try {
+    res.json(await feedback.getInsights());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -946,6 +981,28 @@ app.post("/resolve-broll", async (req, res) => {
   } catch (e) {
     res.json({ ok: false, reason: "error", error: String((e && e.message) || e) });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Feedback loop. SHORTS-ONLY by construction: only videos this pipeline logs
+// here are ever measured or strategized, so long-form videos on the same
+// channel never enter the loop.
+// ---------------------------------------------------------------------------
+app.post("/performance/log", async (req, res) => {
+  try { res.json(await feedback.logPublished(req.body || {})); }
+  catch (e) { res.status(400).json({ error: String((e && e.message) || e) }); }
+});
+app.get("/performance/measure-ids", async (req, res) => {
+  try { res.json({ video_ids: await feedback.getMeasureIds() }); }
+  catch (e) { res.status(500).json({ video_ids: [], error: String((e && e.message) || e) }); }
+});
+app.post("/performance/ingest", async (req, res) => {
+  try { res.json(await feedback.ingestAnalytics(req.body || {})); }
+  catch (e) { res.status(500).json({ error: String((e && e.message) || e) }); }
+});
+app.get("/channel-insights", async (req, res) => {
+  try { res.json(await feedback.getInsights()); }
+  catch (e) { res.status(500).json({ sample_size: 0, guidance: [], avoid: [], error: String((e && e.message) || e) }); }
 });
 
 // ---------------------------------------------------------------------------
