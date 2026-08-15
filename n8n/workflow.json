@@ -78,7 +78,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-5\", max_tokens: 2048, thinking: { type: \"adaptive\" }, output_config: { effort: \"medium\" }, messages: [{ role: \"user\", content: \"You are picking a topic for a YouTube Shorts video.\\n\\nCRITERIA: pick ONE surprising, counterintuitive fact that makes someone stop scrolling and think 'wait, WHAT?'. The single fact IS the video - a mind-bending truth delivered fast, never a story about a person and never a list. It must be about something the audience ALREADY RECOGNIZES - and famous, instantly-recognizable PEOPLE (celebrities, athletes, historical figures, inventors, world leaders) and famous brands are prime material, every bit as much as familiar everyday things. A famous name gives the hook instant pull; just deliver ONE shocking fact about them, never their life story.\\n\\nTWO HARD BANS:\\n1. NO biographies or life stories. Never 'the story of X', never a rise-and-fall or rags-to-riches journey. If a well-known name is involved at all, the topic is ONE shocking fact about them or their work - never their life story.\\n2. NO obscure subjects. The subject must be something a general audience instantly recognizes and relates to. Never a niche deep-sea creature, an unknown person, an obscure particle, or a historical footnote nobody has heard of. Familiarity is what makes the fact hit - people are most surprised by a hidden truth about something they thought they already knew.\\n\\nCATEGORIES TO ROTATE THROUGH (each must be instantly recognizable to a general audience - spread across them, do not default to one): the human body and brain; space, the Sun, the Moon and the planets; well-known animals (dogs, cats, sharks, whales, spiders); famous people everyone knows (celebrities, athletes, musicians, actors, historical figures, inventors, world leaders) and one jaw-dropping fact about them; famous brands and companies; everyday objects and food; famous places, landmarks and wonders; money and the economy; sport and world records; technology people use every day; and big historical events everyone has heard of. Check the already-used topics below and pick a subject and category NOT used recently.\\n\\nTHE FACT MUST BE specific, checkable, and genuinely surprising - the kind of thing people immediately repeat to a friend. Counterintuitive beats merely interesting.\\n- WEAK (obscure, generic, or a biography - do NOT do these): A deep-sea jellyfish is biologically immortal. / The life story of a famous inventor. / History is full of surprising events.\\n- STRONG (recognizable subject + one shocking, specific fact): Your stomach lining replaces itself every few days, so you basically grow a brand-new stomach every week. / Bananas are radioactive - you would have to eat about ten million in one sitting for it to actually hurt you. / There are more stars in the universe than grains of sand on every beach on Earth combined. / Honey found sealed in 3,000-year-old Egyptian tombs was still perfectly safe to eat. / Einstein's brain was stolen during his autopsy and kept in a jar for over 40 years. / Usain Bolt set his 100m world record in Beijing after a week of eating almost nothing but chicken nuggets.\\nIf the subject is not something a stranger would instantly recognize, or if it reads like someone's life story, throw it out and pick another.\\n\\nMASS-APPEAL GATE - before committing to a topic, run it through this filter; if it fails, discard it and pick another. The test: would a RANDOM person scrolling their phone - not a science nerd, not a trivia buff, not you - actually stop and want to watch this? Most 'technically interesting' facts fail, so be honest.\\n- Pop culture / entertainment: is this a movie, show, game, song, or star the AVERAGE person genuinely knows and cares about (a household name, a massive hit), or a niche fandom deep-cut only superfans recognize? Only the former passes.\\n- Science / space / nature: is this a genuinely famous, broadly jaw-dropping fact - the kind that already goes viral and people repeat to friends - or a fact that is technically neat but only a specialist or an AI would find exciting? If it needs background knowledge to even land, it fails.\\n- History: a famous event, figure, or place most people already half-know (so the twist hits against something familiar), never an obscure footnote.\\n- Sport, brands, money, tech, everyday life: is the subject something the average person recognizes, and the fact something they would find genuinely surprising and want to share - not insider trivia?\\nUNIVERSAL TEST: if you have to explain WHY the subject matters before the fact itself is interesting, the topic is too niche - discard it.\\n\\nREJECT trivia that only becomes interesting after the explanation - stated plainly, the topic itself must already create real curiosity, not just the payoff behind it.\\n\\nVARY THE SHAPE, NOT JUST THE SUBJECT: check the already-used topics below for their STRUCTURE, not just their subject - e.g. \\\"what if everyone did X at once\\\" is one shape; \\\"a hidden mechanism inside something ordinary\\\" is another, which a car-safety fact and a body-biology fact could both share despite being different subjects. If recent entries cluster on one shape, pick a genuinely different one.\\n\\nBefore answering, think through several candidate topics, stress-test each one against the WEAK/STRONG bar above, and pick only the strongest.\\n\\nHARD EXCLUSION (non-negotiable): never a medical or health topic - no diseases, symptoms, treatments, medications, procedures, even framed as a surprising fact.\\n\\nMust NOT closely resemble any of these already-used topics: \" + JSON.stringify($('Ensure Topics Array').item.json.topics.map(t => t.topic)) + \" - Output ONLY the topic as one plain sentence. No quotes, no JSON, no markdown, no preamble, no category label.\" }] }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: \"claude-sonnet-5\", max_tokens: 2048, thinking: { type: \"adaptive\" }, output_config: { effort: \"medium\" }, messages: [{ role: \"user\", content: \"You are picking a topic for a YouTube Shorts video.\\n\\nCRITERIA: pick ONE surprising, counterintuitive fact that makes someone stop scrolling and think 'wait, WHAT?'. The single fact IS the video - a mind-bending truth delivered fast, never a story about a person and never a list. It must be about something the audience ALREADY RECOGNIZES - and famous, instantly-recognizable PEOPLE (celebrities, athletes, historical figures, inventors, world leaders) and famous brands are prime material, every bit as much as familiar everyday things. A famous name gives the hook instant pull; just deliver ONE shocking fact about them, never their life story.\\n\\nTWO HARD BANS:\\n1. NO biographies or life stories. Never 'the story of X', never a rise-and-fall or rags-to-riches journey. If a well-known name is involved at all, the topic is ONE shocking fact about them or their work - never their life story.\\n2. NO obscure subjects. The subject must be something a general audience instantly recognizes and relates to. Never a niche deep-sea creature, an unknown person, an obscure particle, or a historical footnote nobody has heard of. Familiarity is what makes the fact hit - people are most surprised by a hidden truth about something they thought they already knew.\\n\\nCATEGORIES TO ROTATE THROUGH (each must be instantly recognizable to a general audience - spread across them, do not default to one): the human body and brain; space, the Sun, the Moon and the planets; well-known animals (dogs, cats, sharks, whales, spiders); famous people everyone knows (celebrities, athletes, musicians, actors, historical figures, inventors, world leaders) and one jaw-dropping fact about them; famous brands and companies; everyday objects and food; famous places, landmarks and wonders; money and the economy; sport and world records; technology people use every day; and big historical events everyone has heard of. Check the already-used topics below and pick a subject and category NOT used recently.\\n\\nTHE FACT MUST BE specific, checkable, and genuinely surprising - the kind of thing people immediately repeat to a friend. Counterintuitive beats merely interesting.\\n- WEAK (obscure, generic, or a biography - do NOT do these): A deep-sea jellyfish is biologically immortal. / The life story of a famous inventor. / History is full of surprising events.\\n- STRONG (recognizable subject + one shocking, specific fact): Your stomach lining replaces itself every few days, so you basically grow a brand-new stomach every week. / Bananas are radioactive - you would have to eat about ten million in one sitting for it to actually hurt you. / There are more stars in the universe than grains of sand on every beach on Earth combined. / Honey found sealed in 3,000-year-old Egyptian tombs was still perfectly safe to eat. / Einstein's brain was stolen during his autopsy and kept in a jar for over 40 years. / Usain Bolt set his 100m world record in Beijing after a week of eating almost nothing but chicken nuggets.\\nIf the subject is not something a stranger would instantly recognize, or if it reads like someone's life story, throw it out and pick another.\\n\\nMASS-APPEAL GATE - before committing to a topic, run it through this filter; if it fails, discard it and pick another. The test: would a RANDOM person scrolling their phone - not a science nerd, not a trivia buff, not you - actually stop and want to watch this? Most 'technically interesting' facts fail, so be honest.\\n- Pop culture / entertainment: is this a movie, show, game, song, or star the AVERAGE person genuinely knows and cares about (a household name, a massive hit), or a niche fandom deep-cut only superfans recognize? Only the former passes.\\n- Science / space / nature: is this a genuinely famous, broadly jaw-dropping fact - the kind that already goes viral and people repeat to friends - or a fact that is technically neat but only a specialist or an AI would find exciting? If it needs background knowledge to even land, it fails.\\n- History: a famous event, figure, or place most people already half-know (so the twist hits against something familiar), never an obscure footnote.\\n- Sport, brands, money, tech, everyday life: is the subject something the average person recognizes, and the fact something they would find genuinely surprising and want to share - not insider trivia?\\nUNIVERSAL TEST: if you have to explain WHY the subject matters before the fact itself is interesting, the topic is too niche - discard it.\\n\\nREJECT trivia that only becomes interesting after the explanation - stated plainly, the topic itself must already create real curiosity, not just the payoff behind it.\\n\\nVARY THE SHAPE, NOT JUST THE SUBJECT: check the already-used topics below for their STRUCTURE, not just their subject - e.g. \\\"what if everyone did X at once\\\" is one shape; \\\"a hidden mechanism inside something ordinary\\\" is another, which a car-safety fact and a body-biology fact could both share despite being different subjects. If recent entries cluster on one shape, pick a genuinely different one.\\n\\nBefore answering, think through several candidate topics, stress-test each one against the WEAK/STRONG bar above, and pick only the strongest.\\n\\nHARD EXCLUSION (non-negotiable): never a medical or health topic - no diseases, symptoms, treatments, medications, procedures, even framed as a surprising fact.\\n\\nMust NOT closely resemble any of these already-used topics: \" + JSON.stringify($('Ensure Topics Array').item.json.topics.map(t => t.topic)) + \" - Output ONLY the topic as one plain sentence. No quotes, no JSON, no markdown, no preamble, no category label.\" + \" MEASURED CHANNEL GUIDANCE (this is your own data - follow it; an empty list just means not enough measured videos yet): guidance=\" + JSON.stringify($('Get Channel Insights').item.json.guidance || []) + \" avoid=\" + JSON.stringify($('Get Channel Insights').item.json.avoid || []) }] }) }}",
         "options": {
           "timeout": 60000
         }
@@ -877,6 +877,125 @@
       "parameters": {
         "jsCode": "const r = $json;\nconst sceneIndex = $('Split Out Scenes').item.json.scene_index;\nif (!r || r.ok !== true || !r.url) { throw new Error('Tag B-roll: no asset for scene ' + sceneIndex); }\nconst out = { scene_index: sceneIndex, _source: r.source || 'broll', _attribution: r.attribution || '' };\nif (r.type === 'video') { out.video_url = r.url; } else { out.images = [r.url]; }\nreturn { json: out };"
       }
+    },
+    {
+      "id": "c3da2ec1-e1f6-4a0a-9e12-0a7a0bee55ae",
+      "name": "Get Channel Insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "GET",
+        "url": "https://shorts.interviewbuddy.cloud/channel-insights",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "935324f3-3a00-45ee-a918-ac0b5736ced1",
+      "name": "Log Published Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        18200,
+        9024
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://shorts.interviewbuddy.cloud/performance/log",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ video_id: ($('YouTube: Upload Draft').item.json.uploadId || $('YouTube: Upload Draft').item.json.id), topic: $('Extract Generated Topic').item.json.topic, hook: $('Validate Final Script').item.json.hook, title: $('Validate Final Script').item.json.title, comment_hook: $('Validate Final Script').item.json.comment_hook, caption_style: $('Validate Final Script').item.json.caption_style }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "16ed66ed-9e69-4f6e-93d7-07c7cb4fdc12",
+      "name": "Measure Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -400,
+        700
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 5 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "e38f43ca-0225-4a0d-b4b8-5e32b3d95076",
+      "name": "Build Analytics Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        700
+      ],
+      "parameters": {
+        "jsCode": "const DAY = 86400000;\n// measure up to YESTERDAY (today is partial and drags averages down)\nconst end = new Date(Date.now() - DAY);\nconst start = new Date(end.getTime() - 27 * DAY); // 28-day window\nconst iso = (d) => d.toISOString().slice(0, 10);\nreturn { json: { startDate: iso(start), endDate: iso(end) } };"
+      }
+    },
+    {
+      "id": "7f87e2b3-171f-4177-9d05-07987ba67548",
+      "name": "YouTube: Video Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        60,
+        700
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "GET",
+        "url": "=https://youtubeanalytics.googleapis.com/v2/reports?ids=channel==MINE&startDate={{ $json.startDate }}&endDate={{ $json.endDate }}&metrics=views,averageViewPercentage,averageViewDuration,subscribersGained,likes,comments,shares&dimensions=video&maxResults=50&sort=-views",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "b5LyysZ3nzI8MW0V",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "id": "d382bbb3-c737-4c7a-8e34-1836f0566010",
+      "name": "Ingest Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        700
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "https://shorts.interviewbuddy.cloud/performance/ingest",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 90000
+        }
+      }
     }
   ],
   "pinData": {},
@@ -1106,7 +1225,7 @@
       "main": [
         [
           {
-            "node": "Get Topic History",
+            "node": "Get Channel Insights",
             "type": "main",
             "index": 0
           }
@@ -1345,6 +1464,61 @@
         [
           {
             "node": "Loop Over Scenes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Channel Insights": {
+      "main": [
+        [
+          {
+            "node": "Get Topic History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleanup: Delete Local Render": {
+      "main": [
+        [
+          {
+            "node": "Log Published Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Measure Schedule": {
+      "main": [
+        [
+          {
+            "node": "Build Analytics Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Analytics Window": {
+      "main": [
+        [
+          {
+            "node": "YouTube: Video Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube: Video Analytics": {
+      "main": [
+        [
+          {
+            "node": "Ingest Analytics",
             "type": "main",
             "index": 0
           }
