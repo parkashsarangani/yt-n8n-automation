@@ -11,7 +11,7 @@ n8n (workflow orchestration)
   │
   ├─ Claude API — open-ended topic selection, script writing (2-stage), editorial review
   ├─ ElevenLabs — text-to-speech with word-level timestamps
-  ├─ Pexels API — stock VIDEO clips for scenes that need real footage
+  ├─ Pexels API — stock VIDEO clips and PHOTOS for scenes that need real footage
   ├─ shorts-compose (this repo) — hybrid video assembly, async job-polling
   │    ├─ Remotion (React) — studio motion graphics (stat reveals, comparisons,
   │    │    kinetic text) with spring animations, easing curves, and proper
