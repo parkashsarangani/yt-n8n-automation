@@ -603,7 +603,7 @@
     },
     {
       "parameters": {
-        "url": "=https://api.pexels.com/v1/videos/search",
+        "url": "=https://api.pexels.com/videos/search",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendQuery": true,
@@ -643,7 +643,8 @@
       },
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
