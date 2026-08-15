@@ -3,7 +3,7 @@
 A fully automated pipeline that generates, voices, composes, and uploads
 YouTube Shorts — posting **3×/day** with zero manual intervention. Each video is
 a punchy **20–30s single-fact Short**: one surprising, counterintuitive fact
-about an instantly recognizable subject, with cinematic stills, per-word
+about an instantly recognizable subject, with cinematic visuals, per-word
 captions, and a spoken engagement beat.
 
 ## Architecture
@@ -14,20 +14,22 @@ n8n (workflow orchestration, Europe/Berlin, 3× daily: 14:00 / 19:00 / 22:00)
   ├─ Claude API — topic selection (single curiosity facts), 2-stage script
   │    (draft → editorial rewrite), validation with auto-retry
   ├─ ElevenLabs — text-to-speech with word-level timestamps (per scene)
-  ├─ fal.ai (Flux [dev]) — text-to-image, one still per scene, matched to
-  │    the narration (bright, vibrant, 1024×1792)
-  │    └─ (optional) fal.ai image→video for hook/payoff — OFF by default
-  ├─ shorts-compose (this repo) — video assembly, async job-polling
+  ├─ Pexels API — stock VIDEO clips and PHOTOS for scenes that need real footage
+  │    └─ Video search first, automatic photo fallback if no video found
+  ├─ shorts-compose (this repo) — hybrid video assembly, async job-polling
   │    ├─ Remotion (React) — studio motion-graphics templates (stat reveals,
   │    │    comparisons, kinetic text) with spring physics and web typography
-  │    ├─ FFmpeg — one continuous eased Ken Burns per still, bright/punchy
-  │    │    color grade, gapless voice, ducked music, final encode
-  │    ├─ Hard cuts between scenes (no crossfades), one payoff accent
-  │    │    (soft riser → impact) at the reveal — no per-cut SFX, no vignette
+  │    ├─ FFmpeg — stock video processing (scale/crop/grade), eased Ken Burns
+  │    │    on photos, audio normalization, music ducking, SFX mixing,
+  │    │    crossfade transitions, and final encoding (CRF 16, BT.709)
+  │    ├─ Split-tone color science per mood (warm highlights + cool shadows,
+  │    │    shadow lift, highlight rolloff, cinematic vignette)
+  │    ├─ Scene transitions: 0.4s crossfades between all scenes via xfade
+  │    ├─ Sound design: whoosh + sub-bass on every cut, impact + riser on
+  │    │    template reveals, gently-ducked background music (ratio 4, shaped)
   │    ├─ Per-word "karaoke" captions burned via ASS, with active-word pop
-  │    ├─ Mid-video comment prompt (comment_hook) + spoken share outro card
-  │    └─ Final: BT.709 colorspace, high profile, CRF 16, faststart
-  └─ YouTube Data API — upload as draft, AI-content disclosure
+  │    └─ Final: fade-in/out, BT.709 colorspace, high profile 4.1, faststart
+  └─ YouTube Data API — upload, AI-content disclosure
 ```
 
 All of this is self-hosted on a local Ubuntu server, exposed via a Cloudflare
@@ -49,7 +51,7 @@ render time, but the async job-polling pattern already handles it.
 The split:
 - **Remotion**: template scenes (stat_reveal, comparison, kinetic_text),
   including the branded outro card
-- **FFmpeg**: image (Ken Burns) scenes, color grade, audio mixing, captions,
+- **FFmpeg**: stock video/image scenes, color grade, audio mixing, captions,
   concatenation, and final encoding
 
 ### Why async job-polling
@@ -94,7 +96,7 @@ docker-compose.yml             - deploys n8n + shorts-compose
 
 - Anthropic (Claude) API key
 - ElevenLabs API key + voice ID
-- **fal.ai API key** (for Flux image generation)
+- Pexels API key (HTTP Header Auth in n8n)
 - YouTube Data API v3 (OAuth2 for upload)
 
 n8n stores credentials separately from the workflow file by design — none are
@@ -106,15 +108,8 @@ Set in the server environment / `.env`:
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `FAL_KEY` | *(empty)* | fal.ai key for the **optional** image→video step. Raw key, no `Key ` prefix. |
-| `FAL_VIDEO_ENABLED` | `false` | Master switch for AI video. **Off** — stills are used. Set `true` (and provide `FAL_KEY`) to re-enable. |
-| `FAL_VIDEO_MODEL` | `fal-ai/ltx-video/image-to-video` | Swappable model. Step up (e.g. `fal-ai/wan/v2.2-a14b/image-to-video`) for higher fidelity if re-enabling video. |
 | `TOPIC_HISTORY_PATH` | `/app/data/topic_history.json` | Dedup state (persisted, see below). |
 | `OUTPUT_DIR` | `/app/outputs` | Rendered videos (persisted). |
-
-> **AI video is off by default.** The budget image→video model warped stills
-> into irrelevant footage, so the pipeline ships the (much-improved) Ken-Burns
-> stills instead. See "Known limitations".
 
 ### 3. Deploy the stack
 
@@ -167,25 +162,24 @@ npx remotion studio
    branded card — voiced by the same TTS, not silent.
 5. **Validation** — non-throwing check that triggers automatic retry with a
    fresh topic on failure; injects the spoken outro scene.
-6. **Visual assembly** — each scene is either a **fal.ai Flux still** (rendered
-   with one continuous eased Ken Burns move) or a Remotion motion-graphics
-   template, based on whether the beat is depictable or a number/comparison.
-7. **Compose** — FFmpeg + Remotion assemble the scenes with a bright, punchy
-   color grade, hard cuts, one payoff accent, per-word karaoke captions, gapless
+6. **Visual assembly** — each scene is either a **Pexels stock video/photo**
+   (videos processed directly, photos rendered with eased Ken Burns) or a
+   Remotion motion-graphics template, based on whether the beat is depictable
+   or a number/comparison.
+7. **Compose** — FFmpeg + Remotion assemble the scenes with split-tone color
+   grading, crossfade transitions, per-word karaoke captions, gapless
    voiceover, (optional) ducked music, and a BT.709-flagged final encode.
 
 ## Editing / quality notes
 
-Current look and feel, and where it landed after iteration:
-
 | Area | Current approach |
 |------|------------------|
-| Cuts | **Hard cuts** between scenes (crossfades removed — they muddied the pacing) |
-| Color grade | **Bright, punchy** contrast S-curve: near-true blacks, full whites, lifted contrast/saturation per mood. No shadow-lift haze, **no vignette** |
-| Motion | **One continuous** sinusoidal-eased Ken Burns per still (no restart-zoom); stronger push-in on the payoff |
-| Source | fal.ai stills at **1024×1792** for a sharper base before the Ken Burns upscale |
+| Cuts | **Crossfade transitions** (0.4s) between scenes via xfade |
+| Color grade | **Split-tone** per mood: warm highlights + cool shadows, shadow lift, highlight rolloff, cinematic vignette |
+| Motion | Stock video (direct) or **eased Ken Burns** on photos with sinusoidal motion |
+| Source | **Pexels** stock video (preferred) with automatic photo fallback |
 | Captions | Per-word ASS burn-in with active-word scale "pop"; gold/green highlight for keywords and numbers |
-| Sound design | **One** intentional accent at the payoff (soft riser → impact). No per-cut SFX, no transition whoosh |
+| Sound design | Whoosh + sub-bass on every cut, impact + riser on template reveals |
 | Voice | **Gapless** rejoin of per-scene TTS (single loudnorm, no AAC-priming clicks at scene seams) |
 | Music | Gently ducked under the voice when a per-mood track exists (none committed by default) |
 | Encoding | CRF 16, high profile, BT.709 primaries/trc/colorspace, faststart, 1080×1920 @ 30fps |
@@ -198,10 +192,8 @@ USA). Change the cron expressions in the workflow's Schedule Trigger to adjust.
 
 ## External paid APIs
 
-Anthropic (Claude), ElevenLabs (TTS), and fal.ai (Flux image generation) all
-bill per run — and scale with the 3×/day cadence. The fal image→video step is
-**off by default** and adds no cost unless re-enabled. YouTube Data API is free
-within quota.
+Anthropic (Claude), ElevenLabs (TTS), and Pexels (stock media) are the external
+APIs. Pexels is free for most use cases. YouTube Data API is free within quota.
 
 ## Licensing notes for bundled assets
 
@@ -212,9 +204,6 @@ no third-party licensing.
 
 ## Known limitations / open items
 
-- **AI image→video is disabled by default** — the budget LTX model produced
-  incoherent, off-topic clips. Re-enable via `FAL_VIDEO_ENABLED=true` + `FAL_KEY`,
-  ideally with a higher-fidelity `FAL_VIDEO_MODEL`.
 - No music tracks are committed, so videos render without a soundtrack until
   per-mood files are added to `shorts-compose/music/`.
 - CC-BY attribution for the icon set is not yet added to the channel.
