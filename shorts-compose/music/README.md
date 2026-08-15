@@ -1,8 +1,9 @@
 # Signature music (channel identity)
 
-> **Current `signature.mp3`:** "Quirky" from [Pixabay Music](https://pixabay.com/music/)
-> — Pixabay Content License (free for commercial use, **no attribution required**).
-> Swap it any time by replacing this file.
+> **Current `signature.mp3`:** a cinematic "dark curiosity / tension-build
+> ambient" track (chrysalyn) — user-selected, appears to be a Pixabay Content
+> License track (free commercial use, no attribution). ~30s; the mixer loops it
+> (`aloop`) to cover any video length. Swap it any time by replacing this file.
 
 
 Drop a single track here named **`signature.mp3`**. Whenever it exists,

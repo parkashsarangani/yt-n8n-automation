@@ -920,9 +920,10 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     const mixLabels = ["1:a"];
 
     if (hasMusic) {
-      // Gentler ducking: ratio 4 instead of 10, shaped attack/release
-      audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=0.15[music]`);
-      audioFilters.push(`[music][1:a]sidechaincompress=threshold=0.04:ratio=4:attack=20:release=200[duckedmusic]`);
+      // Music is a quiet BED: low base level, and hard sidechain ducking so the
+      // voiceover always sits clearly on top (voice [1:a] is the trigger).
+      audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=0.09[music]`);
+      audioFilters.push(`[music][1:a]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=250[duckedmusic]`);
       mixLabels.push("duckedmusic");
     }
 
