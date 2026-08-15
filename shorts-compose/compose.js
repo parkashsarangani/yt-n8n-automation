@@ -42,20 +42,10 @@ const FPS = 30;
 // Detect video encoder hardware support (libx264 fallback)
 const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 
-// Hybrid AI-video: animate the hook + payoff stills into short clips for real
-// motion (the rest stay Ken-Burns stills). Any failure falls back to the
-// still, so a bad/blocked clip never kills a video.
-//
-// OFF BY DEFAULT. The budget LTX model warped stills into irrelevant footage,
-// so we ship the (much-improved) Ken-Burns stills instead. To re-enable, set
-// FAL_VIDEO_ENABLED=true AND provide FAL_KEY - and ideally step FAL_VIDEO_MODEL
-// up to a higher-fidelity model (e.g. fal-ai/wan/v2.2-a14b/image-to-video)
-// since LTX's coherence is the reason it was turned off.
-const FAL_KEY = process.env.FAL_KEY || "";
-const FAL_VIDEO_ENABLED = /^(1|true|yes)$/i.test(process.env.FAL_VIDEO_ENABLED || "");
-const FAL_VIDEO_MODEL = process.env.FAL_VIDEO_MODEL || "fal-ai/ltx-video/image-to-video";
-const FAL_VIDEO_PROMPT =
-  "Subtle cinematic camera motion - a slow push-in with gentle parallax. Keep the subject, composition and scene EXACTLY as in the source image; only add natural camera movement and soft ambient motion. Photorealistic and stable. No warping, no morphing, no new or changing objects, no distortion of faces or text.";
+// AI image/video generation (fal) has been removed. All b-roll now comes from
+// real sources via the /resolve-broll resolver (Pexels photos + videos,
+// Unsplash, Wikipedia), so scenes are either a real stock video, a real photo
+// with Ken-Burns motion, or a Remotion template - never AI-generated.
 
 // Fixed engagement outro appended to every video. 2.5s gives the four
 // asks (comment, like, share, follow) room to land - the KineticText
@@ -252,28 +242,6 @@ function renderRemotion(compositionId, outputPath, durationSec, props) {
       resolve(outputPath);
     });
   });
-}
-
-// ---------------------------------------------------------------------------
-// AI Image -> Video (fal image-to-video, e.g. LTX) for hook/payoff motion
-// ---------------------------------------------------------------------------
-
-// Animate a still (the fal image URL) into a short clip. Uses the synchronous
-// fal.run endpoint; returns the downloaded clip path. Callers wrap this in a
-// try/catch and fall back to the Ken-Burns still on any failure.
-async function generateVideoFromImage(imageUrl, outPath) {
-  const res = await axios.post(
-    `https://fal.run/${FAL_VIDEO_MODEL}`,
-    { image_url: imageUrl, prompt: FAL_VIDEO_PROMPT },
-    {
-      headers: { Authorization: `Key ${FAL_KEY}`, "Content-Type": "application/json" },
-      timeout: 180000,
-    }
-  );
-  const url = res.data?.video?.url || res.data?.videos?.[0]?.url;
-  if (!url) throw new Error("fal video model returned no video url: " + JSON.stringify(res.data).slice(0, 300));
-  await downloadFile(url, outPath);
-  return outPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -794,26 +762,9 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
             })
           );
 
-          // Hybrid: animate the hook (first) and payoff scenes into real
-          // motion clips; keep the middle as Ken-Burns stills. Any failure
-          // (no key, model error, timeout) falls back to the still so a bad
-          // clip never breaks the video.
-          const animate = FAL_VIDEO_ENABLED && FAL_KEY && (i === 0 || i === emphasisIdx);
-          let animated = false;
-          if (animate) {
-            try {
-              const clipPath = path.join(tmpDir, `clip_${i}.mp4`);
-              await generateVideoFromImage(imageUrls[0], clipPath);
-              await buildStockVideoScene(clipPath, audioPath, duration, outPath, i, mood);
-              animated = true;
-              console.log(`[ltx] animated scene ${i} (${i === 0 ? "hook" : "payoff"})`);
-            } catch (e) {
-              console.warn(`[ltx] animation failed for scene ${i} (${e.message}) - using still`);
-            }
-          }
-          if (!animated) {
-            await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood, i === emphasisIdx);
-          }
+          // Real photo scenes get an eased Ken-Burns move (real stock VIDEO
+          // scenes are handled above via buildStockVideoScene). No AI animation.
+          await buildImageScene(imagePaths, audioPath, duration, outPath, i, mood, i === emphasisIdx);
         }
 
         return { path: outPath, duration };
@@ -983,8 +934,9 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
 // ---------------------------------------------------------------------------
 // B-roll resolution: pick the best REAL asset for a scene from multiple free
 // sources (Pexels photos/videos, Unsplash, Wikipedia), ranked by AI-vision
-// relevance. Returns { ok:true, type, url, source, attribution } or
-// { ok:false } - the caller (n8n) then falls back to AI generation.
+// relevance. Always returns a real asset { ok:true, type, url, source, ... }
+// when any source has a match (no AI fallback); { ok:false } only if every
+// source is empty/unreachable.
 // ---------------------------------------------------------------------------
 app.post("/resolve-broll", async (req, res) => {
   try {
@@ -992,7 +944,6 @@ app.post("/resolve-broll", async (req, res) => {
     const result = await resolveBroll({ query, subject, description });
     res.json(result);
   } catch (e) {
-    // never hard-fail: on error, tell the caller to use the AI fallback
     res.json({ ok: false, reason: "error", error: String((e && e.message) || e) });
   }
 });
