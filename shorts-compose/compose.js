@@ -450,6 +450,33 @@ async function buildImageScene(imagePaths, audioPath, duration, outPath, sceneId
 // Template Scene Processing (Remotion — studio motion graphics)
 // ---------------------------------------------------------------------------
 
+// Best-effort card for when Remotion is unavailable (render crash / no output).
+// A brand-dark background + the template's key text, muxed with the scene audio,
+// so ONE template failure degrades gracefully instead of failing the whole video
+// (the outro is a template too, so a Remotion break would otherwise kill every
+// render). Text is heavily sanitised for a drawtext filter.
+async function buildTemplateFallback(templateName, templateData, duration, audioPath, outPath) {
+  let text;
+  if (templateName === "stat_reveal") text = [templateData?.statValue, templateData?.label].filter(Boolean).join("  ");
+  else if (templateName === "comparison") text = [templateData?.leftValue, "vs", templateData?.rightValue].filter(Boolean).join("  ");
+  else text = templateData?.line || "";
+  const safe = String(text || "").replace(/[\\:'%{}\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 42) || " ";
+  const draw = `drawtext=font=Inter:text='${safe}':fontcolor=0xF0D070:fontsize=84:x=(w-text_w)/2:y=(h-text_h)/2:borderw=4:bordercolor=0x000000`;
+  await runAudioMux((normalize) => {
+    const opts = ["-map", "[v]", "-map", "1:a", "-t", String(duration)];
+    if (normalize) opts.push("-af", "loudnorm=I=-16:TP=-1.5:LRA=11");
+    opts.push("-c:v", V_ENCODER, "-r", String(FPS), "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k");
+    return ffmpeg()
+      .input(`color=c=0x0A0E1A:s=${TARGET_W}x${TARGET_H}:r=${FPS}`)
+      .inputOptions(["-f", "lavfi", "-t", String(duration + 0.2)])
+      .input(audioPath)
+      .complexFilter([`[0:v]${draw}[v]`])
+      .outputOptions(opts)
+      .output(outPath);
+  });
+  return outPath;
+}
+
 async function buildTemplateScene(templateName, templateData, duration, audioPath, outPath, tmpDir, mood) {
   // Map template names to Remotion composition IDs
   const compositionMap = {
@@ -478,9 +505,19 @@ async function buildTemplateScene(templateName, templateData, duration, audioPat
     props.line = templateData?.line || "";
   }
 
-  // Render template via Remotion
+  // Render template via Remotion. If it produces nothing (exited without writing
+  // the file, or a render crash), fall back to a simple card so one template
+  // failure never kills the whole video.
   const templateVideoPath = path.join(tmpDir, `remotion_${templateName}_${Date.now()}.mp4`);
-  await renderRemotion(compositionId, templateVideoPath, duration, props);
+  try {
+    await renderRemotion(compositionId, templateVideoPath, duration, props);
+    if (!fs.existsSync(templateVideoPath) || fs.statSync(templateVideoPath).size < 1024) {
+      throw new Error("Remotion exited without a valid output file (check [remotion stderr] in the compose logs)");
+    }
+  } catch (e) {
+    console.warn(`[template] ${templateName} render failed (${e.message}) - using text-card fallback`);
+    return await buildTemplateFallback(templateName, templateData, duration, audioPath, outPath);
+  }
 
   // Mux Remotion video with audio
   const templateDuration = await ffprobeDuration(templateVideoPath);
