@@ -37,10 +37,11 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
 const DISTILL_MODEL = process.env.COMPETITOR_DISTILL_MODEL || process.env.STRATEGIST_MODEL || "claude-sonnet-5";
 
 const WINDOW_DAYS = Number(process.env.COMPETITOR_WINDOW_DAYS || 45);
-// YouTube's own Shorts cutoff is 180s; 90s keeps us to the punchy single-fact
-// format family (our channel is 20-30s) while still capturing the 60-90s fact
-// Shorts that a 60s cap was wrongly excluding.
-const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 90);
+// YouTube's own Shorts cutoff is 180s. Use the full 180 so we capture the many
+// fact channels that post 90-180s (often multi-fact compilation) Shorts - a 90s
+// cap left most of them at 0. Single-fact channels (like Zack D. Films, ~20-40s)
+// still give the richest topic signal because their title IS the fact.
+const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 180);
 const OUTLIER_MULTIPLE = Number(process.env.COMPETITOR_OUTLIER_MULTIPLE || 3);
 const OUTLIER_MIN_VIEWS = Number(process.env.COMPETITOR_OUTLIER_MIN_VIEWS || 50000);
 const MIN_SHORTS_FOR_BASELINE = Number(process.env.COMPETITOR_MIN_SHORTS || 5);
