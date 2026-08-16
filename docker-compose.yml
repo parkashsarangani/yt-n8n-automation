@@ -31,6 +31,13 @@ services:
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
+      # Competitor outlier mining (/competitors/mine): a YouTube Data API v3 key
+      # (public data only - NOT the OAuth analytics credential). If empty, the
+      # weekly mine call fails cleanly and the topic generator just runs without
+      # competitor signals. Create one in the same Google Cloud project that
+      # already has the YouTube Data API enabled: APIs & Services -> Credentials
+      # -> Create credentials -> API key.
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
       # Channel identity: the persistent on-screen wordmark (gold, top of frame).
       - CHANNEL_WORDMARK=${CHANNEL_WORDMARK:-Favourite Facts}
     volumes:

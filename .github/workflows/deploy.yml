@@ -28,6 +28,9 @@ jobs:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          # YouTube Data API v3 key for competitor outlier mining (public data
+          # only). Add as a repo secret. Empty = weekly mine is a clean no-op.
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: |
           set -e
 

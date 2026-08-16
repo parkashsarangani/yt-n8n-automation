@@ -20,6 +20,7 @@ const ffmpegPath = require("ffmpeg-static");
 const { execFile } = require("child_process");
 const { resolveBroll } = require("./brollResolver");
 const feedback = require("./feedbackLoop");
+const competitors = require("./competitorMining");
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
@@ -127,6 +128,31 @@ app.post("/performance/ingest", async (req, res) => {
 app.get("/channel-insights", async (req, res) => {
   try {
     res.json(await feedback.getInsights());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Competitor outlier mining: watch comparable fact/curiosity Shorts channels,
+// find what is breaking out for them, and distill transferable topic/angle
+// signals the topic generator can lean toward. Run weekly from n8n.
+// ---------------------------------------------------------------------------
+
+// Weekly job hits this: scan the watchlist, distill, persist competitor_signals.
+app.post("/competitors/mine", async (req, res) => {
+  try {
+    const summary = await competitors.mine();
+    res.json({ success: true, ...summary });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// The topic generator reads this alongside channel-insights before picking a topic.
+app.get("/competitors/signals", async (req, res) => {
+  try {
+    res.json(await competitors.getSignals());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

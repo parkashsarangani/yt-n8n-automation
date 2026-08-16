@@ -1,0 +1,17 @@
+{
+  "_comment": "Watchlist for competitor outlier mining (/competitors/mine). Each week the miner pulls each channel's recent SHORTS, finds the ones that beat that channel's OWN median views (an outlier - a breakout, normalized per channel so a small channel is judged fairly against a giant one), and distills the transferable topic/angle patterns into competitor_signals.json, which the topic generator reads as inspiration. It NEVER copies titles. Edit this list freely: add a channel with either a channel_id (UC...) or a handle (@name) - at least one is required; the miner resolves and validates each at runtime and reports any it could not resolve. 'tier' is documentation only: 'core' = pure single-fact/curiosity Shorts in this channel's exact format; 'benchmark' = large mixed fact channels included for reach signal (only their Shorts count).",
+  "channels": [
+    { "name": "Zack D. Films", "channel_id": "UCvz84_Q0BbvZThy75mbd-Dg", "handle": "@zackdfilms", "tier": "core", "note": "The format benchmark: single animated fact per Short, body/space/how-things-work, ~28M subs." },
+    { "name": "Factnomenal", "handle": "@Factnomenal", "tier": "core", "note": "Space and cosmic curiosity Shorts, ~800K subs." },
+    { "name": "FactoFusion", "handle": "@FactoFusion", "tier": "core", "note": "Creepy/shocking/mysterious world facts, heavy Shorts output." },
+    { "name": "Body Hub", "handle": "@BodyHub", "tier": "core", "note": "Human body hacks and facts - overlaps your body/brain category." },
+    { "name": "Interesting Facts", "channel_id": "UCV-oV8yecSfMZnzdKAhO_4A", "tier": "core", "note": "General interesting-facts Shorts, ~3.6M subs." },
+    { "name": "Knowledge Detection", "channel_id": "UCFurkM2cX7ZDs__IS59sh9A", "tier": "core", "note": "Psychology/history/general-knowledge facts, ~340K subs." },
+    { "name": "Elite Facts", "channel_id": "UCKXpm9r0WE-0xdJl6hjyT8g", "tier": "core", "note": "Daily world facts, ~670K subs." },
+    { "name": "Daily Fun Facts", "channel_id": "UC-JZxrh6AMieCyzuU5ZW3Ow", "tier": "core", "note": "Fun-fact Shorts, ~400K subs." },
+    { "name": "FactTechz", "channel_id": "UCGdPm5Aq081vVD7ih9jZf6Q", "tier": "benchmark", "note": "Amazing facts across nature/tech/psychology, ~21M subs; high-reach benchmark." },
+    { "name": "MostAmazingTop10", "channel_id": "UCBINYCmwE29fBXCpUI8DgTA", "tier": "benchmark", "note": "Mysterious/strange/scary facts, ~7.8M subs; benchmark (its Shorts only)." },
+    { "name": "Matthew Santoro", "channel_id": "UCXhSCMRRPyxSoyLSPFxK7VA", "tier": "benchmark", "note": "Amazing/creepy/mystery facts, ~5.9M subs; benchmark." },
+    { "name": "American Eye", "channel_id": "UC8cP3F7DseB_k-D1Afmstzw", "tier": "benchmark", "note": "Interesting topics and perfectly-timed phenomena, ~940K subs; benchmark." }
+  ]
+}
