@@ -38,6 +38,11 @@ services:
       # already has the YouTube Data API enabled: APIs & Services -> Credentials
       # -> Create credentials -> API key.
       - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
+      # Optional override for the competitor watchlist: a comma-separated list of
+      # @handles and/or UC... channel IDs. Set via a GitHub secret to change the
+      # list without a code edit (applies on the next deploy). Empty = use the
+      # curated default in shorts-compose/competitors.json.
+      - COMPETITOR_CHANNELS=${COMPETITOR_CHANNELS:-}
       # Channel identity: the persistent on-screen wordmark (gold, top of frame).
       - CHANNEL_WORDMARK=${CHANNEL_WORDMARK:-Favourite Facts}
     volumes:

@@ -36,13 +36,16 @@ const YT_KEY = process.env.YOUTUBE_API_KEY || "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
 const DISTILL_MODEL = process.env.COMPETITOR_DISTILL_MODEL || process.env.STRATEGIST_MODEL || "claude-sonnet-5";
 
-const WINDOW_DAYS = Number(process.env.COMPETITOR_WINDOW_DAYS || 30);
-const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 60);
+const WINDOW_DAYS = Number(process.env.COMPETITOR_WINDOW_DAYS || 45);
+// YouTube's own Shorts cutoff is 180s; 90s keeps us to the punchy single-fact
+// format family (our channel is 20-30s) while still capturing the 60-90s fact
+// Shorts that a 60s cap was wrongly excluding.
+const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 90);
 const OUTLIER_MULTIPLE = Number(process.env.COMPETITOR_OUTLIER_MULTIPLE || 3);
 const OUTLIER_MIN_VIEWS = Number(process.env.COMPETITOR_OUTLIER_MIN_VIEWS || 50000);
 const MIN_SHORTS_FOR_BASELINE = Number(process.env.COMPETITOR_MIN_SHORTS || 5);
 const MAX_OUTLIERS = Number(process.env.COMPETITOR_MAX_OUTLIERS || 30);
-const UPLOADS_TO_SCAN = Number(process.env.COMPETITOR_UPLOADS_SCAN || 50); // per channel
+const UPLOADS_TO_SCAN = Number(process.env.COMPETITOR_UPLOADS_SCAN || 100); // per channel
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
 
@@ -55,7 +58,27 @@ async function readJson(p, fallback) {
   catch { return fallback; }
 }
 
+// One comma-separated token -> a watchlist entry. A token is either a channel
+// ID ("UC...." 24 chars) or a handle ("@name" or bare "name").
+function parseChannelToken(tok) {
+  const t = String(tok || "").trim();
+  if (!t) return null;
+  if (/^UC[A-Za-z0-9_-]{22}$/.test(t)) return { channel_id: t, name: t };
+  return { handle: t, name: t }; // resolveChannel strips a leading @ if present
+}
+
+// Watchlist source, in priority order:
+//   1. COMPETITOR_CHANNELS env - a comma-separated list of @handles and/or
+//      UC... channel IDs, set via a GitHub secret so the list is configurable
+//      without a code change. It is an env var, so a change to the secret takes
+//      effect on the next deploy (container restart), not instantly.
+//   2. competitors.json - the curated default baked into the image.
 function loadWatchlist() {
+  const env = (process.env.COMPETITOR_CHANNELS || "").trim();
+  if (env) {
+    const list = env.split(",").map(parseChannelToken).filter(Boolean);
+    if (list.length) return list;
+  }
   try {
     const raw = JSON.parse(fs.readFileSync(WATCHLIST_PATH, "utf8"));
     return Array.isArray(raw.channels) ? raw.channels : [];

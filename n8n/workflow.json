@@ -25,8 +25,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        12000,
-        8864
+        300,
+        300
       ]
     },
     {
@@ -39,8 +39,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        12208,
-        8864
+        1200,
+        300
       ],
       "continueOnFail": true
     },
@@ -53,8 +53,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        12368,
-        8864
+        1500,
+        300
       ]
     },
     {
@@ -88,8 +88,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        12784,
-        8864
+        2100,
+        300
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -110,8 +110,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        13008,
-        8864
+        2400,
+        300
       ]
     },
     {
@@ -143,8 +143,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        13168,
-        8864
+        2700,
+        300
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -165,8 +165,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        13392,
-        8864
+        3000,
+        300
       ]
     },
     {
@@ -198,8 +198,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        13584,
-        8864
+        3300,
+        300
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -220,8 +220,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        13760,
-        8864
+        3600,
+        300
       ]
     },
     {
@@ -234,8 +234,8 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        14720,
-        8848
+        4200,
+        300
       ]
     },
     {
@@ -252,8 +252,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        14176,
-        8704
+        4200,
+        460
       ],
       "continueOnFail": true
     },
@@ -267,8 +267,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        14736,
-        8656
+        300,
+        460
       ]
     },
     {
@@ -303,8 +303,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        14768,
-        9008
+        4500,
+        300
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -326,8 +326,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        14944,
-        9312
+        4800,
+        300
       ]
     },
     {
@@ -340,8 +340,8 @@
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        15328,
-        8928
+        4800,
+        460
       ]
     },
     {
@@ -354,8 +354,8 @@
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        15088,
-        9312
+        5100,
+        300
       ]
     },
     {
@@ -365,8 +365,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
       "position": [
-        15568,
-        9008
+        5400,
+        300
       ]
     },
     {
@@ -378,8 +378,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        15792,
-        9008
+        5700,
+        300
       ]
     },
     {
@@ -391,8 +391,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        16208,
-        9008
+        7500,
+        300
       ]
     },
     {
@@ -411,8 +411,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        16432,
-        9008
+        7800,
+        300
       ]
     },
     {
@@ -434,8 +434,8 @@
       "type": "n8n-nodes-base.youTube",
       "typeVersion": 1,
       "position": [
-        16640,
-        9008
+        8100,
+        300
       ],
       "credentials": {
         "youTubeOAuth2Api": {
@@ -453,8 +453,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        15072,
-        8880
+        4500,
+        460
       ]
     },
     {
@@ -473,8 +473,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        16848,
-        9008
+        8400,
+        300
       ],
       "credentials": {
         "youTubeOAuth2Api": {
@@ -503,8 +503,8 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        12544,
-        8864
+        1800,
+        300
       ]
     },
     {
@@ -536,8 +536,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        13936,
-        8864
+        3900,
+        300
       ]
     },
     {
@@ -549,8 +549,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        14192,
-        8880
+        4200,
+        620
       ]
     },
     {
@@ -581,8 +581,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        14416,
-        8880
+        4500,
+        620
       ]
     },
     {
@@ -594,8 +594,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        14752,
-        8448
+        4800,
+        780
       ]
     },
     {
@@ -626,8 +626,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        15232,
-        8704
+        4800,
+        620
       ]
     },
     {
@@ -639,8 +639,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        15680,
-        8704
+        5100,
+        460
       ]
     },
     {
@@ -654,8 +654,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        17696,
-        9024
+        9000,
+        300
       ],
       "continueOnFail": true
     },
@@ -675,8 +675,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        16000,
-        9008
+        6000,
+        300
       ]
     },
     {
@@ -688,8 +688,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        16064,
-        9408
+        6300,
+        300
       ]
     },
     {
@@ -701,8 +701,8 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        16368,
-        9408
+        6600,
+        300
       ],
       "webhookId": "c6b97319-18f8-4e2e-ac0c-29d796c01e7c"
     },
@@ -718,8 +718,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        16656,
-        9408
+        6900,
+        300
       ]
     },
     {
@@ -750,8 +750,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        16864,
-        9408
+        7200,
+        300
       ]
     },
     {
@@ -763,8 +763,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        17088,
-        9392
+        7500,
+        460
       ]
     },
     {
@@ -795,8 +795,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        17344,
-        9392
+        7800,
+        460
       ]
     },
     {
@@ -808,8 +808,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        17568,
-        9408
+        8100,
+        460
       ]
     },
     {
@@ -818,8 +818,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        17280,
-        9024
+        8700,
+        300
       ],
       "onError": "continueRegularOutput",
       "retryOnFail": true,
@@ -850,8 +850,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        15180,
-        8760
+        5100,
+        620
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -871,8 +871,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        15640,
-        8640
+        5400,
+        460
       ],
       "parameters": {
         "jsCode": "const r = $json;\nconst sceneIndex = $('Split Out Scenes').item.json.scene_index;\nif (!r || r.ok !== true || !r.url) { throw new Error('Tag B-roll: no asset for scene ' + sceneIndex); }\nconst out = { scene_index: sceneIndex, _source: r.source || 'broll', _attribution: r.attribution || '' };\nif (r.type === 'video') { out.video_url = r.url; } else { out.images = [r.url]; }\nreturn { json: out };"
@@ -884,8 +884,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -400,
-        200
+        600,
+        300
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -902,8 +902,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        18200,
-        9024
+        9300,
+        300
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -923,8 +923,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        -400,
-        700
+        300,
+        1200
       ],
       "parameters": {
         "rule": {
@@ -943,8 +943,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -180,
-        700
+        600,
+        1200
       ],
       "parameters": {
         "jsCode": "const DAY = 86400000;\n// measure up to YESTERDAY (today is partial and drags averages down)\nconst end = new Date(Date.now() - DAY);\nconst start = new Date(end.getTime() - 27 * DAY); // 28-day window\nconst iso = (d) => d.toISOString().slice(0, 10);\nreturn { json: { startDate: iso(start), endDate: iso(end) } };"
@@ -956,8 +956,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        60,
-        700
+        1200,
+        1200
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -982,8 +982,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        300,
-        700
+        1500,
+        1200
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -1003,8 +1003,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -60,
-        700
+        900,
+        1200
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -1021,8 +1021,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        13008,
-        9064
+        2700,
+        460
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -1042,8 +1042,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -400,
-        440
+        900,
+        300
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -1060,8 +1060,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        -700,
-        980
+        300,
+        1620
       ],
       "parameters": {
         "rule": {
@@ -1080,8 +1080,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -420,
-        980
+        600,
+        1620
       ],
       "onError": "continueRegularOutput",
       "parameters": {

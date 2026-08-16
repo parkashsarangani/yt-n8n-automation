@@ -31,6 +31,10 @@ jobs:
           # YouTube Data API v3 key for competitor outlier mining (public data
           # only). Add as a repo secret. Empty = weekly mine is a clean no-op.
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          # Optional competitor watchlist override (comma-separated @handles/UC
+          # ids). Change this secret to edit the list without a code change;
+          # applies on the next deploy. Empty = competitors.json default.
+          COMPETITOR_CHANNELS: ${{ secrets.COMPETITOR_CHANNELS }}
         run: |
           set -e
 
