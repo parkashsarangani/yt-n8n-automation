@@ -57,6 +57,10 @@ async function logPublished(entry) {
     title: entry.title || null,
     comment_hook: entry.comment_hook || null,
     caption_style: entry.caption_style || null,
+    // The psychological trigger the hook leads with (curiosity_gap, disbelief,
+    // fear_stakes, scale_shock, taboo_secret). Lets the strategist compare which
+    // lever actually earns views instead of us assuming curiosity is always best.
+    trigger: entry.trigger || null,
     duration: entry.duration != null ? Number(entry.duration) : null,
     metrics: null, // filled in later by the measure step
   });
@@ -107,6 +111,7 @@ THE DISCIPLINE:
 - Small samples support small claims. With fewer than ~8 measured videos you cannot separate a real pattern from noise. Say so plainly in confidence_note and keep guidance short or empty.
 - If there are 0 measured videos, produce NO guidance: sample_size 0, confidence_note saying nothing is measured yet, empty guidance array. Do NOT substitute generic YouTube advice - the system already has opinions baked into its prompts.
 - Retention (average_view_percentage) is the metric you can usually trust; it reflects whether the video delivered what its hook/title promised. A high-view, low-retention video is a hook that oversold - a real finding even in small samples.
+- Each video carries a "trigger" - the psychological lever its hook leads with (curiosity_gap, disbelief, fear_stakes, scale_shock, taboo_secret). When one trigger clearly out- or under-performs the others on views AND you have at least ~2 videos per trigger, say so as trigger guidance with the numbers; otherwise treat trigger differences as noise and stay silent on them. Never recommend collapsing to a single trigger on thin data - variety is protective.
 - comments and shares are the escalation signals; near-zero across the board is itself a finding.
 - Only claim things about click_through_rate/impressions if those numbers are actually present (they are often null).
 - Evidence means naming the videos and the numbers. "shorter is better" is a hunch; "the 3 videos under 25s averaged 71% retention vs 48% for the rest" is a finding.
@@ -115,7 +120,7 @@ OUTPUT - respond with ONLY a JSON object, no prose, no markdown fences:
 {
   "sample_size": <integer, how many MEASURED videos the guidance rests on>,
   "confidence_note": "<what this sample can and cannot support - be specific about the limit>",
-  "guidance": [ { "area": "topic"|"hook"|"title"|"structure"|"length", "advice": "<what to do next time>", "evidence": "<the specific videos and numbers>" } ],
+  "guidance": [ { "area": "topic"|"hook"|"title"|"structure"|"length"|"trigger", "advice": "<what to do next time>", "evidence": "<the specific videos and numbers>" } ],
   "avoid": [ "<pattern that measurably underperformed, from evidence only>" ]
 }
 Prefer three well-grounded items to eight padded ones. Every item is read by another agent and acted on.`;
@@ -127,6 +132,7 @@ async function runStrategist(history) {
     topic: h.topic,
     hook: h.hook,
     title: h.title,
+    trigger: h.trigger,
     duration_sec: h.duration,
     metrics: h.metrics,
   }));
