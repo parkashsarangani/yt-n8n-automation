@@ -37,11 +37,13 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
 const DISTILL_MODEL = process.env.COMPETITOR_DISTILL_MODEL || process.env.STRATEGIST_MODEL || "claude-sonnet-5";
 
 const WINDOW_DAYS = Number(process.env.COMPETITOR_WINDOW_DAYS || 45);
-// YouTube's own Shorts cutoff is 180s. Use the full 180 so we capture the many
-// fact channels that post 90-180s (often multi-fact compilation) Shorts - a 90s
-// cap left most of them at 0. Single-fact channels (like Zack D. Films, ~20-40s)
-// still give the richest topic signal because their title IS the fact.
-const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 180);
+// 90s: the real fix for channels stuck at 0 recent_shorts was switching from
+// the uploads playlist to search.list (see recentVideoIds) - that quirk, not
+// the duration cap, was hiding their Shorts. Raising this to 180 previously
+// only diluted outlier detection (it let long compilation videos into the
+// median), so keep it at 90 to stay in the punchy single-fact format family
+// this channel is measured against.
+const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 90);
 const OUTLIER_MULTIPLE = Number(process.env.COMPETITOR_OUTLIER_MULTIPLE || 3);
 const OUTLIER_MIN_VIEWS = Number(process.env.COMPETITOR_OUTLIER_MIN_VIEWS || 50000);
 const MIN_SHORTS_FOR_BASELINE = Number(process.env.COMPETITOR_MIN_SHORTS || 5);
@@ -114,10 +116,10 @@ async function resolveChannel(entry) {
   try {
     let data;
     if (entry.channel_id) {
-      data = await ytGet("channels", { part: "contentDetails,statistics,snippet", id: entry.channel_id });
+      data = await ytGet("channels", { part: "statistics,snippet", id: entry.channel_id });
     } else if (entry.handle) {
       const handle = String(entry.handle).replace(/^@/, "");
-      data = await ytGet("channels", { part: "contentDetails,statistics,snippet", forHandle: handle });
+      data = await ytGet("channels", { part: "statistics,snippet", forHandle: handle });
     } else {
       return null;
     }
@@ -125,32 +127,34 @@ async function resolveChannel(entry) {
     if (!item) return null;
     return {
       id: item.id,
-      uploads: item.contentDetails.relatedPlaylists.uploads,
       title: item.snippet.title,
       subs: Number(item.statistics.subscriberCount || 0),
     };
   } catch { return null; }
 }
 
-// Recent uploads within the window -> list of videoIds.
-async function recentUploadIds(uploadsPlaylist) {
-  const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
+// Recent videos (including Shorts) within the window -> list of videoIds.
+//
+// Uses search.list, NOT the channel's uploads playlist. A channel's uploads
+// playlist frequently OMITS Shorts (a long-standing YouTube Data API quirk) -
+// that is why shorts-native channels like Feliz/BrainBlud came back with 0.
+// search.list?type=video returns Shorts reliably (a Short is a video). It costs
+// 100 quota units/call vs 1 for playlistItems, but at ~7 channels/week that is
+// still a tiny fraction of the 10,000/day quota.
+async function recentVideoIds(channelId) {
+  const publishedAfter = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const ids = [];
   let pageToken;
-  // one or two pages is plenty for a month of a shorts channel
-  for (let page = 0; page < Math.ceil(UPLOADS_TO_SCAN / 50); page++) {
-    const data = await ytGet("playlistItems", {
-      part: "contentDetails", playlistId: uploadsPlaylist, maxResults: 50, pageToken,
+  for (let page = 0; page < Math.max(1, Math.ceil(UPLOADS_TO_SCAN / 50)); page++) {
+    const data = await ytGet("search", {
+      part: "id", channelId, type: "video", order: "date",
+      maxResults: 50, publishedAfter, pageToken,
     });
     for (const it of data.items || []) {
-      const pub = new Date(it.contentDetails.videoPublishedAt || 0).getTime();
-      if (pub >= cutoff) ids.push(it.contentDetails.videoId);
+      if (it.id && it.id.videoId) ids.push(it.id.videoId);
     }
     pageToken = data.nextPageToken;
     if (!pageToken) break;
-    // stop early if the last page already fell entirely outside the window
-    const last = data.items && data.items[data.items.length - 1];
-    if (last && new Date(last.contentDetails.videoPublishedAt || 0).getTime() < cutoff) break;
   }
   return ids;
 }
@@ -185,7 +189,7 @@ async function scanCompetitors() {
     const ch = await resolveChannel(entry);
     if (!ch) { unresolved.push(entry.name || entry.handle || entry.channel_id || "unknown"); continue; }
 
-    const ids = await recentUploadIds(ch.uploads);
+    const ids = await recentVideoIds(ch.id);
     const vids = await videoStats(ids);
     const shorts = vids.filter((v) => v.sec != null && v.sec <= SHORT_MAX_SEC && v.views > 0);
     scanned.push({ name: ch.title, subs: ch.subs, recent_shorts: shorts.length });
