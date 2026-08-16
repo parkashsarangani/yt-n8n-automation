@@ -221,6 +221,29 @@ OUTPUT - respond with ONLY a JSON object, no prose, no markdown fences:
 }
 Prefer 4-8 strong signals to a long padded list. Every signal is read by our topic generator and acted on.`;
 
+// Robust JSON-object extraction from an LLM reply: strips code fences, then
+// walks balanced braces from the first "{" so trailing prose does not break the
+// parse and a truncated tail is reported as such rather than as a cryptic
+// "Expected ',' or ']'" from a naive lastIndexOf('}') slice.
+function extractJsonObject(text) {
+  let s = String(text || "").trim();
+  if (s.startsWith("```")) s = s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  const at = s.indexOf("{");
+  if (at < 0) throw new Error("no JSON object in reply: " + s.slice(0, 200));
+  let depth = 0, inStr = false, esc = false;
+  for (let i = at; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) return JSON.parse(s.slice(at, i + 1)); }
+  }
+  throw new Error("JSON object not closed - likely truncated by max_tokens: ..." + s.slice(Math.max(at, s.length - 160)));
+}
+
 async function distillSignals(outliers) {
   if (!outliers.length) {
     return { summary: "No breakout Shorts found in the window.", signals: [], avoid: [] };
@@ -233,26 +256,31 @@ async function distillSignals(outliers) {
     "https://api.anthropic.com/v1/messages",
     {
       model: DISTILL_MODEL,
-      max_tokens: 1800,
+      max_tokens: Number(process.env.COMPETITOR_DISTILL_MAX_TOKENS || 4000),
       messages: [{ role: "user", content: DISTILL_PROMPT(JSON.stringify(compact, null, 2)) }],
     },
     {
-      timeout: 60000,
+      timeout: 90000,
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     }
   );
+  if (res.data && res.data.stop_reason === "max_tokens") {
+    throw new Error("distiller reply hit max_tokens - raise COMPETITOR_DISTILL_MAX_TOKENS");
+  }
   const text = (res.data.content || []).map((b) => (b && b.text) || "").join("");
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0) throw new Error("distiller returned no JSON: " + text.slice(0, 200));
-  return JSON.parse(text.slice(start, end + 1));
+  return extractJsonObject(text);
 }
 
 // Full run: scan -> distill -> persist. Returns a summary for the caller.
 async function mine() {
   if (!YT_KEY) throw new Error("mine: YOUTUBE_API_KEY is not set");
   const { outliers, scanned, unresolved } = await scanCompetitors();
-  const distilled = await distillSignals(outliers);
+  // Distillation is best-effort: a bad Claude reply must NOT throw away a good
+  // scan. Persist the raw outliers regardless so we always keep the evidence.
+  let distilled = { summary: "", signals: [], avoid: [] };
+  let distill_error = null;
+  try { distilled = await distillSignals(outliers); }
+  catch (e) { distill_error = String((e && e.message) || e); }
   const signals = {
     generated_at: new Date().toISOString(),
     window_days: WINDOW_DAYS,
@@ -262,6 +290,7 @@ async function mine() {
     summary: distilled.summary || "",
     signals: distilled.signals || [],
     avoid: distilled.avoid || [],
+    distill_error, // null on success
     raw_outliers: outliers, // kept for transparency / manual review
   };
   await writeJson(SIGNALS_PATH, signals);
@@ -270,6 +299,7 @@ async function mine() {
     channels_unresolved: unresolved,
     outliers_found: outliers.length,
     signal_count: (distilled.signals || []).length,
+    distill_error,
     scanned,
   };
 }
@@ -282,6 +312,6 @@ async function getSignals() {
 }
 
 module.exports = {
-  mine, getSignals, scanCompetitors, distillSignals,
+  mine, getSignals, scanCompetitors, distillSignals, extractJsonObject,
   isoDurationToSec, median, loadWatchlist, SIGNALS_PATH,
 };
