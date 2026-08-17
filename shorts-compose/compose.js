@@ -55,10 +55,16 @@ const V_ENCODER = process.env.USE_NVENC ? "h264_nvenc" : "libx264";
 const OUTRO_DURATION_SEC = 2.5;
 const DEFAULT_OUTRO_LINE = "Comment, like, share, and follow";
 
-// Channel identity: a persistent gold wordmark (matching the lightbulb brand)
-// burned on every frame, and a consistent signature music bed. Both build
-// recognition / a returning audience without delaying the hook.
+// Channel identity: a persistent gold wordmark + handle (matching the lightbulb
+// brand) burned on every frame, an optional corner logo watermark, and a
+// consistent signature music bed. All build recognition / a returning
+// audience without delaying the hook.
 const CHANNEL_WORDMARK = process.env.CHANNEL_WORDMARK || "Favourite Facts";
+const CHANNEL_HANDLE = process.env.CHANNEL_HANDLE || "@YourFavouriteDailyFacts";
+// Optional corner logo (gold lightbulb): drop a transparent PNG at
+// shorts-compose/assets/logo.png to activate - see assets/README.md. Without
+// it, this is a clean no-op, same pattern as music/signature.mp3.
+const CHANNEL_LOGO_PATH = path.join(__dirname, "assets", "logo.png");
 
 // ---------------------------------------------------------------------------
 // Endpoints: Topic History
@@ -599,15 +605,18 @@ Style: CaptionHL,Inter Bold,68,&H0096E0FF,&H000000FF,&H40000000,&H80000000,0,0,0
 Style: CaptionKey,Inter Bold,68,&H0080FF60,&H000000FF,&H40000000,&H80000000,0,0,0,0,105,105,0,0,1,3,4,2,60,60,420,1
 Style: CommentHook,Inter Bold,54,&H00FFFFFF,&H000000FF,&H40202020,&HC0000000,0,0,0,0,100,100,0,0,3,0,4,2,80,80,680,1
 Style: Wordmark,Inter Bold,36,&H6046BEFF,&H000000FF,&HB0000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,8,40,40,55,1
+Style: WordmarkHandle,Inter Bold,24,&H8046BEFF,&H000000FF,&HB0000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,8,40,40,100,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  // Persistent channel wordmark (top, gold, semi-transparent) on every frame -
-  // brand recognition without delaying the hook. Spans the whole video.
+  // Persistent channel wordmark + handle (top, gold, semi-transparent) on every
+  // frame - brand recognition without delaying the hook. Spans the whole video.
   const wm = String(CHANNEL_WORDMARK).replace(/[{}]/g, "");
+  const handle = String(CHANNEL_HANDLE).replace(/[{}]/g, "");
   let events = `Dialogue: 0,${toAssTime(0)},${toAssTime(totalDuration)},Wordmark,,0,0,0,,${wm}\n`;
+  events += `Dialogue: 0,${toAssTime(0)},${toAssTime(totalDuration)},WordmarkHandle,,0,0,0,,${handle}\n`;
   const WORDS_PER_CHUNK = 2;
 
   scenes.forEach((scene, sceneIdx) => {
@@ -952,31 +961,49 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       voicePath
     );
 
-    // ===== PHASE 5: Final composite — video + captions + music + SFX =====
+    // ===== PHASE 5: Final composite — video + captions + logo + music + SFX =====
     const finalPath = path.join(tmpDir, "final.mp4");
     const outputFileName = `short_${jobId}.mp4`;
     const outputFullPath = path.join(OUTPUT_DIR, outputFileName);
     await fsp.mkdir(OUTPUT_DIR, { recursive: true });
 
     const hasMusic = fs.existsSync(musicPath);
+    const hasLogo = fs.existsSync(CHANNEL_LOGO_PATH);
     const hasAss = fs.existsSync(assPath);
     const safeAssPath = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
 
     const finalCmd = ffmpeg().input(concatPath);   // [0] = video (+ ignored audio)
     finalCmd.input(voicePath);                     // [1] = gapless voiceover
     if (hasMusic) finalCmd.input(musicPath);
+    if (hasLogo) finalCmd.input(CHANNEL_LOGO_PATH);
     sfxEvents.forEach((ev) => finalCmd.input(sfxFiles[ev.type]));
 
     // Track input indices ([0]=video, [1]=voice already taken)
     let nextIdx = 2;
     const musicIdx = hasMusic ? nextIdx++ : null;
+    const logoIdx = hasLogo ? nextIdx++ : null;
     const sfxIndices = sfxEvents.map(() => nextIdx++);
 
-    // Build video filter: ASS caption burn-in + fade in/out
+    // Build video filter chain: ASS caption burn-in -> logo overlay (if
+    // present) -> fade in/out. Each stage is optional and no-ops cleanly when
+    // its input is absent, so behavior is unchanged when there's no logo file.
     const fadeOutStart = Math.max(0, totalVideoDuration - 0.5);
-    const videoFilter = hasAss
-      ? `[0:v]ass=${safeAssPath},fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`
-      : `[0:v]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`;
+    const videoFilterSegments = [];
+    let vLabel = "0:v";
+    if (hasAss) {
+      videoFilterSegments.push(`[${vLabel}]ass=${safeAssPath}[v_cc]`);
+      vLabel = "v_cc";
+    }
+    if (hasLogo) {
+      // Small corner watermark (gold lightbulb), top-right - clear of the
+      // top-center wordmark and the bottom caption safe zone.
+      videoFilterSegments.push(`[${logoIdx}:v]scale=100:-1,format=rgba[logo_scaled]`);
+      videoFilterSegments.push(`[${vLabel}][logo_scaled]overlay=x=W-w-40:y=40[v_logo]`);
+      vLabel = "v_logo";
+    }
+    videoFilterSegments.push(
+      `[${vLabel}]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`
+    );
 
     // Build audio filter: gapless voice ([1:a]) + ducked music
     const audioFilters = [];
@@ -985,7 +1012,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
     if (hasMusic) {
       // Music is a quiet BED: low base level, and hard sidechain ducking so the
       // voiceover always sits clearly on top (voice [1:a] is the trigger).
-      audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=0.09[music]`);
+      audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=0.13[music]`);
       audioFilters.push(`[music][1:a]sidechaincompress=threshold=0.03:ratio=8:attack=15:release=250[duckedmusic]`);
       mixLabels.push("duckedmusic");
     }
@@ -1002,7 +1029,7 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       audioFilters.push(`[${mixLabels.join("][")}]amix=inputs=${mixLabels.length}:duration=first:normalize=0[final_a]`);
     }
 
-    const allFilters = [videoFilter, ...audioFilters];
+    const allFilters = [...videoFilterSegments, ...audioFilters];
     finalCmd.complexFilter(allFilters);
 
     // Studio-grade final encoding:
