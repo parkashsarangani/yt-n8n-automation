@@ -995,9 +995,11 @@ async function runComposeJob(reqBody, jobId, tmpDir) {
       vLabel = "v_cc";
     }
     if (hasLogo) {
-      // Small corner watermark (gold lightbulb), top-right - clear of the
-      // top-center wordmark and the bottom caption safe zone.
-      videoFilterSegments.push(`[${logoIdx}:v]scale=100:-1,format=rgba[logo_scaled]`);
+      // Corner watermark (full gold badge - ring, bulb, wordmark, handle),
+      // top-right, clear of the top-center wordmark and the bottom caption
+      // safe zone. 130px (up from a bare-icon-sized 100px) since this badge
+      // carries fine text/ring detail that needs a bit more room to read.
+      videoFilterSegments.push(`[${logoIdx}:v]scale=130:-1,format=rgba[logo_scaled]`);
       videoFilterSegments.push(`[${vLabel}][logo_scaled]overlay=x=W-w-40:y=40[v_logo]`);
       vLabel = "v_logo";
     }
