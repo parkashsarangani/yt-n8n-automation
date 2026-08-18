@@ -175,7 +175,15 @@ function newTmpDir() {
 }
 
 async function downloadFile(url, destPath) {
-  const res = await axios.get(url, { responseType: "arraybuffer", timeout: 60000 });
+  // Wikimedia enforces its User-Agent policy and 403s requests with no/generic
+  // UA (axios's default) - real b-roll photos of named subjects come from
+  // upload.wikimedia.org, so every download needs an identifying UA or those
+  // scenes fail outright.
+  const res = await axios.get(url, {
+    responseType: "arraybuffer",
+    timeout: 60000,
+    headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" },
+  });
   await fsp.writeFile(destPath, res.data);
   return destPath;
 }
