@@ -124,9 +124,36 @@ async function fromWikipedia(subject) {
   ];
 }
 
+// Claude's remote url-fetch for the image source is unreliable for some CDNs
+// (observed: it silently fails - and thus scores 0 - for every Wikimedia
+// Commons URL, which meant the one REAL named-subject photo always lost to
+// an unrelated stock photo that merely scored above 0). Downloading the
+// bytes ourselves and sending them as base64 sidesteps that entirely, since
+// this server can already reach any of these hosts fine.
+async function fetchImageAsBase64(url) {
+  try {
+    const r = await axios.get(url, {
+      timeout: 15000,
+      responseType: "arraybuffer",
+      headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" },
+    });
+    const buf = Buffer.from(r.data);
+    if (!buf.length || buf.length > 4.5 * 1024 * 1024) return null; // stay under Claude's inline image limit
+    const mime = String(r.headers?.["content-type"] || "image/jpeg").split(";")[0].trim();
+    if (!mime.startsWith("image/")) return null;
+    return { mime, data: buf.toString("base64") };
+  } catch {
+    return null;
+  }
+}
+
 // --- AI-vision relevance score (0-100) for one candidate ---
 async function scoreRelevance(imageUrl, description) {
   if (!ANTHROPIC_KEY || !imageUrl) return 0;
+  const encoded = await fetchImageAsBase64(imageUrl);
+  const imageSource = encoded
+    ? { type: "base64", media_type: encoded.mime, data: encoded.data }
+    : { type: "url", url: imageUrl }; // best-effort fallback if we couldn't fetch it ourselves
   const body = {
     model: VISION_MODEL,
     max_tokens: 16,
@@ -134,7 +161,7 @@ async function scoreRelevance(imageUrl, description) {
       {
         role: "user",
         content: [
-          { type: "image", source: { type: "url", url: imageUrl } },
+          { type: "image", source: imageSource },
           {
             type: "text",
             text:
