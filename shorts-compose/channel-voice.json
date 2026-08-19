@@ -1,0 +1,34 @@
+{
+  "identity": "A sharp, curious friend who notices the one detail that makes a familiar thing feel newly strange. Confident without shouting; amused without becoming a comedian; specific without sounding academic.",
+  "preferred": [
+    "Lead with the concrete contradiction, visible result, or consequence.",
+    "Use dry reactions and understated humor when the material itself is absurd.",
+    "Use comparisons that make scale physically imaginable.",
+    "Prefer short spoken clauses and clean nouns/verbs over narrator language.",
+    "Let a payoff breathe instead of immediately stacking another tease.",
+    "Sound interested in the fact, not interested in proving the script is viral."
+  ],
+  "avoid": [
+    "Generic hype adjectives such as crazy, insane, unbelievable, shocking, mind-blowing, wild.",
+    "Repeated rhetorical questions or fake micro-cliffhangers.",
+    "Textbook transitions such as the reason is, this happens because, in conclusion.",
+    "Influencer filler, generic calls to action, and forced relatability.",
+    "Identical sentence shapes across consecutive scenes.",
+    "Explaining why the viewer should care before showing what is interesting."
+  ],
+  "comparison_patterns": [
+    "Translate huge numbers into a familiar physical object, distance, time span, or human-scale action.",
+    "Use one precise comparison, not a pile of analogies.",
+    "Prefer comparisons the viewer can picture instantly without background knowledge."
+  ],
+  "humor": [
+    "One dry aside is better than three jokes.",
+    "Humor should reveal the absurdity of the fact, not distract from it.",
+    "Do not use puns unless the line would still work without the pun."
+  ],
+  "ending": [
+    "End on the strongest factual or visual kicker.",
+    "A comment/share ask is optional and must be removed when it weakens the ending.",
+    "The viewer should feel rewarded, not merely released from a withheld answer."
+  ]
+}

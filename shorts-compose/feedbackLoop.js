@@ -1,20 +1,10 @@
 // ---------------------------------------------------------------------------
 // Feedback loop: learn from what published Shorts actually did.
 //
-// Adapted from the VidGen (long-form) engine's measure -> strategize design,
-// but fitted to this n8n + compose pipeline (JSON files in the shorts_data
-// volume instead of a Postgres artifact store).
-//
-// Two deliberately separate steps:
-//   1. LOG + MEASURE (observation, no opinions): after a video is published we
-//      record the metadata that produced it; a daily n8n job pulls YouTube
-//      Analytics and joins the numbers onto that record.
-//   2. STRATEGIZE (opinion, traceable to the numbers): a Claude call reads the
-//      measured history and produces channel_insights - evidence-backed
-//      guidance - which the topic generator then reads.
-//
-// Discipline carried over from VidGen: small samples support small claims; with
-// 0 measured videos we produce NO guidance rather than generic advice.
+// V3 records the creative DNA that produced each upload, not just its topic and
+// hook. That lets the strategist learn whether visual grammar, first-frame type,
+// scene count, payoff position, source mix, captions, and engagement mechanics
+// correlate with retention/shares instead of guessing from prose alone.
 // ---------------------------------------------------------------------------
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -24,7 +14,7 @@ const axios = require("axios");
 const DATA_DIR = path.dirname(process.env.TOPIC_HISTORY_PATH || "/app/data/topic_history.json");
 const PERF_PATH = path.join(DATA_DIR, "performance_history.json");
 const INSIGHTS_PATH = path.join(DATA_DIR, "channel_insights.json");
-const PERF_MAX = Number(process.env.PERF_HISTORY_MAX || 300);
+const PERF_MAX = Number(process.env.PERF_HISTORY_MAX || 500);
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
 const STRATEGIST_MODEL = process.env.STRATEGIST_MODEL || "claude-sonnet-5";
@@ -37,18 +27,59 @@ async function readJson(p, fallback) {
     return fallback;
   }
 }
+
 async function writeJson(p, data) {
   await fsp.mkdir(path.dirname(p), { recursive: true });
   await fsp.writeFile(p, JSON.stringify(data, null, 2));
 }
 
-// --- 1a. LOG: record a published video + the metadata that produced it -------
+function numOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function boolOrNull(v) {
+  if (v === null || v === undefined) return null;
+  return Boolean(v);
+}
+
+function normalizeCreativeDna(entry = {}) {
+  const dna = entry.creative_dna && typeof entry.creative_dna === "object" ? entry.creative_dna : entry;
+  return {
+    concept_archetype: dna.concept_archetype || null,
+    creative_format: dna.creative_format || null,
+    visual_grammar: dna.visual_grammar || null,
+    first_frame_type: dna.first_frame_type || null,
+    first_frame_source: dna.first_frame_source || null,
+    first_frame_score: numOrNull(dna.first_frame_score),
+    scene_count: numOrNull(dna.scene_count),
+    word_count: numOrNull(dna.word_count),
+    duration_sec: numOrNull(dna.duration_sec ?? entry.duration),
+    payoff_position_pct: numOrNull(dna.payoff_position_pct),
+    open_loop_count: numOrNull(dna.open_loop_count),
+    template_count: numOrNull(dna.template_count),
+    real_video_count: numOrNull(dna.real_video_count),
+    still_image_count: numOrNull(dna.still_image_count),
+    caption_mode: dna.caption_mode || null,
+    transition_style: dna.transition_style || null,
+    engagement_mode: dna.engagement_mode || null,
+    comment_hook_present: boolOrNull(dna.comment_hook_present),
+    outro_present: boolOrNull(dna.outro_present),
+    asset_quality_min: numOrNull(dna.asset_quality_min),
+    asset_quality_avg: numOrNull(dna.asset_quality_avg),
+  };
+}
+
 async function logPublished(entry) {
   const vid = entry && entry.video_id;
   if (!vid) throw new Error("logPublished: video_id is required");
   let hist = await readJson(PERF_PATH, []);
-  // idempotent: one record per video_id
-  if (hist.some((h) => h.video_id === vid)) return { logged: false, reason: "already_logged", count: hist.length };
+  if (hist.some((h) => h.video_id === vid)) {
+    return { logged: false, reason: "already_logged", count: hist.length };
+  }
+
+  const creativeDna = normalizeCreativeDna(entry);
   hist.push({
     video_id: vid,
     published_at: entry.published_at || new Date().toISOString(),
@@ -57,27 +88,23 @@ async function logPublished(entry) {
     title: entry.title || null,
     comment_hook: entry.comment_hook || null,
     caption_style: entry.caption_style || null,
-    // The psychological trigger the hook leads with (curiosity_gap, disbelief,
-    // fear_stakes, scale_shock, taboo_secret). Lets the strategist compare which
-    // lever actually earns views instead of us assuming curiosity is always best.
     trigger: entry.trigger || null,
-    duration: entry.duration != null ? Number(entry.duration) : null,
-    metrics: null, // filled in later by the measure step
+    duration: creativeDna.duration_sec,
+    creative_dna: creativeDna,
+    metrics: null,
   });
+
   if (hist.length > PERF_MAX) hist = hist.slice(hist.length - PERF_MAX);
   await writeJson(PERF_PATH, hist);
   return { logged: true, count: hist.length };
 }
 
-// --- 1b. MEASURE: parse a YouTube Analytics (dimensions=video) response and
-//         join the numbers onto the logged records --------------------------
 function parseAnalytics(body) {
-  // body is the raw YouTube Analytics reports response:
-  //   { columnHeaders:[{name:"video"},{name:"views"},...], rows:[["id",123,...]] }
   const headers = (body && body.columnHeaders ? body.columnHeaders : []).map((h) => h.name);
   const rows = (body && body.rows) || [];
   const vi = headers.indexOf("video");
   if (vi < 0) return {};
+
   const out = {};
   for (const row of rows) {
     const id = row[vi];
@@ -100,40 +127,57 @@ function parseAnalytics(body) {
   return out;
 }
 
-// --- 2. STRATEGIZE: turn the measured history into evidence-backed guidance ---
 const STRATEGIST_PROMPT = (perfJson) =>
-`You read what this YouTube Shorts channel's published videos actually did and say what that implies for the next one. You are the ONLY part of the system that learns from outcomes, so being wrong here is expensive and being vague is useless.
+`You analyze what this YouTube Shorts channel actually published and what happened. Your job is to turn measured outcomes into narrow, testable guidance for the next Shorts.
 
-MEASURED VIDEOS (each has the metadata that produced it plus its metrics):
+MEASURED VIDEOS (metadata + creative DNA + outcomes):
 ${perfJson}
 
-THE DISCIPLINE:
-- Small samples support small claims. With fewer than ~8 measured videos you cannot separate a real pattern from noise. Say so plainly in confidence_note and keep guidance short or empty.
-- If there are 0 measured videos, produce NO guidance: sample_size 0, confidence_note saying nothing is measured yet, empty guidance array. Do NOT substitute generic YouTube advice - the system already has opinions baked into its prompts.
-- Retention (average_view_percentage) is the metric you can usually trust; it reflects whether the video delivered what its hook/title promised. A high-view, low-retention video is a hook that oversold - a real finding even in small samples.
-- Each video carries a "trigger" - the psychological lever its hook leads with (curiosity_gap, disbelief, fear_stakes, scale_shock, taboo_secret). When one trigger clearly out- or under-performs the others on views AND you have at least ~2 videos per trigger, say so as trigger guidance with the numbers; otherwise treat trigger differences as noise and stay silent on them. Never recommend collapsing to a single trigger on thin data - variety is protective.
-- comments and shares are the escalation signals; near-zero across the board is itself a finding.
-- Only claim things about click_through_rate/impressions if those numbers are actually present (they are often null).
-- Evidence means naming the videos and the numbers. "shorter is better" is a hunch; "the 3 videos under 25s averaged 71% retention vs 48% for the rest" is a finding.
+DISCIPLINE:
+- Fewer than ~8 measured videos: make only very small claims. With zero, return no guidance.
+- For any comparison between two creative choices, require at least 2 measured videos in EACH group. Prefer 3+ per group before calling a pattern meaningful.
+- Retention (average_view_percentage) is the primary delivery signal. Views alone can reward a strong hook even when the content disappoints.
+- Shares/comments are escalation signals. Subscriber gain is useful when present but noisy at small samples.
+- Never infer a causal effect from one winner. Say "associated with" unless a repeated pattern is genuinely clear.
+- Only discuss impressions/CTR when those metrics are non-null.
+- Evidence must name the compared groups and numbers.
 
-OUTPUT - respond with ONLY a JSON object, no prose, no markdown fences:
+CREATIVE VARIABLES YOU MAY LEARN FROM:
+- concept_archetype and trigger
+- creative_format / visual_grammar
+- first_frame_type and first_frame_source
+- scene_count, word_count, duration_sec
+- payoff_position_pct and open_loop_count
+- template_count / real_video_count / still_image_count
+- caption_mode and transition_style
+- engagement_mode, comment_hook_present, outro_present
+- asset_quality_min / asset_quality_avg
+
+Do not recommend one house formula just because it won twice. Variety is protective. Prefer recommendations framed as experiments: "use more X for Y-type concepts" rather than "always use X".
+
+OUTPUT ONLY JSON:
 {
-  "sample_size": <integer, how many MEASURED videos the guidance rests on>,
-  "confidence_note": "<what this sample can and cannot support - be specific about the limit>",
-  "guidance": [ { "area": "topic"|"hook"|"title"|"structure"|"length"|"trigger", "advice": "<what to do next time>", "evidence": "<the specific videos and numbers>" } ],
-  "avoid": [ "<pattern that measurably underperformed, from evidence only>" ]
+  "sample_size": <integer>,
+  "confidence_note": "<specific limitation>",
+  "guidance": [
+    {
+      "area": "topic"|"hook"|"structure"|"length"|"trigger"|"first_frame"|"visual_grammar"|"asset_quality"|"captions"|"engagement"|"payoff",
+      "advice": "<specific next action or experiment>",
+      "evidence": "<specific groups/videos and numbers>"
+    }
+  ],
+  "avoid": ["<measurably weak pattern only>"]
 }
-Prefer three well-grounded items to eight padded ones. Every item is read by another agent and acted on.`;
+Prefer 3 strong findings to 10 padded ones.`;
 
 async function runStrategist(history) {
   const measured = history.filter((h) => h.metrics && typeof h.metrics.views === "number");
-  // Feed the strategist a compact, relevant view of each measured video.
   const payload = measured.map((h) => ({
     topic: h.topic,
     hook: h.hook,
     title: h.title,
     trigger: h.trigger,
-    duration_sec: h.duration,
+    creative_dna: h.creative_dna || {},
     metrics: h.metrics,
   }));
 
@@ -143,14 +187,19 @@ async function runStrategist(history) {
     "https://api.anthropic.com/v1/messages",
     {
       model: STRATEGIST_MODEL,
-      max_tokens: 1500,
+      max_tokens: 2200,
       messages: [{ role: "user", content: STRATEGIST_PROMPT(JSON.stringify(payload, null, 2)) }],
     },
     {
       timeout: 60000,
-      headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
     }
   );
+
   const text = (res.data.content || []).map((b) => (b && b.text) || "").join("");
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -162,7 +211,6 @@ async function runStrategist(history) {
   return insights;
 }
 
-// --- orchestration: ingest analytics, join, re-strategize --------------------
 async function ingestAnalytics(analyticsBody) {
   const metricsById = parseAnalytics(analyticsBody);
   const hist = await readJson(PERF_PATH, []);
@@ -170,30 +218,48 @@ async function ingestAnalytics(analyticsBody) {
   const measured_at = new Date().toISOString();
   for (const h of hist) {
     const m = metricsById[h.video_id];
-    if (m) { h.metrics = { ...m, measured_at }; updated++; }
+    if (m) {
+      h.metrics = { ...m, measured_at };
+      updated++;
+    }
   }
   await writeJson(PERF_PATH, hist);
+
   let insights = null;
-  try { insights = await runStrategist(hist); } catch (e) { insights = { error: String(e.message || e) }; }
+  try {
+    insights = await runStrategist(hist);
+  } catch (e) {
+    insights = { error: String(e.message || e) };
+  }
   return { updated, total: hist.length, insights };
 }
 
 async function getInsights() {
-  return await readJson(INSIGHTS_PATH, { sample_size: 0, confidence_note: "No videos measured yet.", guidance: [], avoid: [] });
+  return await readJson(INSIGHTS_PATH, {
+    sample_size: 0,
+    confidence_note: "No videos measured yet.",
+    guidance: [],
+    avoid: [],
+  });
 }
 
-// SHORTS-ONLY: the only video IDs the loop ever touches are the ones THIS
-// pipeline logged here. Long-form videos on the same YouTube channel are never
-// logged, so they can never be measured or reach the strategist. This returns
-// the shorts to measure, and the analytics query is filtered to exactly these
-// IDs - so channel-wide numbers never leak long videos into the feedback.
 async function getMeasureIds({ maxDays = 60, limit = 200 } = {}) {
   const hist = await readJson(PERF_PATH, []);
   const cutoff = Date.now() - maxDays * 24 * 60 * 60 * 1000;
   return hist
     .filter((h) => h.video_id && (!h.published_at || new Date(h.published_at).getTime() >= cutoff))
     .map((h) => h.video_id)
-    .slice(-limit); // most recent
+    .slice(-limit);
 }
 
-module.exports = { logPublished, ingestAnalytics, getInsights, getMeasureIds, runStrategist, parseAnalytics, PERF_PATH, INSIGHTS_PATH };
+module.exports = {
+  logPublished,
+  ingestAnalytics,
+  getInsights,
+  getMeasureIds,
+  runStrategist,
+  parseAnalytics,
+  normalizeCreativeDna,
+  PERF_PATH,
+  INSIGHTS_PATH,
+};
