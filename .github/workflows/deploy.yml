@@ -18,7 +18,7 @@ jobs:
         with:
           clean: true
 
-      - name: Build creative-system V3 compose service
+      - name: Build creative-system compose service
         env:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
@@ -28,13 +28,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== Validating V3 + V4 source transforms ==="
-          python3 -m py_compile scripts/upgrade-compose-v3.py scripts/upgrade-compose-budget-v4.py
-          python3 scripts/upgrade-compose-v3.py shorts-compose/compose.js
-          python3 scripts/upgrade-compose-budget-v4.py shorts-compose/compose.js shorts-compose/brollResolver.js
-          grep -q 'CREATIVE_SYSTEM_V3_COMPOSE' shorts-compose/compose.js
-          grep -q 'API_BUDGET_V4_COMPOSE' shorts-compose/compose.js
-          grep -q 'API_BUDGET_V4' shorts-compose/brollResolver.js
+          echo "=== Validating compose source transforms ==="
+          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py
+          python3 scripts/upgrade-compose-creative-system.py shorts-compose/compose.js
+          python3 scripts/upgrade-compose-api-budget.py shorts-compose/compose.js shorts-compose/brollResolver.js
+          grep -q 'CREATIVE_SYSTEM_COMPOSE' shorts-compose/compose.js
+          grep -q 'API_BUDGET_COMPOSE' shorts-compose/compose.js
+          grep -q 'API_BUDGET' shorts-compose/brollResolver.js
           grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
           grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
           node --check shorts-compose/compose.js
@@ -70,37 +70,37 @@ jobs:
           done
           echo "Health check passed"
 
-      - name: Build creative-system V6 n8n workflow
+      - name: Build creative-system n8n workflow
         run: |
           set -euo pipefail
-          echo "=== Applying viral quality V2 ==="
+          echo "=== Applying quality gate ==="
           python3 -m py_compile scripts/upgrade-viral-shorts.py
-          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_v2.json
+          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_quality_gate.json
 
-          echo "=== Applying creative system V3 ==="
-          python3 -m py_compile scripts/upgrade-creative-system-v3.py
-          python3 scripts/upgrade-creative-system-v3.py /tmp/workflow_v2.json /tmp/workflow_v3.json
+          echo "=== Applying creative system ==="
+          python3 -m py_compile scripts/upgrade-creative-system.py
+          python3 scripts/upgrade-creative-system.py /tmp/workflow_quality_gate.json /tmp/workflow_creative_system.json
 
-          echo "=== Applying API budget V4 ==="
-          python3 -m py_compile scripts/upgrade-workflow-budget-v4.py
-          python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_v4.json
+          echo "=== Applying API budget guardrails ==="
+          python3 -m py_compile scripts/upgrade-workflow-api-budget.py
+          python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_creative_system.json /tmp/workflow_api_budget.json
 
-          echo "=== Applying topic latency V5 ==="
-          python3 -m py_compile scripts/upgrade-topic-latency-v5.py
-          python3 scripts/upgrade-topic-latency-v5.py /tmp/workflow_v4.json /tmp/workflow_v5.json
+          echo "=== Applying topic latency guardrails ==="
+          python3 -m py_compile scripts/upgrade-topic-latency.py
+          python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
 
-          echo "=== Applying Anthropic parser V6 ==="
-          python3 -m py_compile scripts/upgrade-anthropic-parser-v6.py
-          python3 scripts/upgrade-anthropic-parser-v6.py /tmp/workflow_v5.json /tmp/workflow_quality.json
+          echo "=== Applying Anthropic parser hardening ==="
+          python3 -m py_compile scripts/upgrade-anthropic-parser.py
+          python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
-          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_quality.json
-          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_quality.json
-          grep -q 'API_BUDGET_V4' /tmp/workflow_quality.json
-          grep -q 'TOPIC_LATENCY_V5' /tmp/workflow_quality.json
-          grep -q 'ANTHROPIC_TEXT_BLOCK_V6' /tmp/workflow_quality.json
-          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_quality.json
-          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_quality.json
+          grep -q 'QUALITY_GATE' /tmp/workflow_quality.json
+          grep -q 'CREATIVE_SYSTEM' /tmp/workflow_quality.json
+          grep -q 'API_BUDGET' /tmp/workflow_quality.json
+          grep -q 'TOPIC_LATENCY' /tmp/workflow_quality.json
+          grep -q 'ANTHROPIC_TEXT_BLOCK_GUARD' /tmp/workflow_quality.json
+          grep -q 'Claude: Commission Topic Shortlist' /tmp/workflow_quality.json
+          grep -q 'Claude: Visual Director' /tmp/workflow_quality.json
           grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
           grep -q 'qualityMinimums' /tmp/workflow_quality.json
           grep -q 'run_id' /tmp/workflow_quality.json
@@ -118,16 +118,16 @@ jobs:
           assert topic['parameters']['options']['timeout'] == 120000
           assert topic.get('retryOnFail') is False
           assert topic.get('maxTries') == 1
-          for node_name in ['Parse Draft JSON', 'Parse Editorial For Visual Director (V3)', 'Validate Final Script']:
+          for node_name in ['Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
-              assert 'ANTHROPIC_TEXT_BLOCK_V6' in code, node_name
+              assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
               assert 'content?.[0]?.text' not in code, node_name
-          pool_code = names['Parse Topic Pool (V3)']['parameters']['jsCode']
-          assert 'try {' in pool_code or 'try{' in pool_code, 'Parse Topic Pool (V3) must guard JSON.parse'
-          assert 'stop_reason' in pool_code, 'Parse Topic Pool (V3) must diagnose max_tokens truncation'
+          pool_code = names['Parse Topic Pool']['parameters']['jsCode']
+          assert 'try {' in pool_code or 'try{' in pool_code, 'Parse Topic Pool must guard JSON.parse'
+          assert 'stop_reason' in pool_code, 'Parse Topic Pool must diagnose max_tokens truncation'
           writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
           assert 'Concept archetype' in writer_body, 'archetype context must reach the script writer'
-          print('V5 latency + V6 Anthropic parser guardrails OK')
+          print('Topic latency + Anthropic parser guardrails OK')
           PY
 
       - name: Deploy n8n workflow

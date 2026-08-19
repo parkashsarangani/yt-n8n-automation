@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Apply API-budget guardrails to the V3 compose service and b-roll resolver.
+"""Apply API-budget guardrails to the compose service and b-roll resolver.
 
-Run this AFTER upgrade-compose-v3.py. It is intentionally a deterministic
-source transform so the readable V3 source stays canonical while deployment
+Run this AFTER upgrade-compose-creative-system.py. It is intentionally a deterministic
+source transform so the readable source stays canonical while deployment
 gets bounded, progressive asset commissioning.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-MARKER = "API_BUDGET_V4"
+MARKER = "API_BUDGET"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -28,7 +28,7 @@ const MAX_SEARCH_QUERIES = Number(process.env.BROLL_MAX_SEARCH_QUERIES || 4);'''
 
 BROLL_CONSTANTS_NEW = '''const VISION_MODEL = process.env.BROLL_VISION_MODEL || "claude-haiku-4-5-20251001";
 const SOURCE_PER_QUERY = Number(process.env.BROLL_SOURCE_PER_QUERY || 12);
-// API_BUDGET_V4: progressive search + hard paid-vision ceilings.
+// API_BUDGET: progressive search + hard paid-vision ceilings.
 const INITIAL_SEARCH_QUERIES = Math.max(1, Number(process.env.BROLL_INITIAL_SEARCH_QUERIES || 2));
 const MAX_SEARCH_QUERIES = Math.max(INITIAL_SEARCH_QUERIES, Number(process.env.BROLL_MAX_SEARCH_QUERIES || 4));
 const VISION_BATCH_SIZE = Math.max(1, Number(process.env.BROLL_VISION_BATCH_SIZE || 2));
@@ -349,7 +349,7 @@ def patch_broll(text: str) -> str:
 
 
 def patch_compose(text: str) -> str:
-    marker = "API_BUDGET_V4_COMPOSE"
+    marker = "API_BUDGET_COMPOSE"
     if marker in text:
         return text
     old = '''    const { query, queries, alternate_queries, subject, description, scene_index, first_frame, creative_format } = req.body || {};
@@ -359,17 +359,17 @@ def patch_compose(text: str) -> str:
     const result = await resolveBroll({ query, queries, alternate_queries, subject, description, scene_index, first_frame, creative_format, run_id });
 '''
     text = replace_once(text, old, new, "compose run-id forwarding")
-    return text.replace("// CREATIVE_SYSTEM_V3_COMPOSE", f"// CREATIVE_SYSTEM_V3_COMPOSE\n// {marker}", 1)
+    return text.replace("// CREATIVE_SYSTEM_COMPOSE", f"// CREATIVE_SYSTEM_COMPOSE\n// {marker}", 1)
 
 
 def main() -> None:
     if len(sys.argv) != 3:
-        raise SystemExit("usage: upgrade-compose-budget-v4.py COMPOSE_PATH BROLL_PATH")
+        raise SystemExit("usage: upgrade-compose-api-budget.py COMPOSE_PATH BROLL_PATH")
     compose_path, broll_path = map(Path, sys.argv[1:])
     compose_path.write_text(patch_compose(compose_path.read_text()))
     broll_path.write_text(patch_broll(broll_path.read_text()))
-    print(f"API budget V4 compose written to {compose_path}")
-    print(f"API budget V4 b-roll written to {broll_path}")
+    print(f"API budget compose written to {compose_path}")
+    print(f"API budget b-roll written to {broll_path}")
 
 
 if __name__ == "__main__":

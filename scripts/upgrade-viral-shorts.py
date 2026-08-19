@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-MARKER = "VIRAL_QUALITY_V2"
+MARKER = "QUALITY_GATE"
 
 WIKI_NODE = "Wikipedia: Research Topic"
 RESEARCH_NODE = "Normalize Research Evidence"
@@ -102,13 +102,13 @@ def add_research_nodes(workflow: dict) -> None:
 
 def patch_writer_prompt(node: dict) -> None:
     body = node["parameters"]["jsonBody"]
-    if "EVIDENCE CONTRACT - VIRAL_QUALITY_V2" not in body:
+    if "EVIDENCE CONTRACT - QUALITY_GATE" not in body:
         anchor = "AUDIENCE: Broad, general audience. They want either a concrete surprising fact OR a genuinely clear, useful explanation - no vague generalities, no lifestyle-influencer fluff."
-        addition = anchor + "\\n\\nEVIDENCE CONTRACT - VIRAL_QUALITY_V2: external reference search snippets are supplied below. Treat them as leads, not permission to invent. Build the script around claims supported by those snippets or by truly established common knowledge. If the exact viral claim is not supported, narrow/reframe it rather than bluffing. Never manufacture a quote, date, number, causal explanation, or anecdote to preserve a hook. Specificity is valuable only when defensible."
+        addition = anchor + "\\n\\nEVIDENCE CONTRACT - QUALITY_GATE: external reference search snippets are supplied below. Treat them as leads, not permission to invent. Build the script around claims supported by those snippets or by truly established common knowledge. If the exact viral claim is not supported, narrow/reframe it rather than bluffing. Never manufacture a quote, date, number, causal explanation, or anecdote to preserve a hook. Specificity is valuable only when defensible."
         body = replace_once(body, anchor, addition, "writer evidence contract")
 
     old = "SHORTS RETENTION PRINCIPLES (whatever length this specific topic earns, the middle is where it lives or dies): 1) The hook (scene 1) must be the single most dramatic, curiosity-igniting line in the whole script - state a contradiction or impossible-sounding claim and withhold the payoff. 2) RE-HOOK EVERY SCENE: each scene must end on a micro-cliffhanger, a raised stake, or a question the next scene answers - the viewer must never hit a moment where nothing new is coming. 3) ESCALATE, never list: each beat has to make the last one bigger, stranger, or higher-stakes (BUT / THEREFORE, never AND-THEN). 4) OPEN LOOPS: plant a question or tension early and only resolve it near the end, so viewers stay to close the loop. 5) NO FLAT MIDDLE: the instant a scene is just another fact with no forward pull, it is dead weight - rewrite it to escalate or cut it. 6) Build to a payoff that tops the hook, then a kicker, then the single spoken CTA question."
-    new = "SHORTS RETENTION RHYTHM - VIRAL_QUALITY_V2: retention comes from changing cognitive gears, not from making every sentence sound like a cliffhanger. Scene 1 must create immediate curiosity or value. After that, deliberately alternate beat functions: TENSION (open/expand a question), CONTEXT (the minimum needed to understand), PAYOFF (close a loop with a concrete answer), BREATH (a quick human reaction, humor, visual beat, or satisfying observation), then new TENSION only if the material earns it. A strong Short can pay off one question early and open a better one; it does not have to hoard every answer until the end. Avoid repeated rhetorical questions, repeated 'but then' constructions, and synthetic micro-cliffhangers. Every scene must add new information, emotion, or visual meaning, but it does NOT need to end on a cliffhanger. The final payoff/kicker should leave the viewer satisfied enough to rewatch or share, not merely relieved that a withheld fact was finally revealed."
+    new = "SHORTS RETENTION RHYTHM - QUALITY_GATE: retention comes from changing cognitive gears, not from making every sentence sound like a cliffhanger. Scene 1 must create immediate curiosity or value. After that, deliberately alternate beat functions: TENSION (open/expand a question), CONTEXT (the minimum needed to understand), PAYOFF (close a loop with a concrete answer), BREATH (a quick human reaction, humor, visual beat, or satisfying observation), then new TENSION only if the material earns it. A strong Short can pay off one question early and open a better one; it does not have to hoard every answer until the end. Avoid repeated rhetorical questions, repeated 'but then' constructions, and synthetic micro-cliffhangers. Every scene must add new information, emotion, or visual meaning, but it does NOT need to end on a cliffhanger. The final payoff/kicker should leave the viewer satisfied enough to rewatch or share, not merely relieved that a withheld fact was finally revealed."
     body = replace_once(body, old, new, "writer retention rhythm")
 
     old_flow = "Either way: every transition must carry BUT or THEREFORE tension, never AND THEN listing - if a scene could be cut without breaking the chain, it is padding, cut it."
@@ -116,7 +116,7 @@ def patch_writer_prompt(node: dict) -> None:
     body = replace_once(body, old_flow, new_flow, "writer transition rule")
 
     visual_anchor = "SCENE 1 IS THE THUMBNAIL: its image is the first frame in the feed and the de facto thumbnail. Show the subject at its most striking, clearest moment - never at rest or generic. Make it the most arresting composition of the set."
-    visual_new = visual_anchor + "\\n- FIRST 500MS TEST - VIRAL_QUALITY_V2: before narration can rescue the video, the opening frame/clip must already create a visual question. Prefer visible motion, extreme scale, a face/reaction when a real person is legitimately available, a physically unusual state, or a clean before/after/comparison composition. Reject generic establishing shots. The first_frame_concept from topic selection is a creative constraint: either execute it or replace it with a demonstrably stronger concrete visual.\\n- VISUAL PROGRESSION: do not illustrate each sentence literally with interchangeable stock. Across the Short, vary shot scale and function: hero image/motion -> evidence/detail -> scale/comparison/reveal -> satisfying payoff image. At least one beat should work with the sound off."
+    visual_new = visual_anchor + "\\n- FIRST 500MS TEST - QUALITY_GATE: before narration can rescue the video, the opening frame/clip must already create a visual question. Prefer visible motion, extreme scale, a face/reaction when a real person is legitimately available, a physically unusual state, or a clean before/after/comparison composition. Reject generic establishing shots. The first_frame_concept from topic selection is a creative constraint: either execute it or replace it with a demonstrably stronger concrete visual.\\n- VISUAL PROGRESSION: do not illustrate each sentence literally with interchangeable stock. Across the Short, vary shot scale and function: hero image/motion -> evidence/detail -> scale/comparison/reveal -> satisfying payoff image. At least one beat should work with the sound off."
     body = replace_once(body, visual_anchor, visual_new, "writer visual impact")
 
     topic_anchor = "Topic: \" + $json.topic + \""
@@ -128,7 +128,7 @@ def patch_writer_prompt(node: dict) -> None:
 def patch_editor_prompt(node: dict) -> None:
     body = node["parameters"]["jsonBody"]
     intro = "You are the editor for a viral, story-driven YouTube Shorts channel with a broad general audience. You will be given a draft script as JSON. Your job is to make it MORE gripping, more dramatic, and harder to swipe away from - NOT to sand it down. Fix what is vague, unverifiable, or would require the AI video generator to render readable text, and tighten limp writing - but wherever the hook or story reads tame, crank it UP rather than calming it down. Then output the corrected JSON in the exact same schema."
-    new_intro = "You are the final commissioning editor for a YouTube Shorts channel. VIRAL_QUALITY_V2. Your job is not to rescue every draft or fill a publishing slot. Produce the strongest truthful version you can, then grade it harshly. A clean but forgettable Short must fail. Optimize for: an idea people instantly understand, a first second that stops the thumb visually and verbally, dense new information, a satisfying payoff, and a specific reason to share. Do not add melodrama to compensate for a weak idea. Output the corrected JSON plus a quality object used by an automated publish gate."
+    new_intro = "You are the final commissioning editor for a YouTube Shorts channel. QUALITY_GATE. Your job is not to rescue every draft or fill a publishing slot. Produce the strongest truthful version you can, then grade it harshly. A clean but forgettable Short must fail. Optimize for: an idea people instantly understand, a first second that stops the thumb visually and verbally, dense new information, a satisfying payoff, and a specific reason to share. Do not add melodrama to compensate for a weak idea. Output the corrected JSON plus a quality object used by an automated publish gate."
     body = replace_once(body, intro, new_intro, "editor role")
 
     old_flow = "13. FLOW CHECK: every scene transition must carry BUT or THEREFORE tension, never and-then listing - rewrite any flat sequential transition."
@@ -136,7 +136,7 @@ def patch_editor_prompt(node: dict) -> None:
     body = replace_once(body, old_flow, new_flow, "editor flow")
 
     old_ret = "16. RETENTION CURVE (critical no matter how long the final script runs): the video lives or dies on its middle. Verify every scene re-hooks - each must end on a micro-cliffhanger, a raised stake, or a question the next scene answers, so the viewer never reaches a point where nothing new is coming. Any middle scene that is just another fact with no forward pull must be rewritten to escalate or cut. There must be no flat stretch anywhere."
-    new_ret = "16. RETENTION CURVE - VIRAL_QUALITY_V2: the middle must keep delivering, not merely keep withholding. Each scene must contribute at least one of: genuinely new information, a visual pattern interrupt, a partial payoff, escalation, humor/reaction, or a sharper question. Prefer one or two real open loops over a chain of synthetic micro-cliffhangers. If a beat only says 'keep watching', explicitly or structurally, cut it. Reward early mini-payoffs that create trust and rewatch value."
+    new_ret = "16. RETENTION CURVE - QUALITY_GATE: the middle must keep delivering, not merely keep withholding. Each scene must contribute at least one of: genuinely new information, a visual pattern interrupt, a partial payoff, escalation, humor/reaction, or a sharper question. Prefer one or two real open loops over a chain of synthetic micro-cliffhangers. If a beat only says 'keep watching', explicitly or structurally, cut it. Reward early mini-payoffs that create trust and rewatch value."
     body = replace_once(body, old_ret, new_ret, "editor retention")
 
     output_anchor = "Output ONLY the corrected JSON, same schema as input, no markdown fences, no preamble, no commentary about what you changed."
@@ -155,12 +155,12 @@ def patch_editor_prompt(node: dict) -> None:
 
 def patch_validator(node: dict) -> None:
     code = node["parameters"]["jsCode"]
-    if "VIRAL_QUALITY_V2 commissioning gate" in code:
+    if "QUALITY_GATE commissioning gate" in code:
         return
     anchor = "const errors = [];"
     gate = """const errors = [];
 
-// VIRAL_QUALITY_V2 commissioning gate. Structural validity is not enough:
+// QUALITY_GATE commissioning gate. Structural validity is not enough:
 // mediocre scripts are deliberately rejected so the existing retry loop spends
 // the slot on a different concept instead of rendering disposable content.
 const q = parsed.quality;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harden Anthropic response parsing after the V5 workflow upgrade.
+"""Harden Anthropic response parsing after the topic-latency workflow upgrade.
 
 Anthropic adaptive-thinking responses may place thinking/signature blocks before
 text. The production workflow still had parsers that assumed content[0].text,
@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-MARKER = "ANTHROPIC_TEXT_BLOCK_V6"
+MARKER = "ANTHROPIC_TEXT_BLOCK_GUARD"
 
 
 def node_by_name(workflow: dict, name: str) -> dict:
@@ -46,7 +46,7 @@ def patch_draft_parser(workflow: dict) -> None:
 
 
 def patch_editor_parser(workflow: dict) -> None:
-    node = node_by_name(workflow, "Parse Editorial For Visual Director (V3)")
+    node = node_by_name(workflow, "Parse Editorial For Visual Director")
     code = node["parameters"]["jsCode"]
     old = "let raw=String(response.content?.[0]?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');"
     new = (
@@ -87,11 +87,11 @@ def upgrade(workflow: dict) -> dict:
 
 def main() -> None:
     if len(sys.argv) != 3:
-        raise SystemExit("usage: upgrade-anthropic-parser-v6.py INPUT_V5_WORKFLOW OUTPUT_V6_WORKFLOW")
+        raise SystemExit("usage: upgrade-anthropic-parser.py INPUT_WORKFLOW OUTPUT_WORKFLOW")
     src, dst = map(Path, sys.argv[1:])
     workflow = json.loads(src.read_text())
     dst.write_text(json.dumps(upgrade(workflow), indent=2) + "\n")
-    print(f"Anthropic parser V6 workflow written to {dst}")
+    print(f"Anthropic parser workflow written to {dst}")
 
 
 if __name__ == "__main__":
