@@ -69,7 +69,7 @@ def add_research_nodes(workflow: dict) -> None:
             "name": WIKI_NODE,
             "type": "n8n-nodes-base.httpRequest",
             "typeVersion": 4.2,
-            "position": [2550, 220],
+            "position": [3300, 460],
             "onError": "continueRegularOutput",
             "parameters": {
                 "method": "GET",
@@ -83,7 +83,7 @@ def add_research_nodes(workflow: dict) -> None:
             "name": RESEARCH_NODE,
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [2700, 220],
+            "position": [3600, 300],
             "parameters": {
                 "jsCode": "const picked = $('Extract Generated Topic').item.json;\nconst raw = $input.first().json || {};\nconst hits = Array.isArray(raw?.query?.search) ? raw.query.search : [];\nconst strip = s => String(s || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').trim();\nconst research_evidence = hits.slice(0, 5).map(h => ({ title: String(h.title || ''), snippet: strip(h.snippet), pageid: h.pageid }));\nreturn { json: { ...picked, research_evidence, research_source: 'Wikipedia search', research_available: research_evidence.length > 0 } };"
             },
