@@ -110,7 +110,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2400,
+        3000,
         300
       ]
     },
@@ -143,7 +143,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2700,
+        3900,
         300
       ],
       "credentials": {
@@ -165,7 +165,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3000,
+        4200,
         300
       ]
     },
@@ -198,7 +198,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3300,
+        4500,
         300
       ],
       "credentials": {
@@ -220,7 +220,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3600,
+        5400,
         300
       ]
     },
@@ -234,8 +234,8 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        4200,
-        300
+        6000,
+        620
       ]
     },
     {
@@ -252,7 +252,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4200,
+        6000,
         460
       ],
       "continueOnFail": true
@@ -267,8 +267,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        300,
-        460
+        6900,
+        780
       ]
     },
     {
@@ -303,8 +303,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        4500,
-        300
+        6300,
+        460
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -326,8 +326,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4800,
-        300
+        6600,
+        460
       ]
     },
     {
@@ -340,8 +340,8 @@
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        4800,
-        460
+        6600,
+        620
       ]
     },
     {
@@ -354,7 +354,7 @@
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        5100,
+        6900,
         300
       ]
     },
@@ -365,8 +365,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
       "position": [
-        5400,
-        300
+        7200,
+        460
       ]
     },
     {
@@ -378,7 +378,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        5700,
+        7500,
         300
       ]
     },
@@ -391,8 +391,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        7500,
-        300
+        9300,
+        460
       ]
     },
     {
@@ -411,8 +411,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        7800,
-        300
+        9600,
+        460
       ]
     },
     {
@@ -434,8 +434,8 @@
       "type": "n8n-nodes-base.youTube",
       "typeVersion": 1,
       "position": [
-        8100,
-        300
+        9900,
+        460
       ],
       "credentials": {
         "youTubeOAuth2Api": {
@@ -453,8 +453,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        4500,
-        460
+        6300,
+        620
       ]
     },
     {
@@ -473,7 +473,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        8400,
+        10200,
         300
       ],
       "credentials": {
@@ -536,7 +536,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        3900,
+        5700,
         300
       ]
     },
@@ -549,8 +549,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4200,
-        620
+        6000,
+        300
       ]
     },
     {
@@ -581,8 +581,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        4500,
-        620
+        6300,
+        300
       ]
     },
     {
@@ -594,8 +594,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4800,
-        780
+        6600,
+        300
       ]
     },
     {
@@ -626,8 +626,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        4800,
-        620
+        6600,
+        780
       ]
     },
     {
@@ -639,8 +639,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        5100,
-        460
+        6900,
+        620
       ]
     },
     {
@@ -654,7 +654,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        9000,
+        10800,
         300
       ],
       "continueOnFail": true
@@ -675,7 +675,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        6000,
+        7800,
         300
       ]
     },
@@ -688,7 +688,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        6300,
+        8100,
         300
       ]
     },
@@ -701,7 +701,7 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        6600,
+        8400,
         300
       ],
       "webhookId": "c6b97319-18f8-4e2e-ac0c-29d796c01e7c"
@@ -718,7 +718,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        6900,
+        8700,
         300
       ]
     },
@@ -750,7 +750,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        7200,
+        9000,
         300
       ]
     },
@@ -763,8 +763,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        7500,
-        460
+        9300,
+        300
       ]
     },
     {
@@ -795,8 +795,8 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        7800,
-        460
+        9600,
+        300
       ]
     },
     {
@@ -808,8 +808,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        8100,
-        460
+        9900,
+        300
       ]
     },
     {
@@ -818,7 +818,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        8700,
+        10500,
         300
       ],
       "onError": "continueRegularOutput",
@@ -850,8 +850,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        5100,
-        620
+        6900,
+        460
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -871,8 +871,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        5400,
-        460
+        7200,
+        300
       ],
       "parameters": {
         "jsCode": "const r = $json;\nconst sceneIndex = $('Split Out Scenes').item.json.scene_index;\nif (!r || r.ok !== true || !r.url) { throw new Error('Tag B-roll: no asset for scene ' + sceneIndex); }\nconst out = { scene_index: sceneIndex, _source: r.source || 'broll', _attribution: r.attribution || '' };\nif (r.type === 'video') { out.video_url = r.url; } else { out.images = [r.url]; }\nreturn { json: out };"
@@ -902,7 +902,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        9300,
+        11100,
         300
       ],
       "onError": "continueRegularOutput",
@@ -1021,8 +1021,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2700,
-        460
+        3300,
+        300
       ],
       "onError": "continueRegularOutput",
       "parameters": {
@@ -1061,7 +1061,7 @@
       "typeVersion": 1.2,
       "position": [
         300,
-        1620
+        1780
       ],
       "parameters": {
         "rule": {
@@ -1081,7 +1081,7 @@
       "typeVersion": 4.2,
       "position": [
         600,
-        1620
+        1780
       ],
       "onError": "continueRegularOutput",
       "parameters": {
