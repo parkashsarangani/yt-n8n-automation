@@ -547,7 +547,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const prevAttempt = $('Init Script Attempt Counter').item.json.scriptAttempt ?? 0;\nconst newAttempt = prevAttempt + 1;\nconst errors = $input.first().json._validationErrors || [];\nconsole.log(`Script validation failed on attempt ${newAttempt}: ${errors.join(' | ')}`);\nreturn { json: { scriptAttempt: newAttempt, lastErrors: errors } };"
+        "jsCode": "let prevAttempt = 0;\ntry {\n  prevAttempt = $('Increment Script Attempt').item.json.scriptAttempt ?? 0;\n} catch (e) {\n  prevAttempt = $('Init Script Attempt Counter').item.json.scriptAttempt ?? 0;\n}\nconst newAttempt = prevAttempt + 1;\nconst errors = $input.first().json._validationErrors || [];\nconsole.log(`Script validation failed on attempt ${newAttempt}: ${errors.join(' | ')}`);\nreturn { json: { scriptAttempt: newAttempt, lastErrors: errors } };"
       },
       "id": "a1278d48-f5a1-40b3-8140-759c390c0d08",
       "name": "Increment Script Attempt",
