@@ -93,7 +93,7 @@ jobs:
           topic = names['Claude: Generate Topic']
           topic_body = topic['parameters']['jsonBody']
           assert 'TOPIC_LATENCY' in topic_body
-          assert 'GENERATE 12 DISTINCT candidate topics' in topic_body
+          assert 'GENERATE 4 DISTINCT candidate topics' in topic_body
           assert 'GENERATE 36 DISTINCT candidate topics' not in topic_body
           assert 'max_tokens: 6000' in topic_body
           assert 'max_tokens: 8192' not in topic_body
@@ -105,7 +105,7 @@ jobs:
 
           commission = names['Claude: Commission Topic Shortlist']
           assert commission['parameters']['options']['timeout'] == 90000
-          assert 'shortlist:pool.slice(0,8)' in names['Parse Topic Pool']['parameters']['jsCode']
+          assert 'shortlist:pool.slice(0,4)' in names['Parse Topic Pool']['parameters']['jsCode']
 
           for node_name in ['Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
@@ -151,7 +151,7 @@ jobs:
             }
           }
 
-          const candidates = Array.from({ length: 9 }, (_, i) => ({
+          const candidates = Array.from({ length: 4 }, (_, i) => ({
             topic: 't' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
             share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
           }));
