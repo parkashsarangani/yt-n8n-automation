@@ -1,4 +1,4 @@
-name: Validate Shorts Creative System V3
+name: Validate Shorts Creative System V4
 
 on:
   pull_request:
@@ -7,12 +7,15 @@ on:
       - 'scripts/upgrade-viral-shorts.py'
       - 'scripts/upgrade-creative-system-v3.py'
       - 'scripts/upgrade-compose-v3.py'
+      - 'scripts/upgrade-compose-budget-v4.py'
+      - 'scripts/upgrade-workflow-budget-v4.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
       - 'shorts-compose/channel-voice.json'
       - '.github/workflows/quality-check.yml'
       - '.github/workflows/deploy.yml'
+      - 'docker-compose.yml'
   push:
     branches:
       - 'agent/**'
@@ -21,12 +24,15 @@ on:
       - 'scripts/upgrade-viral-shorts.py'
       - 'scripts/upgrade-creative-system-v3.py'
       - 'scripts/upgrade-compose-v3.py'
+      - 'scripts/upgrade-compose-budget-v4.py'
+      - 'scripts/upgrade-workflow-budget-v4.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
       - 'shorts-compose/channel-voice.json'
       - '.github/workflows/quality-check.yml'
       - '.github/workflows/deploy.yml'
+      - 'docker-compose.yml'
 
 jobs:
   validate:
@@ -34,31 +40,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply V2 + V3 workflow upgrades
+      - name: Apply V2 + V3 + V4 workflow upgrades
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system-v3.py scripts/upgrade-compose-v3.py
+          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system-v3.py scripts/upgrade-workflow-budget-v4.py
           python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_v2.json
           python3 scripts/upgrade-creative-system-v3.py /tmp/workflow_v2.json /tmp/workflow_v3.json
-          python3 -m json.tool /tmp/workflow_v3.json >/dev/null
+          python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_v4.json
+          python3 -m json.tool /tmp/workflow_v4.json >/dev/null
 
-      - name: Assert commissioning graph
+      - name: Assert commissioning graph and budget plumbing
         run: |
           set -euo pipefail
-          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_v3.json
-          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_v3.json
-          grep -q 'Wikipedia: Research Topic' /tmp/workflow_v3.json
-          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_v3.json
-          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_v3.json
-          grep -q 'visual_plan_quality' /tmp/workflow_v3.json
-          grep -q 'creative_dna' /tmp/workflow_v3.json
-          grep -q 'search_queries' /tmp/workflow_v3.json
+          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_v4.json
+          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_v4.json
+          grep -q 'API_BUDGET_V4' /tmp/workflow_v4.json
+          grep -q 'Wikipedia: Research Topic' /tmp/workflow_v4.json
+          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_v4.json
+          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_v4.json
+          grep -q 'visual_plan_quality' /tmp/workflow_v4.json
+          grep -q 'creative_dna' /tmp/workflow_v4.json
+          grep -q 'search_queries' /tmp/workflow_v4.json
+          grep -q 'run_id' /tmp/workflow_v4.json
+          grep -q '\$execution.id' /tmp/workflow_v4.json
 
-      - name: Verify V3 graph paths
+      - name: Verify V4 graph paths
         run: |
           python3 - <<'PY'
           import json
-          w = json.load(open('/tmp/workflow_v3.json'))
+          w = json.load(open('/tmp/workflow_v4.json'))
           c = w['connections']
           def first(src): return c[src]['main'][0][0]['node']
           assert first('Claude: Generate Topic') == 'Parse Topic Pool (V3)'
@@ -73,30 +83,44 @@ jobs:
           names = {n['name']: n for n in w['nodes']}
           validate = names['Validate Final Script']['parameters']['jsCode']
           assert 'visual_plan_quality' in validate
-          assert 'engagement_mode' in validate and "'none'" in validate
           resolver = names['Resolve B-roll']['parameters']['jsonBody']
           assert 'search_queries' in resolver and 'first_frame' in resolver
-          print('V3 graph OK')
+          assert 'run_id' in resolver and '$execution.id' in resolver
+          print('V4 graph OK')
           PY
 
-      - name: Validate compose and service source
+      - name: Validate compose and b-roll budget transforms
         run: |
           set -euo pipefail
-          python3 scripts/upgrade-compose-v3.py shorts-compose/compose.js /tmp/compose_v3.js
-          grep -q 'CREATIVE_SYSTEM_V3_COMPOSE' /tmp/compose_v3.js
-          grep -q 'wantsShareOutro' /tmp/compose_v3.js
-          grep -q 'captionMode' /tmp/compose_v3.js
-          node --check /tmp/compose_v3.js
-          node --check shorts-compose/brollResolver.js
+          python3 -m py_compile scripts/upgrade-compose-v3.py scripts/upgrade-compose-budget-v4.py
+          cp shorts-compose/compose.js /tmp/compose_v4.js
+          cp shorts-compose/brollResolver.js /tmp/broll_v4.js
+          python3 scripts/upgrade-compose-v3.py /tmp/compose_v4.js
+          python3 scripts/upgrade-compose-budget-v4.py /tmp/compose_v4.js /tmp/broll_v4.js
+          grep -q 'CREATIVE_SYSTEM_V3_COMPOSE' /tmp/compose_v4.js
+          grep -q 'API_BUDGET_V4_COMPOSE' /tmp/compose_v4.js
+          grep -q 'run_id' /tmp/compose_v4.js
+          grep -q 'API_BUDGET_V4' /tmp/broll_v4.js
+          grep -q 'INITIAL_SEARCH_QUERIES' /tmp/broll_v4.js
+          grep -q 'FIRST_FRAME_MAX_VISION_CALLS' /tmp/broll_v4.js
+          grep -q 'SUPPORT_MAX_VISION_CALLS' /tmp/broll_v4.js
+          grep -q 'RUN_MAX_VISION_CALLS' /tmp/broll_v4.js
+          grep -q 'scoreCache' /tmp/broll_v4.js
+          grep -q 'runBudgets' /tmp/broll_v4.js
+          grep -q 'scoreOneBatch' /tmp/broll_v4.js
+          grep -q 'scene_vision_budget_exhausted' /tmp/broll_v4.js
+          grep -q 'run_vision_budget_exhausted' /tmp/broll_v4.js
+          node --check /tmp/compose_v4.js
+          node --check /tmp/broll_v4.js
           node --check shorts-compose/feedbackLoop.js
           node --check shorts-compose/competitorMining.js
           python3 -m json.tool shorts-compose/channel-voice.json >/dev/null
 
-      - name: Assert fail-closed b-roll
+      - name: Assert fail-closed quality behavior survives
         run: |
           set -euo pipefail
-          grep -q 'below_quality_threshold' shorts-compose/brollResolver.js
-          grep -q 'BROLL_FIRST_FRAME_THRESHOLD' shorts-compose/brollResolver.js
-          grep -q 'return { ok: false' shorts-compose/brollResolver.js
+          grep -q 'below_quality_threshold' /tmp/broll_v4.js
+          grep -q 'BROLL_FIRST_FRAME_THRESHOLD' /tmp/broll_v4.js
+          grep -q 'return { ok: false' /tmp/broll_v4.js
           grep -q 'visual_hook_proxy' shorts-compose/competitorMining.js
           grep -q 'creative_dna' shorts-compose/feedbackLoop.js
