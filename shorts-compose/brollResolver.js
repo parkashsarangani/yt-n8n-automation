@@ -1,25 +1,24 @@
 // ---------------------------------------------------------------------------
 // Multi-source real b-roll resolver.
 //
-// Collects candidate assets from several FREE real-media sources for a scene,
-// ranks them by AI-vision relevance to the scene's description, and returns the
-// single best real asset. AI image generation (fal) is the CALLER's fallback,
-// used only when nothing here scores above the threshold - so real footage is
-// the default and AI is the last resort.
-//
-// Sources (all free): Pexels photos, Pexels videos, Unsplash photos (photos
-// only - Unsplash has no video), Wikipedia lead image (best for famous named
-// people/places/things). Keys live in the compose service env (PEXELS_KEY,
-// UNSPLASH_KEY, ANTHROPIC_KEY). There is no AI image generation.
+// V3 creative commissioning behavior:
+// - oversample real-media candidates instead of settling for the first match
+// - score visual arrest + phone-size clarity, not semantic relevance alone
+// - use a stricter threshold for the first frame
+// - try alternate search queries supplied by the visual director
+// - FAIL CLOSED when the best asset is weak; weak stock is not publishable
 // ---------------------------------------------------------------------------
 const axios = require("axios");
 
 const PEXELS_KEY = process.env.PEXELS_KEY || "";
 const UNSPLASH_KEY = process.env.UNSPLASH_KEY || "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
-const SCORE_THRESHOLD = Number(process.env.BROLL_SCORE_THRESHOLD || 75);
+const SCORE_THRESHOLD = Number(process.env.BROLL_SCORE_THRESHOLD || 82);
+const FIRST_FRAME_THRESHOLD = Number(process.env.BROLL_FIRST_FRAME_THRESHOLD || 88);
 const VISION_MODEL = process.env.BROLL_VISION_MODEL || "claude-haiku-4-5-20251001";
-const VISION_TOP_N = Number(process.env.BROLL_VISION_TOP_N || 3);
+const VISION_TOP_N = Number(process.env.BROLL_VISION_TOP_N || 8);
+const SOURCE_PER_QUERY = Number(process.env.BROLL_SOURCE_PER_QUERY || 12);
+const MAX_SEARCH_QUERIES = Number(process.env.BROLL_MAX_SEARCH_QUERIES || 4);
 
 async function safeGet(url, config = {}, timeout = 15000) {
   try {
@@ -30,12 +29,32 @@ async function safeGet(url, config = {}, timeout = 15000) {
   }
 }
 
-// --- source adapters: each returns [{ type, url, thumb, alt, source, attribution }] ---
+function uniqStrings(values) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of values || []) {
+    const v = String(raw || "").trim();
+    const key = v.toLowerCase();
+    if (!v || seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
+function dedupeCandidates(candidates) {
+  const seen = new Set();
+  return (candidates || []).filter((c) => {
+    if (!c || !c.url || seen.has(c.url)) return false;
+    seen.add(c.url);
+    return true;
+  });
+}
 
 async function fromPexelsPhotos(query) {
   if (!PEXELS_KEY || !query) return [];
   const d = await safeGet(
-    `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5&orientation=portrait&size=large`,
+    `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${SOURCE_PER_QUERY}&orientation=portrait&size=large`,
     { headers: { Authorization: PEXELS_KEY } }
   );
   return (d?.photos || [])
@@ -43,7 +62,10 @@ async function fromPexelsPhotos(query) {
       type: "image",
       url: p.src?.original || p.src?.large2x || p.src?.large,
       thumb: p.src?.medium || p.src?.small,
+      width: p.width || null,
+      height: p.height || null,
       alt: p.alt || query,
+      query,
       source: "pexels",
       attribution: "",
     }))
@@ -53,18 +75,27 @@ async function fromPexelsPhotos(query) {
 async function fromPexelsVideos(query) {
   if (!PEXELS_KEY || !query) return [];
   const d = await safeGet(
-    `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=5&orientation=portrait&size=medium`,
+    `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=${SOURCE_PER_QUERY}&orientation=portrait&size=medium`,
     { headers: { Authorization: PEXELS_KEY } }
   );
   return (d?.videos || [])
     .map((v) => {
       const files = (v.video_files || []).filter((f) => f.link && f.height && f.width);
-      // prefer portrait, then highest resolution
       const portrait = files.filter((f) => f.height >= f.width);
       const pool = portrait.length ? portrait : files;
-      const best = pool.sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+      const best = [...pool].sort((a, b) => (b.height || 0) - (a.height || 0))[0];
       return best
-        ? { type: "video", url: best.link, thumb: v.image, alt: query, source: "pexels_video", attribution: "" }
+        ? {
+            type: "video",
+            url: best.link,
+            thumb: v.image,
+            width: best.width || null,
+            height: best.height || null,
+            alt: query,
+            query,
+            source: "pexels_video",
+            attribution: "",
+          }
         : null;
     })
     .filter(Boolean);
@@ -73,7 +104,7 @@ async function fromPexelsVideos(query) {
 async function fromUnsplash(query) {
   if (!UNSPLASH_KEY || !query) return [];
   const d = await safeGet(
-    `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=5&orientation=portrait`,
+    `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=${SOURCE_PER_QUERY}&orientation=portrait`,
     { headers: { Authorization: `Client-ID ${UNSPLASH_KEY}`, "Accept-Version": "v1" } }
   );
   return (d?.results || [])
@@ -81,9 +112,11 @@ async function fromUnsplash(query) {
       type: "image",
       url: p.urls?.full || p.urls?.regular,
       thumb: p.urls?.small || p.urls?.thumb,
+      width: p.width || null,
+      height: p.height || null,
       alt: p.alt_description || p.description || query,
+      query,
       source: "unsplash",
-      // Unsplash API guidelines require crediting the photographer + Unsplash
       attribution: `Photo by ${p.user?.name || "an artist"} on Unsplash`,
     }))
     .filter((c) => c.url);
@@ -95,14 +128,20 @@ async function wikiSummaryImage(title) {
     { headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" } }
   );
   const url = d?.originalimage?.source;
-  return url ? { url, thumb: d?.thumbnail?.source || url, title: d?.title || title } : null;
+  return url
+    ? {
+        url,
+        thumb: d?.thumbnail?.source || url,
+        title: d?.title || title,
+        width: d?.originalimage?.width || null,
+        height: d?.originalimage?.height || null,
+      }
+    : null;
 }
 
 async function fromWikipedia(subject) {
   if (!subject) return [];
-  // 1) direct page summary (handles exact names + redirects, e.g. "Walt Disney")
   let hit = await wikiSummaryImage(subject);
-  // 2) fallback: full-text search for the best-matching page, then its lead image
   if (!hit) {
     const s = await safeGet(
       `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(subject)}&srlimit=1&format=json&origin=*`,
@@ -117,19 +156,16 @@ async function fromWikipedia(subject) {
       type: "image",
       url: hit.url,
       thumb: hit.thumb,
+      width: hit.width,
+      height: hit.height,
       alt: hit.title,
+      query: subject,
       source: "wikipedia",
       attribution: `Image via Wikipedia: ${hit.title}`,
     },
   ];
 }
 
-// Claude's remote url-fetch for the image source is unreliable for some CDNs
-// (observed: it silently fails - and thus scores 0 - for every Wikimedia
-// Commons URL, which meant the one REAL named-subject photo always lost to
-// an unrelated stock photo that merely scored above 0). Downloading the
-// bytes ourselves and sending them as base64 sidesteps that entirely, since
-// this server can already reach any of these hosts fine.
 async function fetchImageAsBase64(url) {
   try {
     const r = await axios.get(url, {
@@ -138,7 +174,7 @@ async function fetchImageAsBase64(url) {
       headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" },
     });
     const buf = Buffer.from(r.data);
-    if (!buf.length || buf.length > 4.5 * 1024 * 1024) return null; // stay under Claude's inline image limit
+    if (!buf.length || buf.length > 4.5 * 1024 * 1024) return null;
     const mime = String(r.headers?.["content-type"] || "image/jpeg").split(";")[0].trim();
     if (!mime.startsWith("image/")) return null;
     return { mime, data: buf.toString("base64") };
@@ -147,16 +183,52 @@ async function fetchImageAsBase64(url) {
   }
 }
 
-// --- AI-vision relevance score (0-100) for one candidate ---
-async function scoreRelevance(imageUrl, description) {
-  if (!ANTHROPIC_KEY || !imageUrl) return 0;
-  const encoded = await fetchImageAsBase64(imageUrl);
+function parseScoreJson(text) {
+  const raw = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const a = raw.indexOf("{");
+  const b = raw.lastIndexOf("}");
+  if (a >= 0 && b > a) {
+    try { return JSON.parse(raw.slice(a, b + 1)); } catch { /* fall through */ }
+  }
+  const n = raw.match(/\d{1,3}/);
+  const v = n ? Math.max(0, Math.min(100, Number(n[0]))) : 0;
+  return {
+    relevance: v,
+    scroll_stop: v,
+    mobile_clarity: v,
+    composition: v,
+    motion_energy: v,
+    uniqueness: v,
+    overall: v,
+  };
+}
+
+function clampScore(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 0;
+}
+
+async function scoreVisualCandidate(candidate, target, { firstFrame = false, creativeFormat = "" } = {}) {
+  if (!ANTHROPIC_KEY || !candidate?.thumb && !candidate?.url) {
+    return {
+      relevance: 0,
+      scroll_stop: 0,
+      mobile_clarity: 0,
+      composition: 0,
+      motion_energy: candidate?.type === "video" ? 55 : 35,
+      uniqueness: 0,
+      overall: 0,
+    };
+  }
+
+  const encoded = await fetchImageAsBase64(candidate.thumb || candidate.url);
   const imageSource = encoded
     ? { type: "base64", media_type: encoded.mime, data: encoded.data }
-    : { type: "url", url: imageUrl }; // best-effort fallback if we couldn't fetch it ourselves
+    : { type: "url", url: candidate.thumb || candidate.url };
+
   const body = {
     model: VISION_MODEL,
-    max_tokens: 16,
+    max_tokens: 180,
     messages: [
       {
         role: "user",
@@ -165,86 +237,175 @@ async function scoreRelevance(imageUrl, description) {
           {
             type: "text",
             text:
-              `This image should clearly depict or directly relate to: "${description}". ` +
-              `On a scale of 0 to 100, how well does it? A generic or unrelated stock photo scores low; ` +
-              `an image of the actual named subject scores high. Reply with ONLY the number.`,
+              `Commission this ${candidate.type} for a vertical YouTube Short. It must depict: "${target}". ` +
+              `Creative format: "${creativeFormat || "unspecified"}". ${firstFrame ? "This is the FIRST FRAME and must stop a swipe before audio is understood." : "This is a supporting scene and must add visual meaning, not generic filler."} ` +
+              `Score 0-100 for relevance, scroll_stop, mobile_clarity, composition, motion_energy, uniqueness, and overall. ` +
+              `For a video candidate, infer motion potential from the thumbnail/type but do not pretend to have watched the clip. ` +
+              `A semantically correct but ordinary stock image should score below 75 overall. ` +
+              `Return ONLY JSON: {"relevance":0,"scroll_stop":0,"mobile_clarity":0,"composition":0,"motion_energy":0,"uniqueness":0,"overall":0}`,
           },
         ],
       },
     ],
   };
+
   try {
     const r = await axios.post("https://api.anthropic.com/v1/messages", body, {
-      timeout: 20000,
+      timeout: 25000,
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     });
     const txt = (r.data?.content || []).map((b) => (b && b.text) || "").join(" ");
-    const m = txt.match(/\d{1,3}/);
-    const s = m ? parseInt(m[0], 10) : 0;
-    return Math.max(0, Math.min(100, isNaN(s) ? 0 : s));
+    const parsed = parseScoreJson(txt);
+    const result = {
+      relevance: clampScore(parsed.relevance),
+      scroll_stop: clampScore(parsed.scroll_stop),
+      mobile_clarity: clampScore(parsed.mobile_clarity),
+      composition: clampScore(parsed.composition),
+      motion_energy: clampScore(parsed.motion_energy),
+      uniqueness: clampScore(parsed.uniqueness),
+      overall: clampScore(parsed.overall),
+    };
+    // Prevent a flashy-but-irrelevant or illegible asset from winning on a high
+    // self-reported overall score.
+    const hardCeiling = Math.min(result.relevance, result.mobile_clarity) + 10;
+    result.overall = Math.min(result.overall, hardCeiling, 100);
+    return result;
   } catch {
-    return 0;
+    return {
+      relevance: 0,
+      scroll_stop: 0,
+      mobile_clarity: 0,
+      composition: 0,
+      motion_energy: candidate?.type === "video" ? 55 : 35,
+      uniqueness: 0,
+      overall: 0,
+    };
   }
 }
 
-// --- main resolver ---
-async function resolveBroll({ query, subject, description }) {
-  const q = String(query || subject || description || "").trim(); // stock search terms
-  const desc = String(description || query || "").trim(); // scene description
-  const subj = String(subject || "").trim(); // the EXACT named entity (e.g. "Walt Disney"), or ""
-  // Score against the named subject when we have one, so a real Wikipedia photo
-  // of Walt Disney beats a generic pencil that only matched the stock query.
-  const target = subj || desc;
+function metadataOverlap(candidate, target) {
+  const targetWords = String(target || "").toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+  const hay = `${candidate?.alt || ""} ${candidate?.query || ""}`.toLowerCase();
+  return targetWords.reduce((n, w) => n + (hay.includes(w) ? 1 : 0), 0);
+}
 
-  const groups = await Promise.all([
-    fromPexelsPhotos(q),
-    fromPexelsVideos(q),
-    fromUnsplash(q),
-    fromWikipedia(subj),
-  ]);
-  let candidates = groups.flat().filter((c) => c && c.url);
-  if (!candidates.length) {
-    // No AI fallback anymore, so never leave a scene without a real image:
-    // last-resort broad Pexels photo search on the first keyword.
-    const kw = q.split(/\s+/)[0] || "abstract background";
-    candidates = (await fromPexelsPhotos(kw)).filter((c) => c && c.url);
-    if (!candidates.length) return { ok: false, reason: "no_candidates" };
+async function collectCandidates(queries, subject) {
+  const jobs = [];
+  for (const q of queries) {
+    jobs.push(fromPexelsPhotos(q), fromPexelsVideos(q), fromUnsplash(q));
+  }
+  jobs.push(fromWikipedia(subject));
+  const groups = await Promise.all(jobs);
+  return dedupeCandidates(groups.flat());
+}
+
+async function resolveBroll({
+  query,
+  queries,
+  alternate_queries,
+  subject,
+  description,
+  scene_index,
+  first_frame,
+  creative_format,
+} = {}) {
+  const desc = String(description || query || subject || "").trim();
+  const subj = String(subject || "").trim();
+  const target = subj || desc;
+  const queryList = uniqStrings([
+    query,
+    ...(Array.isArray(queries) ? queries : []),
+    ...(Array.isArray(alternate_queries) ? alternate_queries : []),
+    subj,
+  ]).slice(0, MAX_SEARCH_QUERIES);
+
+  if (!queryList.length || !target) {
+    return { ok: false, reason: "missing_search_target" };
   }
 
-  // Pre-rank the stock pool by metadata overlap with the target, but ALWAYS keep
-  // the Wikipedia (named-subject) hit in the scored set - it IS the subject, and
-  // must get a chance to win over a loosely-matching stock photo.
-  const tWords = target.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
-  const overlap = (alt) => {
-    const a = String(alt || "").toLowerCase();
-    return tWords.reduce((n, w) => n + (a.includes(w) ? 1 : 0), 0);
-  };
-  const wiki = candidates.filter((c) => c.source === "wikipedia");
-  const rest = candidates.filter((c) => c.source !== "wikipedia").sort((a, b) => overlap(b.alt) - overlap(a.alt));
+  const isFirstFrame = first_frame === true || Number(scene_index) === 0;
+  const threshold = isFirstFrame ? FIRST_FRAME_THRESHOLD : SCORE_THRESHOLD;
+  const candidates = await collectCandidates(queryList, subj);
+  if (!candidates.length) {
+    return { ok: false, reason: "no_candidates", threshold, queries_tried: queryList };
+  }
 
-  // vision-score the Wikipedia hit + the best stock candidates, then pick the best
-  const top = [...wiki, ...rest].slice(0, Math.max(1, VISION_TOP_N));
+  const wiki = candidates.filter((c) => c.source === "wikipedia");
+  const videos = candidates.filter((c) => c.type === "video").sort((a, b) => metadataOverlap(b, target) - metadataOverlap(a, target));
+  const photos = candidates.filter((c) => c.type !== "video" && c.source !== "wikipedia").sort((a, b) => metadataOverlap(b, target) - metadataOverlap(a, target));
+
+  // Keep the exact named-subject candidate, then deliberately mix motion and
+  // stills in the scored set instead of allowing one source to monopolize it.
+  const mixed = [];
+  const add = (c) => { if (c && !mixed.some((x) => x.url === c.url)) mixed.push(c); };
+  wiki.forEach(add);
+  for (let i = 0; mixed.length < VISION_TOP_N && (i < videos.length || i < photos.length); i++) {
+    add(videos[i]);
+    if (mixed.length < VISION_TOP_N) add(photos[i]);
+  }
+  for (const c of candidates) {
+    if (mixed.length >= VISION_TOP_N) break;
+    add(c);
+  }
+
   const scored = [];
-  for (const c of top) {
-    const score = await scoreRelevance(c.thumb || c.url, target);
-    scored.push({ ...c, score });
+  for (const c of mixed.slice(0, VISION_TOP_N)) {
+    const dimensions = await scoreVisualCandidate(c, target, {
+      firstFrame: isFirstFrame,
+      creativeFormat: creative_format,
+    });
+    scored.push({ ...c, ...dimensions, score: dimensions.overall });
   }
   scored.sort((a, b) => b.score - a.score);
   const best = scored[0];
 
-  // fal/AI generation has been removed: real footage is the ONLY source, so
-  // always return the best real asset we found. We prefer >= threshold, but
-  // rather than an AI fallback we use the top-scored real candidate even below
-  // it - a slightly loose real photo beats an empty scene.
+  if (!best || best.score < threshold) {
+    return {
+      ok: false,
+      reason: "below_quality_threshold",
+      threshold,
+      first_frame: isFirstFrame,
+      queries_tried: queryList,
+      candidate_count: candidates.length,
+      scored_count: scored.length,
+      best_score: best?.score || 0,
+      best_candidate: best
+        ? {
+            type: best.type,
+            source: best.source,
+            score: best.score,
+            relevance: best.relevance,
+            scroll_stop: best.scroll_stop,
+            mobile_clarity: best.mobile_clarity,
+          }
+        : null,
+    };
+  }
+
   return {
     ok: true,
     type: best.type,
     url: best.url,
     source: best.source,
     score: best.score,
-    below_threshold: best.score < SCORE_THRESHOLD,
+    relevance: best.relevance,
+    scroll_stop: best.scroll_stop,
+    mobile_clarity: best.mobile_clarity,
+    composition: best.composition,
+    motion_energy: best.motion_energy,
+    uniqueness: best.uniqueness,
+    threshold,
+    first_frame: isFirstFrame,
+    selected_query: best.query || queryList[0],
+    candidate_count: candidates.length,
     attribution: best.attribution || "",
   };
 }
 
-module.exports = { resolveBroll };
+module.exports = {
+  resolveBroll,
+  parseScoreJson,
+  uniqStrings,
+  dedupeCandidates,
+  metadataOverlap,
+};
