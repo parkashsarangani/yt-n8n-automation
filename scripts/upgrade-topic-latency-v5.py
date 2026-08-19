@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Apply topic-generation latency/budget guardrails after the V4 workflow upgrade.
 
-V3 widened topic ideation from 12 to 36 candidates and raised the Claude output
-budget to 9k tokens, but the inherited n8n HTTP timeout remained 60s. This small
-post-transform keeps the two-stage commissioning design while making the first
-call less expensive and giving it enough wall-clock headroom to complete.
+V3 widens topic ideation from 12 to 36 candidates while the exported Anthropic
+request still carries an 8,192-token ceiling, a 60s HTTP timeout, and n8n's
+3-attempt automatic retry. This post-transform keeps the two-stage commissioning
+design while bounding the first call's latency, output size, and duplicate spend.
 """
 from __future__ import annotations
 
@@ -47,13 +47,24 @@ def upgrade(workflow: dict) -> dict:
         else:
             raise ValueError("could not patch topic pool size: V3 generation anchor not found")
 
-    if "max_tokens: 9000" in body:
-        body = body.replace("max_tokens: 9000", f"max_tokens: {MAX_TOKENS}", 1)
-    elif f"max_tokens: {MAX_TOKENS}" not in body:
-        raise ValueError("could not patch topic max_tokens: V3 token anchor not found")
+    token_anchors = ("max_tokens: 9000", "max_tokens: 8192")
+    if f"max_tokens: {MAX_TOKENS}" not in body:
+        for anchor in token_anchors:
+            if anchor in body:
+                body = body.replace(anchor, f"max_tokens: {MAX_TOKENS}", 1)
+                break
+        else:
+            raise ValueError("could not patch topic max_tokens: known token anchors not found")
 
     params["jsonBody"] = body
     params.setdefault("options", {})["timeout"] = TIMEOUT_MS
+
+    # A timeout must not fan out into three expensive duplicate topic calls.
+    # A later scheduled run is a safer retry boundary than n8n retrying the same
+    # large prompt immediately.
+    node["retryOnFail"] = False
+    node["maxTries"] = 1
+    node["waitBetweenTries"] = 0
     return workflow
 
 
