@@ -71,6 +71,18 @@ jobs:
           done
           echo "Health check passed"
 
+      - name: Build quality-upgraded n8n workflow
+        run: |
+          set -e
+          echo "=== Applying viral Shorts quality upgrade ==="
+          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_quality.json
+          python3 -m json.tool /tmp/workflow_quality.json >/dev/null
+
+          # Fail deployment if the quality pass did not actually modify the graph.
+          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_quality.json
+          grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
+          grep -q 'qualityMinimums' /tmp/workflow_quality.json
+
       - name: Deploy n8n workflow
         run: |
           echo "=== Deploying n8n workflow ==="
@@ -82,7 +94,7 @@ jobs:
             nodes,
             connections,
             settings: {executionOrder: (.settings.executionOrder // "v1")}
-          }' n8n/workflow.json > /tmp/workflow_deploy.json
+          }' /tmp/workflow_quality.json > /tmp/workflow_deploy.json
 
           HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
             -X PUT "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
