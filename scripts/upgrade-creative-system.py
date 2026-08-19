@@ -76,7 +76,7 @@ def add_topic_commissioning(w: dict) -> None:
     if POOL_NODE not in names:
         w["nodes"].append({
             "id": "b675bb82-bbeb-4efe-95ed-706a5ca43573", "name": POOL_NODE,
-            "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2320, 140],
+            "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2400, 300],
             "parameters": {"jsCode": """const response=$input.first().json;
 if(response.error) throw new Error('Topic pool API error: '+JSON.stringify(response.error));
 const contentBlocks=Array.isArray(response.content)?response.content:[];
@@ -105,7 +105,7 @@ return {json:{pool,shortlist:pool.slice(0,8)}};"""},
         c = copy.deepcopy(gen)
         c["id"] = "44b8a598-b27f-4fe1-a760-dd6eb781ccda"
         c["name"] = COMMISSION_NODE
-        c["position"] = [2480, 140]
+        c["position"] = [2700, 300]
         c["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 6000, thinking: { type: "adaptive" }, output_config: { effort: "high" }, messages: [{ role: "user", content: "You are commissioning ONE production-worthy YouTube Short from an already harsh top-8 shortlist. Judge the underlying viewing experience, not clever wording.\n\nSHORTLIST: " + JSON.stringify($json.shortlist) + "\n\nDeep-score each 0-100 on concept_strength, evidence_strength, first_frame_strength, payoff_strength, shareability, novelty, production_feasibility, naturalness. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 5. 80 is merely good; 90 is rare. Prefer intrinsically visual, defensible concepts and protect archetype variety. Reject interchangeable trivia.\n\nReturn ONLY JSON with candidates sorted best-first. Preserve topic, archetype, research_query, first_frame_concept, share_reason. Add evidence_score, visual_score, share_score, concept_score, payoff_score, novelty_score, execution_score, reason, score." }] }) }}'''
         c["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(c)
@@ -162,14 +162,14 @@ def add_visual_director(w: dict) -> None:
     if EDITOR_PARSE_NODE not in names:
         w["nodes"].append({
             "id": "02939380-89c9-4580-ad8b-280d2402f6f8", "name": EDITOR_PARSE_NODE,
-            "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [3460, 180],
+            "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [4800, 300],
             "parameters": {"jsCode": """const response=$input.first().json;if(response.error)throw new Error('Editorial API error: '+JSON.stringify(response.error));let raw=String(response.content?.[0]?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');function x(s){const a=s.indexOf('{');if(a<0)return null;let d=0,q=false,e=false;for(let i=a;i<s.length;i++){const c=s[i];if(q){if(e)e=false;else if(c==='\\\\')e=true;else if(c==='\"')q=false;}else if(c==='\"')q=true;else if(c==='{')d++;else if(c==='}'&&--d===0)return s.slice(a,i+1);}return null;}let p;for(const c of [raw,'{'+raw,x(raw),x('{'+raw)]){if(!c)continue;try{p=JSON.parse(c);break;}catch{}}if(!p)throw new Error('Editorial pass returned invalid JSON');return {json:{script:p}};"""},
         })
     if VISUAL_NODE not in names:
         v = copy.deepcopy(editor)
         v["id"] = "f5bc27a1-e53c-4a35-88e4-b89898f9eb5b"
         v["name"] = VISUAL_NODE
-        v["position"] = [3620, 180]
+        v["position"] = [5100, 300]
         v["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, output_config: { effort: "medium" }, messages: [{ role: "user", content: "You are the VISUAL DIRECTOR for a high-end YouTube Shorts channel. Editorial is locked. Do NOT change facts, hook, title, narration, payoff, scene order, or scene count.\n\nSCRIPT: " + JSON.stringify($json.script) + "\n\nChoose one creative_format: documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Scene 0 must work muted; set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat. Assign each content scene visual_role = hero/evidence/detail/comparison/breath/payoff. For each stock scene add 3-4 DISTINCT concrete search_queries (2-5 words) and set stock_search_query to the strongest. Preserve named_subject for exact real entities. Use templates only when the beat is fundamentally a number/comparison/punchy line. Choose caption_mode = karaoke/key_phrases/minimal. Set transition_style=hard_cut. Carry the editor CTA decision through and set engagement_mode=none/comment_only/share_only/comment_and_share; do not invent a CTA. Set open_loop_count honestly (usually 0-2). Set visual_plan_quality 0-100; generic scene 0 or repetitive roles must score below 88. Return ONLY the COMPLETE script JSON with all original fields plus these visual fields." }] }) }}'''
         v["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(v)
