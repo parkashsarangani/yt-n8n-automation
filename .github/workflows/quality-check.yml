@@ -1,4 +1,4 @@
-name: Validate Shorts Creative System V5
+name: Validate Shorts Creative System V6
 
 on:
   pull_request:
@@ -10,6 +10,7 @@ on:
       - 'scripts/upgrade-compose-budget-v4.py'
       - 'scripts/upgrade-workflow-budget-v4.py'
       - 'scripts/upgrade-topic-latency-v5.py'
+      - 'scripts/upgrade-anthropic-parser-v6.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
@@ -28,6 +29,7 @@ on:
       - 'scripts/upgrade-compose-budget-v4.py'
       - 'scripts/upgrade-workflow-budget-v4.py'
       - 'scripts/upgrade-topic-latency-v5.py'
+      - 'scripts/upgrade-anthropic-parser-v6.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
@@ -42,37 +44,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply V2 + V3 + V4 + V5 workflow upgrades
+      - name: Apply V2 + V3 + V4 + V5 + V6 workflow upgrades
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system-v3.py scripts/upgrade-workflow-budget-v4.py scripts/upgrade-topic-latency-v5.py
+          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system-v3.py scripts/upgrade-workflow-budget-v4.py scripts/upgrade-topic-latency-v5.py scripts/upgrade-anthropic-parser-v6.py
           python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_v2.json
           python3 scripts/upgrade-creative-system-v3.py /tmp/workflow_v2.json /tmp/workflow_v3.json
           python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_v4.json
           python3 scripts/upgrade-topic-latency-v5.py /tmp/workflow_v4.json /tmp/workflow_v5.json
-          python3 -m json.tool /tmp/workflow_v5.json >/dev/null
+          python3 scripts/upgrade-anthropic-parser-v6.py /tmp/workflow_v5.json /tmp/workflow_v6.json
+          python3 -m json.tool /tmp/workflow_v6.json >/dev/null
 
       - name: Assert commissioning graph and budget plumbing
         run: |
           set -euo pipefail
-          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_v5.json
-          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_v5.json
-          grep -q 'API_BUDGET_V4' /tmp/workflow_v5.json
-          grep -q 'TOPIC_LATENCY_V5' /tmp/workflow_v5.json
-          grep -q 'Wikipedia: Research Topic' /tmp/workflow_v5.json
-          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_v5.json
-          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_v5.json
-          grep -q 'visual_plan_quality' /tmp/workflow_v5.json
-          grep -q 'creative_dna' /tmp/workflow_v5.json
-          grep -q 'search_queries' /tmp/workflow_v5.json
-          grep -q 'run_id' /tmp/workflow_v5.json
-          grep -q '\$execution.id' /tmp/workflow_v5.json
+          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_v6.json
+          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_v6.json
+          grep -q 'API_BUDGET_V4' /tmp/workflow_v6.json
+          grep -q 'TOPIC_LATENCY_V5' /tmp/workflow_v6.json
+          grep -q 'ANTHROPIC_TEXT_BLOCK_V6' /tmp/workflow_v6.json
+          grep -q 'Wikipedia: Research Topic' /tmp/workflow_v6.json
+          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_v6.json
+          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_v6.json
+          grep -q 'visual_plan_quality' /tmp/workflow_v6.json
+          grep -q 'creative_dna' /tmp/workflow_v6.json
+          grep -q 'search_queries' /tmp/workflow_v6.json
+          grep -q 'run_id' /tmp/workflow_v6.json
+          grep -q '\$execution.id' /tmp/workflow_v6.json
 
-      - name: Verify V5 graph and topic-call limits
+      - name: Verify V6 graph, latency, and response parsing
         run: |
           python3 - <<'PY'
           import json
-          w = json.load(open('/tmp/workflow_v5.json'))
+          w = json.load(open('/tmp/workflow_v6.json'))
           c = w['connections']
           def first(src): return c[src]['main'][0][0]['node']
           assert first('Claude: Generate Topic') == 'Parse Topic Pool (V3)'
@@ -103,12 +107,19 @@ jobs:
           assert commission['parameters']['options']['timeout'] == 90000
           assert 'shortlist:pool.slice(0,8)' in names['Parse Topic Pool (V3)']['parameters']['jsCode']
 
+          for node_name in ['Parse Draft JSON', 'Parse Editorial For Visual Director (V3)', 'Validate Final Script']:
+              code = names[node_name]['parameters']['jsCode']
+              assert 'ANTHROPIC_TEXT_BLOCK_V6' in code, node_name
+              assert 'content?.[0]?.text' not in code, node_name
+              assert "type === 'text'" in code or "type==='text'" in code, node_name
+              assert 'content types:' in code or 'content types: ' in code, node_name
+
           validate = names['Validate Final Script']['parameters']['jsCode']
           assert 'visual_plan_quality' in validate
           resolver = names['Resolve B-roll']['parameters']['jsonBody']
           assert 'search_queries' in resolver and 'first_frame' in resolver
           assert 'run_id' in resolver and '$execution.id' in resolver
-          print('V5 graph + topic latency limits OK')
+          print('V6 graph + latency + Anthropic parser hardening OK')
           PY
 
       - name: Validate compose and b-roll budget transforms
