@@ -70,7 +70,7 @@ jobs:
           done
           echo "Health check passed"
 
-      - name: Build creative-system V4 n8n workflow
+      - name: Build creative-system V5 n8n workflow
         run: |
           set -euo pipefail
           echo "=== Applying viral quality V2 ==="
@@ -83,17 +83,34 @@ jobs:
 
           echo "=== Applying API budget V4 ==="
           python3 -m py_compile scripts/upgrade-workflow-budget-v4.py
-          python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_quality.json
+          python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_v4.json
+
+          echo "=== Applying topic latency V5 ==="
+          python3 -m py_compile scripts/upgrade-topic-latency-v5.py
+          python3 scripts/upgrade-topic-latency-v5.py /tmp/workflow_v4.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
           grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_quality.json
           grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_quality.json
           grep -q 'API_BUDGET_V4' /tmp/workflow_quality.json
+          grep -q 'TOPIC_LATENCY_V5' /tmp/workflow_quality.json
           grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_quality.json
           grep -q 'Claude: Visual Director (V3)' /tmp/workflow_quality.json
           grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
           grep -q 'qualityMinimums' /tmp/workflow_quality.json
           grep -q 'run_id' /tmp/workflow_quality.json
+
+          python3 - <<'PY'
+          import json
+          w = json.load(open('/tmp/workflow_quality.json'))
+          topic = next(n for n in w['nodes'] if n['name'] == 'Claude: Generate Topic')
+          body = topic['parameters']['jsonBody']
+          assert 'GENERATE 24 DISTINCT candidate topics' in body
+          assert 'max_tokens: 6000' in body
+          assert 'max_tokens: 9000' not in body
+          assert topic['parameters']['options']['timeout'] == 120000
+          print('topic latency V5 deployment guardrails OK')
+          PY
 
       - name: Deploy n8n workflow
         run: |
