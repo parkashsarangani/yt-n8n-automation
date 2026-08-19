@@ -92,8 +92,12 @@ jobs:
           assert 'GENERATE 24 DISTINCT candidate topics' in topic_body
           assert 'GENERATE 36 DISTINCT candidate topics' not in topic_body
           assert 'max_tokens: 6000' in topic_body
+          assert 'max_tokens: 8192' not in topic_body
           assert 'max_tokens: 9000' not in topic_body
           assert topic['parameters']['options']['timeout'] == 120000
+          assert topic.get('retryOnFail') is False
+          assert topic.get('maxTries') == 1
+          assert topic.get('waitBetweenTries') == 0
 
           commission = names['Claude: Commission Topic Shortlist (V3)']
           assert commission['parameters']['options']['timeout'] == 90000
