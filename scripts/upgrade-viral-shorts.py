@@ -144,7 +144,11 @@ def patch_editor_prompt(node: dict) -> None:
     body = replace_once(body, output_anchor, quality, "editor quality gate")
 
     draft_anchor = "Draft to edit:\\n\" + JSON.stringify($json.draft) + \""
-    draft_new = "External research leads: \\" + JSON.stringify($('Normalize Research Evidence').item.json.research_evidence || []) + \\"\\nTopic-selection first-frame concept: \\" + ($('Normalize Research Evidence').item.json.first_frame_concept || '') + \\"\\n\\nDraft to edit:\\n\" + JSON.stringify($json.draft) + \""
+    draft_new = (
+        "External research leads: \\\" + JSON.stringify($('Normalize Research Evidence').item.json.research_evidence || []) + \\\""
+        "\\nTopic-selection first-frame concept: \\\" + ($('Normalize Research Evidence').item.json.first_frame_concept || '') + \\\""
+        "\\n\\nDraft to edit:\\n\\\" + JSON.stringify($json.draft) + \\\""
+    )
     body = replace_once(body, draft_anchor, draft_new, "editor research input")
     node["parameters"]["jsonBody"] = body
 
