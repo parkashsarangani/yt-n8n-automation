@@ -31,6 +31,16 @@ services:
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
+      # V4 paid-vision budget guardrails. Defaults are deliberately conservative:
+      # try 2 queries first, broaden to at most 4, score max 5 candidates for the
+      # first frame / 3 for supporting scenes, and never exceed 18 paid vision
+      # calls for one n8n execution. Override in .env only after measuring impact.
+      - BROLL_INITIAL_SEARCH_QUERIES=${BROLL_INITIAL_SEARCH_QUERIES:-2}
+      - BROLL_MAX_SEARCH_QUERIES=${BROLL_MAX_SEARCH_QUERIES:-4}
+      - BROLL_FIRST_FRAME_MAX_VISION_CALLS=${BROLL_FIRST_FRAME_MAX_VISION_CALLS:-5}
+      - BROLL_SUPPORT_MAX_VISION_CALLS=${BROLL_SUPPORT_MAX_VISION_CALLS:-3}
+      - BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-18}
+      - BROLL_SCORE_CACHE_TTL_MS=${BROLL_SCORE_CACHE_TTL_MS:-21600000}
       # Competitor outlier mining (/competitors/mine): a YouTube Data API v3 key
       # (public data only - NOT the OAuth analytics credential). If empty, the
       # weekly mine call fails cleanly and the topic generator just runs without
