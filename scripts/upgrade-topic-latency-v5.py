@@ -5,6 +5,14 @@ V3 widens topic ideation from 12 to 36 candidates while the exported Anthropic
 request still carries an 8,192-token ceiling, a 60s HTTP timeout, and n8n's
 3-attempt automatic retry. This post-transform keeps the two-stage commissioning
 design while bounding the first call's latency, output size, and duplicate spend.
+
+POOL_SIZE was originally cut to 24 here, which still overflowed MAX_TOKENS in
+production: with the V3 archetype-enriched schema (10 fields/candidate vs the
+original 3) plus adaptive thinking sharing the same 6,000-token ceiling,
+Claude's response was truncated mid-array, crashing "Parse Topic Pool (V3)"
+with a raw JSON.parse SyntaxError. Rather than raise MAX_TOKENS (more latency
+per call, the thing V5 exists to bound), POOL_SIZE is brought back down to the
+last candidate count proven to fit comfortably in a similar budget.
 """
 from __future__ import annotations
 
@@ -14,7 +22,7 @@ from pathlib import Path
 
 MARKER = "TOPIC_LATENCY_V5"
 TOPIC_NODE = "Claude: Generate Topic"
-POOL_SIZE = 24
+POOL_SIZE = 12
 MAX_TOKENS = 6000
 TIMEOUT_MS = 120000
 

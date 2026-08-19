@@ -79,9 +79,24 @@ def add_topic_commissioning(w: dict) -> None:
             "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2320, 140],
             "parameters": {"jsCode": """const response=$input.first().json;
 if(response.error) throw new Error('Topic pool API error: '+JSON.stringify(response.error));
-const tb=(response.content||[]).find(b=>b.type==='text'); let raw=String(tb?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');
-const a=raw.indexOf('{'), z=raw.lastIndexOf('}'); if(a<0||z<=a) throw new Error('Topic pool returned no JSON');
-const obj=JSON.parse(raw.slice(a,z+1)); let pool=Array.isArray(obj.candidates)?obj.candidates:[];
+const contentBlocks=Array.isArray(response.content)?response.content:[];
+const tb=contentBlocks.find(b=>b&&b.type==='text');
+let raw=String(tb?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');
+if(!raw){
+  const blockTypes=contentBlocks.map(b=>b?.type||'unknown').join(', ')||'none';
+  if(response.stop_reason==='max_tokens') throw new Error('Topic pool hit max_tokens before producing a text block (content types: '+blockTypes+')');
+  throw new Error('Topic pool returned no text block (stop_reason: '+(response.stop_reason||'unknown')+', content types: '+blockTypes+')');
+}
+const a=raw.indexOf('{'), z=raw.lastIndexOf('}');
+if(a<0||z<=a) throw new Error('Topic pool returned no JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');
+let obj;
+try {
+  obj=JSON.parse(raw.slice(a,z+1));
+} catch (err) {
+  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (parse error: '+err.message+') - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
+  throw new Error('Topic pool JSON failed to parse (stop_reason: '+(response.stop_reason||'unknown')+', parse error: '+err.message+')');
+}
+let pool=Array.isArray(obj.candidates)?obj.candidates:[];
 pool=pool.filter(c=>c?.topic).map(c=>({topic:String(c.topic).trim(),archetype:String(c.archetype||'looks_fake_but_real').trim(),research_query:String(c.research_query||c.topic).trim(),first_frame_concept:String(c.first_frame_concept||'').trim(),share_reason:String(c.share_reason||'').trim(),evidence_score:Number(c.evidence_score)||0,visual_score:Number(c.visual_score)||0,share_score:Number(c.share_score)||0,reason:String(c.reason||''),score:Number(c.score)||0})).sort((x,y)=>y.score-x.score);
 if(pool.length<8) throw new Error('Topic pool produced fewer than 8 usable candidates');
 return {json:{pool,shortlist:pool.slice(0,8)}};"""},
@@ -122,9 +137,9 @@ def patch_writer_editor(w: dict) -> None:
         rule = "ENGAGEMENT IS OPTIONAL - CREATIVE_SYSTEM_V3: a comment question and share outro are optional. If either weakens the viewing experience, omit it, set the matching field to null, and do not hide a spoken CTA elsewhere in narration.\\n\\n" + anchor
         body = replace_once(body, anchor, rule, "writer engagement")
     body = body.replace('\\"comment_hook\\": string, \\"outro_line\\": string', '\\"comment_hook\\": string|null, \\"outro_line\\": string|null')
-    topic_anchor = 'Topic: \\" + $json.topic + \\"\\nFirst-frame concept from selection:'
+    topic_anchor = 'Topic: \" + $json.topic + \"\\nFirst-frame concept from selection:'
     if topic_anchor in body:
-        body = body.replace(topic_anchor, 'Topic: \\" + $json.topic + \\"\\nConcept archetype: \\" + ($json.archetype || \'looks_fake_but_real\') + \\"\\nFirst-frame concept from selection:', 1)
+        body = body.replace(topic_anchor, 'Topic: \" + $json.topic + \"\\nConcept archetype: \" + ($json.archetype || \'looks_fake_but_real\') + \"\\nFirst-frame concept from selection:', 1)
     writer["parameters"]["jsonBody"] = body
 
     editor = node_by_name(w, "Claude: Editorial Rewrite (Stage 2)")

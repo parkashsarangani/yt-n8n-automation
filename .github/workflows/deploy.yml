@@ -111,7 +111,7 @@ jobs:
           names = {n['name']: n for n in w['nodes']}
           topic = names['Claude: Generate Topic']
           body = topic['parameters']['jsonBody']
-          assert 'GENERATE 24 DISTINCT candidate topics' in body
+          assert 'GENERATE 12 DISTINCT candidate topics' in body
           assert 'max_tokens: 6000' in body
           assert 'max_tokens: 8192' not in body
           assert 'max_tokens: 9000' not in body
@@ -122,6 +122,11 @@ jobs:
               code = names[node_name]['parameters']['jsCode']
               assert 'ANTHROPIC_TEXT_BLOCK_V6' in code, node_name
               assert 'content?.[0]?.text' not in code, node_name
+          pool_code = names['Parse Topic Pool (V3)']['parameters']['jsCode']
+          assert 'try {' in pool_code or 'try{' in pool_code, 'Parse Topic Pool (V3) must guard JSON.parse'
+          assert 'stop_reason' in pool_code, 'Parse Topic Pool (V3) must diagnose max_tokens truncation'
+          writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
+          assert 'Concept archetype' in writer_body, 'archetype context must reach the script writer'
           print('V5 latency + V6 Anthropic parser guardrails OK')
           PY
 
