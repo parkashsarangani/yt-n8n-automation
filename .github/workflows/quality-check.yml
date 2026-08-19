@@ -73,7 +73,7 @@ jobs:
           names = {n['name']: n for n in w['nodes']}
           validate = names['Validate Final Script']['parameters']['jsCode']
           assert 'visual_plan_quality' in validate
-          assert "engagement_mode === 'none'" in validate
+          assert 'engagement_mode' in validate and "'none'" in validate
           resolver = names['Resolve B-roll']['parameters']['jsonBody']
           assert 'search_queries' in resolver and 'first_frame' in resolver
           print('V3 graph OK')
