@@ -28,10 +28,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== Validating V3 source transforms ==="
-          python3 -m py_compile scripts/upgrade-compose-v3.py
+          echo "=== Validating V3 + V4 source transforms ==="
+          python3 -m py_compile scripts/upgrade-compose-v3.py scripts/upgrade-compose-budget-v4.py
           python3 scripts/upgrade-compose-v3.py shorts-compose/compose.js
+          python3 scripts/upgrade-compose-budget-v4.py shorts-compose/compose.js shorts-compose/brollResolver.js
           grep -q 'CREATIVE_SYSTEM_V3_COMPOSE' shorts-compose/compose.js
+          grep -q 'API_BUDGET_V4_COMPOSE' shorts-compose/compose.js
+          grep -q 'API_BUDGET_V4' shorts-compose/brollResolver.js
+          grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
+          grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
           node --check shorts-compose/compose.js
           node --check shorts-compose/brollResolver.js
           node --check shorts-compose/feedbackLoop.js
@@ -65,7 +70,7 @@ jobs:
           done
           echo "Health check passed"
 
-      - name: Build creative-system V3 n8n workflow
+      - name: Build creative-system V4 n8n workflow
         run: |
           set -euo pipefail
           echo "=== Applying viral quality V2 ==="
@@ -74,15 +79,21 @@ jobs:
 
           echo "=== Applying creative system V3 ==="
           python3 -m py_compile scripts/upgrade-creative-system-v3.py
-          python3 scripts/upgrade-creative-system-v3.py /tmp/workflow_v2.json /tmp/workflow_quality.json
+          python3 scripts/upgrade-creative-system-v3.py /tmp/workflow_v2.json /tmp/workflow_v3.json
+
+          echo "=== Applying API budget V4 ==="
+          python3 -m py_compile scripts/upgrade-workflow-budget-v4.py
+          python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
           grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_quality.json
           grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_quality.json
+          grep -q 'API_BUDGET_V4' /tmp/workflow_quality.json
           grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_quality.json
           grep -q 'Claude: Visual Director (V3)' /tmp/workflow_quality.json
           grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
           grep -q 'qualityMinimums' /tmp/workflow_quality.json
+          grep -q 'run_id' /tmp/workflow_quality.json
 
       - name: Deploy n8n workflow
         run: |
