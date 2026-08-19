@@ -1,27 +1,11 @@
 // ---------------------------------------------------------------------------
-// Competitor outlier mining.
+// Competitor outlier mining for Shorts.
 //
-// The feedback loop (feedbackLoop.js) learns only from THIS channel's own
-// videos. This module adds the missing half: it watches a curated list of
-// comparable fact/curiosity Shorts channels and surfaces what is BREAKING OUT
-// for them right now, so the topic generator can lean toward proven subjects
-// and angles instead of re-deriving everything from our own throttled numbers.
-//
-// Method, once a week:
-//   1. Resolve each watchlist channel (competitors.json) to its uploads
-//      playlist via the YouTube Data API (API key, public data only).
-//   2. Pull recent uploads, keep only SHORTS (duration <= SHORT_MAX_SEC).
-//   3. Per channel, compute the median view count of its recent shorts and
-//      flag any short that beats that median by >= OUTLIER_MULTIPLE (and clears
-//      a floor of real reach). "Outlier" is normalized PER CHANNEL, so a small
-//      channel's breakout is judged against itself, not against a 20M-sub giant.
-//   4. Distill the outliers' TITLES into transferable topic/angle signals with
-//      Claude - never copying a title, only extracting what is working.
-//   5. Persist competitor_signals.json for the topic generator to read.
-//
-// Discipline mirrors the strategist: signals are inspiration, not commands, and
-// the distiller is told to drop anything off-format (lists, compilations, non
-// mass-appeal, medical) so it never pulls the channel off its own strategy.
+// V3 keeps the per-channel outlier normalization, but adds a second layer:
+// analyze the public thumbnail/cover visual + title + duration of breakout
+// Shorts to extract reproducible creative-execution signals. We deliberately
+// label thumbnail analysis as a packaging/first-frame PROXY; we do not pretend
+// to have watched or transcribed competitor videos.
 // ---------------------------------------------------------------------------
 const fs = require("fs");
 const fsp = require("fs/promises");
@@ -35,20 +19,16 @@ const WATCHLIST_PATH = path.join(__dirname, "competitors.json");
 const YT_KEY = process.env.YOUTUBE_API_KEY || "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
 const DISTILL_MODEL = process.env.COMPETITOR_DISTILL_MODEL || process.env.STRATEGIST_MODEL || "claude-sonnet-5";
+const VISION_MODEL = process.env.COMPETITOR_VISION_MODEL || "claude-haiku-4-5-20251001";
 
 const WINDOW_DAYS = Number(process.env.COMPETITOR_WINDOW_DAYS || 45);
-// 90s: the real fix for channels stuck at 0 recent_shorts was switching from
-// the uploads playlist to search.list (see recentVideoIds) - that quirk, not
-// the duration cap, was hiding their Shorts. Raising this to 180 previously
-// only diluted outlier detection (it let long compilation videos into the
-// median), so keep it at 90 to stay in the punchy single-fact format family
-// this channel is measured against.
 const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 90);
 const OUTLIER_MULTIPLE = Number(process.env.COMPETITOR_OUTLIER_MULTIPLE || 3);
 const OUTLIER_MIN_VIEWS = Number(process.env.COMPETITOR_OUTLIER_MIN_VIEWS || 50000);
 const MIN_SHORTS_FOR_BASELINE = Number(process.env.COMPETITOR_MIN_SHORTS || 5);
 const MAX_OUTLIERS = Number(process.env.COMPETITOR_MAX_OUTLIERS || 30);
-const UPLOADS_TO_SCAN = Number(process.env.COMPETITOR_UPLOADS_SCAN || 100); // per channel
+const EXECUTION_SAMPLE = Number(process.env.COMPETITOR_EXECUTION_SAMPLE || 12);
+const UPLOADS_TO_SCAN = Number(process.env.COMPETITOR_UPLOADS_SCAN || 100);
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
 
@@ -56,26 +36,23 @@ async function writeJson(p, data) {
   await fsp.mkdir(path.dirname(p), { recursive: true });
   await fsp.writeFile(p, JSON.stringify(data, null, 2));
 }
+
 async function readJson(p, fallback) {
-  try { if (!fs.existsSync(p)) return fallback; return JSON.parse(await fsp.readFile(p, "utf8")); }
-  catch { return fallback; }
+  try {
+    if (!fs.existsSync(p)) return fallback;
+    return JSON.parse(await fsp.readFile(p, "utf8"));
+  } catch {
+    return fallback;
+  }
 }
 
-// One comma-separated token -> a watchlist entry. A token is either a channel
-// ID ("UC...." 24 chars) or a handle ("@name" or bare "name").
 function parseChannelToken(tok) {
   const t = String(tok || "").trim();
   if (!t) return null;
   if (/^UC[A-Za-z0-9_-]{22}$/.test(t)) return { channel_id: t, name: t };
-  return { handle: t, name: t }; // resolveChannel strips a leading @ if present
+  return { handle: t, name: t };
 }
 
-// Watchlist source, in priority order:
-//   1. COMPETITOR_CHANNELS env - a comma-separated list of @handles and/or
-//      UC... channel IDs, set via a GitHub secret so the list is configurable
-//      without a code change. It is an env var, so a change to the secret takes
-//      effect on the next deploy (container restart), not instantly.
-//   2. competitors.json - the curated default baked into the image.
 function loadWatchlist() {
   const env = (process.env.COMPETITOR_CHANNELS || "").trim();
   if (env) {
@@ -85,15 +62,16 @@ function loadWatchlist() {
   try {
     const raw = JSON.parse(fs.readFileSync(WATCHLIST_PATH, "utf8"));
     return Array.isArray(raw.channels) ? raw.channels : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
-// ISO-8601 duration (PT#H#M#S) -> seconds
 function isoDurationToSec(iso) {
   if (!iso || typeof iso !== "string") return null;
   const m = iso.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
   if (!m) return null;
-  return (Number(m[1] || 0) * 3600) + (Number(m[2] || 0) * 60) + Number(m[3] || 0);
+  return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
 }
 
 function median(nums) {
@@ -111,7 +89,6 @@ async function ytGet(endpoint, params) {
   return r.data;
 }
 
-// Resolve one watchlist entry to { id, uploads, title, subs } or null.
 async function resolveChannel(entry) {
   try {
     let data;
@@ -130,28 +107,27 @@ async function resolveChannel(entry) {
       title: item.snippet.title,
       subs: Number(item.statistics.subscriberCount || 0),
     };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-// Recent videos (including Shorts) within the window -> list of videoIds.
-//
-// Uses search.list, NOT the channel's uploads playlist. A channel's uploads
-// playlist frequently OMITS Shorts (a long-standing YouTube Data API quirk) -
-// that is why shorts-native channels like Feliz/BrainBlud came back with 0.
-// search.list?type=video returns Shorts reliably (a Short is a video). It costs
-// 100 quota units/call vs 1 for playlistItems, but at ~7 channels/week that is
-// still a tiny fraction of the 10,000/day quota.
 async function recentVideoIds(channelId) {
   const publishedAfter = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const ids = [];
   let pageToken;
   for (let page = 0; page < Math.max(1, Math.ceil(UPLOADS_TO_SCAN / 50)); page++) {
     const data = await ytGet("search", {
-      part: "id", channelId, type: "video", order: "date",
-      maxResults: 50, publishedAfter, pageToken,
+      part: "id",
+      channelId,
+      type: "video",
+      order: "date",
+      maxResults: 50,
+      publishedAfter,
+      pageToken,
     });
     for (const it of data.items || []) {
-      if (it.id && it.id.videoId) ids.push(it.id.videoId);
+      if (it.id?.videoId) ids.push(it.id.videoId);
     }
     pageToken = data.nextPageToken;
     if (!pageToken) break;
@@ -159,26 +135,36 @@ async function recentVideoIds(channelId) {
   return ids;
 }
 
-// videos.list in batches of 50 -> [{ id, title, views, sec, published }]
+function bestThumbnail(snippet) {
+  const t = snippet?.thumbnails || {};
+  return t.maxres?.url || t.standard?.url || t.high?.url || t.medium?.url || t.default?.url || null;
+}
+
 async function videoStats(ids) {
   const out = [];
   for (let i = 0; i < ids.length; i += 50) {
     const batch = ids.slice(i, i + 50);
-    const data = await ytGet("videos", { part: "statistics,contentDetails,snippet", id: batch.join(",") });
+    const data = await ytGet("videos", {
+      part: "statistics,contentDetails,snippet",
+      id: batch.join(","),
+    });
     for (const v of data.items || []) {
       out.push({
         id: v.id,
         title: v.snippet.title,
+        description: String(v.snippet.description || "").slice(0, 300),
         views: Number(v.statistics.viewCount || 0),
+        likes: Number(v.statistics.likeCount || 0),
+        comments: Number(v.statistics.commentCount || 0),
         sec: isoDurationToSec(v.contentDetails.duration),
         published: v.snippet.publishedAt,
+        thumbnail_url: bestThumbnail(v.snippet),
       });
     }
   }
   return out;
 }
 
-// Core: scan every channel, return { outliers, scanned, unresolved }.
 async function scanCompetitors() {
   const watchlist = loadWatchlist();
   const scanned = [];
@@ -187,14 +173,17 @@ async function scanCompetitors() {
 
   for (const entry of watchlist) {
     const ch = await resolveChannel(entry);
-    if (!ch) { unresolved.push(entry.name || entry.handle || entry.channel_id || "unknown"); continue; }
+    if (!ch) {
+      unresolved.push(entry.name || entry.handle || entry.channel_id || "unknown");
+      continue;
+    }
 
     const ids = await recentVideoIds(ch.id);
     const vids = await videoStats(ids);
     const shorts = vids.filter((v) => v.sec != null && v.sec <= SHORT_MAX_SEC && v.views > 0);
     scanned.push({ name: ch.title, subs: ch.subs, recent_shorts: shorts.length });
 
-    if (shorts.length < MIN_SHORTS_FOR_BASELINE) continue; // no reliable baseline
+    if (shorts.length < MIN_SHORTS_FOR_BASELINE) continue;
     const med = median(shorts.map((v) => v.views));
     if (med <= 0) continue;
 
@@ -205,9 +194,12 @@ async function scanCompetitors() {
           channel: ch.title,
           title: v.title,
           views: v.views,
+          likes: v.likes,
+          comments: v.comments,
           outlier_multiple: Number(multiple.toFixed(1)),
           duration_sec: v.sec,
           published_at: v.published,
+          thumbnail_url: v.thumbnail_url,
           url: `https://www.youtube.com/shorts/${v.id}`,
         });
       }
@@ -218,47 +210,14 @@ async function scanCompetitors() {
   return { outliers: outliers.slice(0, MAX_OUTLIERS), scanned, unresolved };
 }
 
-const DISTILL_PROMPT = (outliersJson) =>
-`These are the breakout Shorts (each beat its OWN channel's median views by the shown multiple) from a watchlist of fact/curiosity channels comparable to ours. Ours is a faceless channel that posts ONE surprising, mass-appeal fact per Short (20-30s), English, no medical topics, no biographies, subjects a general audience instantly recognizes.
-
-BREAKOUT SHORTS (title, channel, views, outlier_multiple):
-${outliersJson}
-
-Your job: extract the transferable PATTERNS that made these break out, as inspiration for our own topic generator. This is signal-mining, not copying.
-
-RULES:
-- NEVER output a competitor's title to be reused. Extract the underlying subject + angle, restated generically.
-- DROP anything off-format for us: listicles/top-10s, multi-fact compilations, medical/health, channel-specific series, anything not a single mass-appeal fact.
-- A pattern is only worth reporting if it would plausibly work as a single surprising fact for a broad audience. If the outlier is popular for a reason we cannot reproduce (a specific creator's character, a trend we cannot ride), skip it.
-- Prefer patterns that recur across multiple outliers - those are the strongest signal - and say so.
-- Tie each signal to the outlier(s) that support it.
-
-OUTPUT - respond with ONLY a JSON object, no prose, no markdown fences:
-{
-  "summary": "<2-3 sentences: what is breaking out for comparable channels right now>",
-  "signals": [
-    {
-      "subject_category": "<e.g. human body, space, famous person, everyday object, money, history>",
-      "angle": "<the transferable angle/shape, generically stated - what makes it hit>",
-      "likely_trigger": "curiosity_gap|disbelief|fear_stakes|scale_shock|taboo_secret",
-      "why_it_works": "<one line>",
-      "supported_by": "<how many outliers / which channels, brief>"
-    }
-  ],
-  "avoid": [ "<any pattern that looks tempting but is off-format or non-reproducible for us>" ]
-}
-Prefer 4-8 strong signals to a long padded list. Every signal is read by our topic generator and acted on.`;
-
-// Robust JSON-object extraction from an LLM reply: strips code fences, then
-// walks balanced braces from the first "{" so trailing prose does not break the
-// parse and a truncated tail is reported as such rather than as a cryptic
-// "Expected ',' or ']'" from a naive lastIndexOf('}') slice.
-function extractJsonObject(text) {
+function parseJsonObject(text) {
   let s = String(text || "").trim();
   if (s.startsWith("```")) s = s.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   const at = s.indexOf("{");
   if (at < 0) throw new Error("no JSON object in reply: " + s.slice(0, 200));
-  let depth = 0, inStr = false, esc = false;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
   for (let i = at; i < s.length; i++) {
     const ch = s[i];
     if (inStr) {
@@ -267,79 +226,231 @@ function extractJsonObject(text) {
       else if (ch === '"') inStr = false;
     } else if (ch === '"') inStr = true;
     else if (ch === "{") depth++;
-    else if (ch === "}") { depth--; if (depth === 0) return JSON.parse(s.slice(at, i + 1)); }
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return JSON.parse(s.slice(at, i + 1));
+    }
   }
-  throw new Error("JSON object not closed - likely truncated by max_tokens: ..." + s.slice(Math.max(at, s.length - 160)));
+  throw new Error("JSON object not closed");
 }
 
-async function distillSignals(outliers) {
+async function fetchImageAsBase64(url) {
+  if (!url) return null;
+  try {
+    const r = await axios.get(url, {
+      timeout: 15000,
+      responseType: "arraybuffer",
+      headers: { "User-Agent": "yt-shorts-competitor-miner/1.0" },
+    });
+    const buf = Buffer.from(r.data);
+    if (!buf.length || buf.length > 4.5 * 1024 * 1024) return null;
+    const mime = String(r.headers?.["content-type"] || "image/jpeg").split(";")[0].trim();
+    return mime.startsWith("image/") ? { mime, data: buf.toString("base64") } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeExecution(outlier) {
+  if (!ANTHROPIC_KEY) return null;
+  const encoded = await fetchImageAsBase64(outlier.thumbnail_url);
+  if (!encoded) return null;
+
+  const prompt =
+    `Analyze PUBLIC PACKAGING SIGNALS for this breakout YouTube Short. You have only the cover/thumbnail image plus title and duration; ` +
+    `do NOT claim to know the actual first frame, spoken hook, edit cadence, or payoff timing. ` +
+    `Title: "${outlier.title}". Duration: ${outlier.duration_sec}s. ` +
+    `Extract transferable creative choices for a faceless single-fact Shorts channel. ` +
+    `Return ONLY JSON with: visual_hook_proxy (brief), dominant_subject, composition_type, visual_contrast, apparent_emotion, ` +
+    `title_hook_shape, likely_concept_archetype, reproducible (boolean), caveat (must mention this is a thumbnail/cover proxy).`;
+
+  try {
+    const r = await axios.post(
+      "https://api.anthropic.com/v1/messages",
+      {
+        model: VISION_MODEL,
+        max_tokens: 350,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: encoded.mime, data: encoded.data } },
+            { type: "text", text: prompt },
+          ],
+        }],
+      },
+      {
+        timeout: 30000,
+        headers: {
+          "x-api-key": ANTHROPIC_KEY,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+      }
+    );
+    const text = (r.data?.content || []).map((b) => b?.text || "").join("");
+    return parseJsonObject(text);
+  } catch {
+    return null;
+  }
+}
+
+async function buildExecutionProfiles(outliers) {
+  const sample = outliers.slice(0, Math.max(0, EXECUTION_SAMPLE));
+  const profiles = [];
+  for (const o of sample) {
+    const execution = await analyzeExecution(o);
+    if (execution) {
+      profiles.push({
+        channel: o.channel,
+        title: o.title,
+        outlier_multiple: o.outlier_multiple,
+        views: o.views,
+        duration_sec: o.duration_sec,
+        execution,
+      });
+    }
+  }
+  return profiles;
+}
+
+const DISTILL_PROMPT = (outliersJson, executionJson) =>
+`You are mining breakout Shorts for TRANSFERABLE SIGNALS, not copying videos.
+
+Our format: faceless, one surprising mass-appeal fact per Short; no medical topics, no biographies, no obscure subjects.
+
+BREAKOUT OUTLIERS (normalized within each channel):
+${outliersJson}
+
+PUBLIC CREATIVE-EXECUTION PROFILES:
+${executionJson}
+
+Important: execution profiles are based only on public thumbnail/cover imagery + title + duration. They are a packaging/first-frame PROXY, not direct observation of the actual opening frame, narration, editing, or payoff. Never overstate what they prove.
+
+Extract two kinds of signal:
+1. TOPIC/ANGLE: recurring subject/angle patterns that transfer to our single-fact format.
+2. EXECUTION: recurring visual packaging/composition/hook-shape patterns that we can deliberately test in our own first frame and visual grammar.
+
+RULES:
+- Never reproduce a competitor title.
+- Drop listicles, medical/health, compilations, creator-personality-dependent formats, or niche fandom deep-cuts.
+- Prefer patterns supported by multiple outliers/channels.
+- Distinguish a repeated pattern from a one-off hypothesis.
+- No claims about competitor retention or exact editing unless those data are actually provided (they are not).
+
+OUTPUT ONLY JSON:
+{
+  "summary": "<2-3 sentences>",
+  "signals": [
+    {
+      "signal_type": "topic_angle"|"execution",
+      "subject_category": "<category or null>",
+      "angle": "<transferable pattern>",
+      "likely_trigger": "curiosity_gap|disbelief|fear_stakes|scale_shock|taboo_secret|unknown",
+      "why_it_works": "<brief hypothesis>",
+      "supported_by": "<specific count/channels>",
+      "confidence": "low|medium|high"
+    }
+  ],
+  "avoid": ["<tempting but non-transferable pattern>"]
+}
+Prefer 4-8 strong signals.`;
+
+async function distillSignals(outliers, executionProfiles) {
   if (!outliers.length) {
     return { summary: "No breakout Shorts found in the window.", signals: [], avoid: [] };
   }
   if (!ANTHROPIC_KEY) throw new Error("distillSignals: ANTHROPIC_KEY is not set");
+
   const compact = outliers.map((o) => ({
-    title: o.title, channel: o.channel, views: o.views, outlier_multiple: o.outlier_multiple,
+    title: o.title,
+    channel: o.channel,
+    views: o.views,
+    outlier_multiple: o.outlier_multiple,
+    duration_sec: o.duration_sec,
   }));
+
   const res = await axios.post(
     "https://api.anthropic.com/v1/messages",
     {
       model: DISTILL_MODEL,
-      max_tokens: Number(process.env.COMPETITOR_DISTILL_MAX_TOKENS || 4000),
-      messages: [{ role: "user", content: DISTILL_PROMPT(JSON.stringify(compact, null, 2)) }],
+      max_tokens: Number(process.env.COMPETITOR_DISTILL_MAX_TOKENS || 4500),
+      messages: [{
+        role: "user",
+        content: DISTILL_PROMPT(JSON.stringify(compact, null, 2), JSON.stringify(executionProfiles, null, 2)),
+      }],
     },
     {
       timeout: 90000,
-      headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
     }
   );
-  if (res.data && res.data.stop_reason === "max_tokens") {
+
+  if (res.data?.stop_reason === "max_tokens") {
     throw new Error("distiller reply hit max_tokens - raise COMPETITOR_DISTILL_MAX_TOKENS");
   }
-  const text = (res.data.content || []).map((b) => (b && b.text) || "").join("");
-  return extractJsonObject(text);
+  const text = (res.data.content || []).map((b) => b?.text || "").join("");
+  return parseJsonObject(text);
 }
 
-// Full run: scan -> distill -> persist. Returns a summary for the caller.
 async function mine() {
   if (!YT_KEY) throw new Error("mine: YOUTUBE_API_KEY is not set");
   const { outliers, scanned, unresolved } = await scanCompetitors();
-  // Distillation is best-effort: a bad Claude reply must NOT throw away a good
-  // scan. Persist the raw outliers regardless so we always keep the evidence.
-  let distilled = { summary: "", signals: [], avoid: [] };
-  let distill_error = null;
-  try { distilled = await distillSignals(outliers); }
-  catch (e) { distill_error = String((e && e.message) || e); }
-  const signals = {
+  const executionProfiles = await buildExecutionProfiles(outliers);
+
+  let distilled;
+  try {
+    distilled = await distillSignals(outliers, executionProfiles);
+  } catch (e) {
+    distilled = {
+      summary: "Outliers found, but signal distillation failed.",
+      signals: [],
+      avoid: [],
+      distill_error: String(e.message || e),
+    };
+  }
+
+  const payload = {
     generated_at: new Date().toISOString(),
     window_days: WINDOW_DAYS,
-    channels_scanned: scanned.length,
-    channels_unresolved: unresolved,
-    outliers_found: outliers.length,
-    summary: distilled.summary || "",
-    signals: distilled.signals || [],
-    avoid: distilled.avoid || [],
-    distill_error, // null on success
-    raw_outliers: outliers, // kept for transparency / manual review
-  };
-  await writeJson(SIGNALS_PATH, signals);
-  return {
-    channels_scanned: scanned.length,
-    channels_unresolved: unresolved,
-    outliers_found: outliers.length,
-    signal_count: (distilled.signals || []).length,
-    distill_error,
     scanned,
+    unresolved,
+    outliers,
+    execution_profiles: executionProfiles,
+    ...distilled,
+  };
+  await writeJson(SIGNALS_PATH, payload);
+  return {
+    scanned_channels: scanned.length,
+    unresolved_channels: unresolved.length,
+    outlier_count: outliers.length,
+    execution_profiles: executionProfiles.length,
+    signal_count: Array.isArray(payload.signals) ? payload.signals.length : 0,
   };
 }
 
 async function getSignals() {
   return await readJson(SIGNALS_PATH, {
-    generated_at: null, window_days: WINDOW_DAYS, channels_scanned: 0,
-    outliers_found: 0, summary: "No competitor scan has run yet.", signals: [], avoid: [], raw_outliers: [],
+    generated_at: null,
+    summary: "No competitor mine has completed yet.",
+    signals: [],
+    avoid: [],
+    execution_profiles: [],
   });
 }
 
 module.exports = {
-  mine, getSignals, scanCompetitors, distillSignals, extractJsonObject,
-  isoDurationToSec, median, loadWatchlist, SIGNALS_PATH,
+  mine,
+  getSignals,
+  scanCompetitors,
+  distillSignals,
+  analyzeExecution,
+  buildExecutionProfiles,
+  isoDurationToSec,
+  median,
+  parseJsonObject,
+  SIGNALS_PATH,
 };
