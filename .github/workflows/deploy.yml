@@ -130,6 +130,43 @@ jobs:
           print('Topic latency + Anthropic parser guardrails OK')
           PY
 
+      - name: Execute parser nodes against synthetic Claude responses
+        run: |
+          set -euo pipefail
+          node - <<'JS'
+          const fs = require('fs');
+          const wf = JSON.parse(fs.readFileSync('/tmp/workflow_quality.json', 'utf8'));
+          const names = {};
+          for (const n of wf.nodes) names[n.name] = n;
+
+          function run(nodeName, input) {
+            const fn = new Function('$input', names[nodeName].parameters.jsCode);
+            return fn({ first: () => ({ json: input }) });
+          }
+          function assertItem(result, label) {
+            if (result === undefined || result === null) throw new Error(label + ': node returned ' + result + ' instead of an item - string-presence CI checks miss this, execution does not');
+            if (Array.isArray(result)) {
+              if (!result.every((x) => x && typeof x === 'object')) throw new Error(label + ': array items must be objects');
+            } else if (typeof result !== 'object') {
+              throw new Error(label + ': must return an object or array of objects, got ' + typeof result);
+            }
+          }
+
+          const candidates = Array.from({ length: 9 }, (_, i) => ({
+            topic: 't' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
+            share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
+          }));
+          assertItem(run('Parse Topic Pool', { content: [{ type: 'text', text: JSON.stringify({ candidates }) }], stop_reason: 'end_turn' }), 'Parse Topic Pool happy path');
+
+          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: '{"hook":"h"}' }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
+
+          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' });
+          assertItem(editorial, 'Parse Editorial For Visual Director happy path');
+          if (!editorial || !editorial.json || !editorial.json.script) throw new Error('Parse Editorial For Visual Director did not return {json:{script}}');
+
+          console.log('Executable node smoke tests OK (Parse Topic Pool, Parse Draft JSON, Parse Editorial For Visual Director)');
+          JS
+
       - name: Deploy n8n workflow
         run: |
           set -euo pipefail
