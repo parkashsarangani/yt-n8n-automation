@@ -1,4 +1,4 @@
-name: Validate Shorts Creative System V4
+name: Validate Shorts Creative System V5
 
 on:
   pull_request:
@@ -9,6 +9,7 @@ on:
       - 'scripts/upgrade-compose-v3.py'
       - 'scripts/upgrade-compose-budget-v4.py'
       - 'scripts/upgrade-workflow-budget-v4.py'
+      - 'scripts/upgrade-topic-latency-v5.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
@@ -26,6 +27,7 @@ on:
       - 'scripts/upgrade-compose-v3.py'
       - 'scripts/upgrade-compose-budget-v4.py'
       - 'scripts/upgrade-workflow-budget-v4.py'
+      - 'scripts/upgrade-topic-latency-v5.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
@@ -40,35 +42,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply V2 + V3 + V4 workflow upgrades
+      - name: Apply V2 + V3 + V4 + V5 workflow upgrades
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system-v3.py scripts/upgrade-workflow-budget-v4.py
+          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system-v3.py scripts/upgrade-workflow-budget-v4.py scripts/upgrade-topic-latency-v5.py
           python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_v2.json
           python3 scripts/upgrade-creative-system-v3.py /tmp/workflow_v2.json /tmp/workflow_v3.json
           python3 scripts/upgrade-workflow-budget-v4.py /tmp/workflow_v3.json /tmp/workflow_v4.json
-          python3 -m json.tool /tmp/workflow_v4.json >/dev/null
+          python3 scripts/upgrade-topic-latency-v5.py /tmp/workflow_v4.json /tmp/workflow_v5.json
+          python3 -m json.tool /tmp/workflow_v5.json >/dev/null
 
       - name: Assert commissioning graph and budget plumbing
         run: |
           set -euo pipefail
-          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_v4.json
-          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_v4.json
-          grep -q 'API_BUDGET_V4' /tmp/workflow_v4.json
-          grep -q 'Wikipedia: Research Topic' /tmp/workflow_v4.json
-          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_v4.json
-          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_v4.json
-          grep -q 'visual_plan_quality' /tmp/workflow_v4.json
-          grep -q 'creative_dna' /tmp/workflow_v4.json
-          grep -q 'search_queries' /tmp/workflow_v4.json
-          grep -q 'run_id' /tmp/workflow_v4.json
-          grep -q '\$execution.id' /tmp/workflow_v4.json
+          grep -q 'VIRAL_QUALITY_V2' /tmp/workflow_v5.json
+          grep -q 'CREATIVE_SYSTEM_V3' /tmp/workflow_v5.json
+          grep -q 'API_BUDGET_V4' /tmp/workflow_v5.json
+          grep -q 'TOPIC_LATENCY_V5' /tmp/workflow_v5.json
+          grep -q 'Wikipedia: Research Topic' /tmp/workflow_v5.json
+          grep -q 'Claude: Commission Topic Shortlist (V3)' /tmp/workflow_v5.json
+          grep -q 'Claude: Visual Director (V3)' /tmp/workflow_v5.json
+          grep -q 'visual_plan_quality' /tmp/workflow_v5.json
+          grep -q 'creative_dna' /tmp/workflow_v5.json
+          grep -q 'search_queries' /tmp/workflow_v5.json
+          grep -q 'run_id' /tmp/workflow_v5.json
+          grep -q '\$execution.id' /tmp/workflow_v5.json
 
-      - name: Verify V4 graph paths
+      - name: Verify V5 graph and topic-call limits
         run: |
           python3 - <<'PY'
           import json
-          w = json.load(open('/tmp/workflow_v4.json'))
+          w = json.load(open('/tmp/workflow_v5.json'))
           c = w['connections']
           def first(src): return c[src]['main'][0][0]['node']
           assert first('Claude: Generate Topic') == 'Parse Topic Pool (V3)'
@@ -80,13 +84,31 @@ jobs:
           assert first('Claude: Editorial Rewrite (Stage 2)') == 'Parse Editorial For Visual Director (V3)'
           assert first('Parse Editorial For Visual Director (V3)') == 'Claude: Visual Director (V3)'
           assert first('Claude: Visual Director (V3)') == 'Validate Final Script'
+
           names = {n['name']: n for n in w['nodes']}
+          topic = names['Claude: Generate Topic']
+          topic_body = topic['parameters']['jsonBody']
+          assert 'TOPIC_LATENCY_V5' in topic_body
+          assert 'GENERATE 24 DISTINCT candidate topics' in topic_body
+          assert 'GENERATE 36 DISTINCT candidate topics' not in topic_body
+          assert 'max_tokens: 6000' in topic_body
+          assert 'max_tokens: 8192' not in topic_body
+          assert 'max_tokens: 9000' not in topic_body
+          assert topic['parameters']['options']['timeout'] == 120000
+          assert topic.get('retryOnFail') is False
+          assert topic.get('maxTries') == 1
+          assert topic.get('waitBetweenTries') == 0
+
+          commission = names['Claude: Commission Topic Shortlist (V3)']
+          assert commission['parameters']['options']['timeout'] == 90000
+          assert 'shortlist:pool.slice(0,8)' in names['Parse Topic Pool (V3)']['parameters']['jsCode']
+
           validate = names['Validate Final Script']['parameters']['jsCode']
           assert 'visual_plan_quality' in validate
           resolver = names['Resolve B-roll']['parameters']['jsonBody']
           assert 'search_queries' in resolver and 'first_frame' in resolver
           assert 'run_id' in resolver and '$execution.id' in resolver
-          print('V4 graph OK')
+          print('V5 graph + topic latency limits OK')
           PY
 
       - name: Validate compose and b-roll budget transforms
