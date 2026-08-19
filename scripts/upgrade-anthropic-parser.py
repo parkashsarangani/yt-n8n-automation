@@ -50,7 +50,7 @@ def patch_editor_parser(workflow: dict) -> None:
     code = node["parameters"]["jsCode"]
     old = "let raw=String(response.content?.[0]?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');"
     new = (
-        f"// {MARKER}: select text blocks instead of assuming content[0] is text."
+        f"/* {MARKER}: select text blocks instead of assuming content[0] is text. */"
         "const contentBlocks=Array.isArray(response.content)?response.content:[];"
         "const textBlocks=contentBlocks.filter(b=>b&&b.type==='text'&&typeof b.text==='string');"
         "let raw=String(textBlocks.map(b=>b.text).join('\\n')||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');"
