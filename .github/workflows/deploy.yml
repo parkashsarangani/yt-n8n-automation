@@ -111,7 +111,7 @@ jobs:
           names = {n['name']: n for n in w['nodes']}
           topic = names['Claude: Generate Topic']
           body = topic['parameters']['jsonBody']
-          assert 'GENERATE 12 DISTINCT candidate topics' in body
+          assert 'GENERATE 4 DISTINCT candidate topics' in body
           assert 'max_tokens: 6000' in body
           assert 'max_tokens: 8192' not in body
           assert 'max_tokens: 9000' not in body
@@ -152,7 +152,7 @@ jobs:
             }
           }
 
-          const candidates = Array.from({ length: 9 }, (_, i) => ({
+          const candidates = Array.from({ length: 4 }, (_, i) => ({
             topic: 't' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
             share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
           }));

@@ -98,15 +98,15 @@ try {
 }
 let pool=Array.isArray(obj.candidates)?obj.candidates:[];
 pool=pool.filter(c=>c?.topic).map(c=>({topic:String(c.topic).trim(),archetype:String(c.archetype||'looks_fake_but_real').trim(),research_query:String(c.research_query||c.topic).trim(),first_frame_concept:String(c.first_frame_concept||'').trim(),share_reason:String(c.share_reason||'').trim(),evidence_score:Number(c.evidence_score)||0,visual_score:Number(c.visual_score)||0,share_score:Number(c.share_score)||0,reason:String(c.reason||''),score:Number(c.score)||0})).sort((x,y)=>y.score-x.score);
-if(pool.length<8) throw new Error('Topic pool produced fewer than 8 usable candidates');
-return {json:{pool,shortlist:pool.slice(0,8)}};"""},
+if(pool.length<3) throw new Error('Topic pool produced fewer than 3 usable candidates');
+return {json:{pool,shortlist:pool.slice(0,4)}};"""},
         })
     if COMMISSION_NODE not in names:
         c = copy.deepcopy(gen)
         c["id"] = "44b8a598-b27f-4fe1-a760-dd6eb781ccda"
         c["name"] = COMMISSION_NODE
         c["position"] = [2700, 300]
-        c["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 6000, thinking: { type: "adaptive" }, output_config: { effort: "high" }, messages: [{ role: "user", content: "You are commissioning ONE production-worthy YouTube Short from an already harsh top-8 shortlist. Judge the underlying viewing experience, not clever wording.\n\nSHORTLIST: " + JSON.stringify($json.shortlist) + "\n\nDeep-score each 0-100 on concept_strength, evidence_strength, first_frame_strength, payoff_strength, shareability, novelty, production_feasibility, naturalness. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 5. 80 is merely good; 90 is rare. Prefer intrinsically visual, defensible concepts and protect archetype variety. Reject interchangeable trivia.\n\nReturn ONLY JSON with candidates sorted best-first. Preserve topic, archetype, research_query, first_frame_concept, share_reason. Add evidence_score, visual_score, share_score, concept_score, payoff_score, novelty_score, execution_score, reason, score." }] }) }}'''
+        c["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 6000, thinking: { type: "adaptive" }, output_config: { effort: "high" }, messages: [{ role: "user", content: "You are commissioning ONE production-worthy YouTube Short from an already harsh shortlist. Judge the underlying viewing experience, not clever wording.\n\nSHORTLIST: " + JSON.stringify($json.shortlist) + "\n\nDeep-score each 0-100 on concept_strength, evidence_strength, first_frame_strength, payoff_strength, shareability, novelty, production_feasibility, naturalness. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 5. 80 is merely good; 90 is rare. Prefer intrinsically visual, defensible concepts and protect archetype variety. Reject interchangeable trivia.\n\nReturn ONLY JSON with candidates sorted best-first. Preserve topic, archetype, research_query, first_frame_concept, share_reason. Add evidence_score, visual_score, share_score, concept_score, payoff_score, novelty_score, execution_score, reason, score." }] }) }}'''
         c["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(c)
 

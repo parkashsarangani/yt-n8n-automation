@@ -7,14 +7,15 @@ while the exported Anthropic request still carries an 8,192-token ceiling, a
 keeps the two-stage commissioning design while bounding the first call's
 latency, output size, and duplicate spend.
 
-POOL_SIZE was originally cut to 24 here, which still overflowed MAX_TOKENS in
+POOL_SIZE was cut 24 -> 12 here, which still overflowed MAX_TOKENS in
 production: with the archetype-enriched schema (10 fields/candidate vs the
 original 3) plus adaptive thinking sharing the same 6,000-token ceiling,
 Claude's response was truncated mid-array, crashing "Parse Topic Pool" with a
-raw JSON.parse SyntaxError. Rather than raise MAX_TOKENS (more latency per
-call, the thing this guardrail exists to bound), POOL_SIZE is brought back
-down to the last candidate count proven to fit comfortably in a similar
-budget.
+raw JSON.parse SyntaxError - confirmed live twice, at 24 and again at 12
+(smaller truncation position, same failure). Rather than raise MAX_TOKENS
+(more latency per call, the thing this guardrail exists to bound), POOL_SIZE
+is cut further to 4, which leaves adaptive thinking comfortable headroom
+against the 6,000-token ceiling regardless of how much it varies run to run.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from pathlib import Path
 
 MARKER = "TOPIC_LATENCY"
 TOPIC_NODE = "Claude: Generate Topic"
-POOL_SIZE = 12
+POOL_SIZE = 4
 MAX_TOKENS = 6000
 TIMEOUT_MS = 120000
 
