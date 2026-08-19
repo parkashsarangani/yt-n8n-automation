@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch shorts-compose/compose.js with V3 creative-system behavior.
+"""Patch shorts-compose/compose.js with creative-system behavior.
 
 The compose service is intentionally kept readable as its existing source; this
 small deterministic transform is validated in CI and applied before the Docker
@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-MARKER = "CREATIVE_SYSTEM_V3_COMPOSE"
+MARKER = "CREATIVE_SYSTEM_COMPOSE"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -35,7 +35,7 @@ def upgrade(text: str) -> str:
     text = replace_once(
         text,
         "  const WORDS_PER_CHUNK = 2;",
-        "  // CREATIVE_SYSTEM_V3_COMPOSE: caption density is commissioned per Short.\n  const WORDS_PER_CHUNK = captionMode === 'minimal' ? 4 : captionMode === 'key_phrases' ? 3 : 2;",
+        "  // CREATIVE_SYSTEM_COMPOSE: caption density is commissioned per Short.\n  const WORDS_PER_CHUNK = captionMode === 'minimal' ? 4 : captionMode === 'key_phrases' ? 3 : 2;",
         "caption density",
     )
 
@@ -75,7 +75,7 @@ def upgrade(text: str) -> str:
     new_outro = """    const hasScriptOutro = scenes.some((s) => s?.template_data?.is_outro);
     const requestedOutro = String(reqBody.outro_line || '').trim();
     const wantsShareOutro = ['share_only', 'comment_and_share'].includes(engagement_mode);
-    // V3: no mandatory end-card. If the editor removed the share ask, the Short
+    // No mandatory end-card. If the editor removed the share ask, the Short
     // ends on its kicker instead of being forced through a generic CTA card.
     if (!hasScriptOutro && requestedOutro && wantsShareOutro) {
       const outroAudioBase64 = await generateSilentAudioBase64(OUTRO_DURATION_SEC);
@@ -143,12 +143,12 @@ def upgrade(text: str) -> str:
 
 def main() -> None:
     if len(sys.argv) not in (2, 3):
-        raise SystemExit("usage: upgrade-compose-v3.py INPUT_COMPOSE [OUTPUT_COMPOSE]")
+        raise SystemExit("usage: upgrade-compose-creative-system.py INPUT_COMPOSE [OUTPUT_COMPOSE]")
     src = Path(sys.argv[1])
     dst = Path(sys.argv[2]) if len(sys.argv) == 3 else src
     upgraded = upgrade(src.read_text())
     dst.write_text(upgraded)
-    print(f"creative system V3 compose written to {dst}")
+    print(f"creative system compose written to {dst}")
 
 
 if __name__ == "__main__":

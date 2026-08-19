@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the Shorts creative-system V3 upgrade to a V2-upgraded n8n workflow."""
+"""Apply the Shorts creative-system upgrade to a quality-gated n8n workflow."""
 from __future__ import annotations
 
 import copy
@@ -7,11 +7,11 @@ import json
 import sys
 from pathlib import Path
 
-MARKER = "CREATIVE_SYSTEM_V3"
-POOL_NODE = "Parse Topic Pool (V3)"
-COMMISSION_NODE = "Claude: Commission Topic Shortlist (V3)"
-EDITOR_PARSE_NODE = "Parse Editorial For Visual Director (V3)"
-VISUAL_NODE = "Claude: Visual Director (V3)"
+MARKER = "CREATIVE_SYSTEM"
+POOL_NODE = "Parse Topic Pool"
+COMMISSION_NODE = "Claude: Commission Topic Shortlist"
+EDITOR_PARSE_NODE = "Parse Editorial For Visual Director"
+VISUAL_NODE = "Claude: Visual Director"
 
 ARCHETYPES = [
     "impossible_comparison", "visual_demonstration", "hidden_mechanism",
@@ -65,7 +65,7 @@ def patch_topic_search(w: dict) -> None:
     body = body.replace("max_tokens: 4000", "max_tokens: 9000")
     body = body.replace(
         "where each item has fields: topic (the fact as one plain sentence), research_query",
-        "where each item has fields: topic (the fact as one plain sentence), archetype (one exact V3 archetype), research_query",
+        "where each item has fields: topic (the fact as one plain sentence), archetype (one exact archetype), research_query",
     )
     n["parameters"]["jsonBody"] = body
 
@@ -79,9 +79,24 @@ def add_topic_commissioning(w: dict) -> None:
             "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2320, 140],
             "parameters": {"jsCode": """const response=$input.first().json;
 if(response.error) throw new Error('Topic pool API error: '+JSON.stringify(response.error));
-const tb=(response.content||[]).find(b=>b.type==='text'); let raw=String(tb?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');
-const a=raw.indexOf('{'), z=raw.lastIndexOf('}'); if(a<0||z<=a) throw new Error('Topic pool returned no JSON');
-const obj=JSON.parse(raw.slice(a,z+1)); let pool=Array.isArray(obj.candidates)?obj.candidates:[];
+const contentBlocks=Array.isArray(response.content)?response.content:[];
+const tb=contentBlocks.find(b=>b&&b.type==='text');
+let raw=String(tb?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');
+if(!raw){
+  const blockTypes=contentBlocks.map(b=>b?.type||'unknown').join(', ')||'none';
+  if(response.stop_reason==='max_tokens') throw new Error('Topic pool hit max_tokens before producing a text block (content types: '+blockTypes+')');
+  throw new Error('Topic pool returned no text block (stop_reason: '+(response.stop_reason||'unknown')+', content types: '+blockTypes+')');
+}
+const a=raw.indexOf('{'), z=raw.lastIndexOf('}');
+if(a<0||z<=a) throw new Error('Topic pool returned no JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');
+let obj;
+try {
+  obj=JSON.parse(raw.slice(a,z+1));
+} catch (err) {
+  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (parse error: '+err.message+') - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
+  throw new Error('Topic pool JSON failed to parse (stop_reason: '+(response.stop_reason||'unknown')+', parse error: '+err.message+')');
+}
+let pool=Array.isArray(obj.candidates)?obj.candidates:[];
 pool=pool.filter(c=>c?.topic).map(c=>({topic:String(c.topic).trim(),archetype:String(c.archetype||'looks_fake_but_real').trim(),research_query:String(c.research_query||c.topic).trim(),first_frame_concept:String(c.first_frame_concept||'').trim(),share_reason:String(c.share_reason||'').trim(),evidence_score:Number(c.evidence_score)||0,visual_score:Number(c.visual_score)||0,share_score:Number(c.share_score)||0,reason:String(c.reason||''),score:Number(c.score)||0})).sort((x,y)=>y.score-x.score);
 if(pool.length<8) throw new Error('Topic pool produced fewer than 8 usable candidates');
 return {json:{pool,shortlist:pool.slice(0,8)}};"""},
@@ -106,7 +121,7 @@ return {json:{pool,shortlist:pool.slice(0,8)}};"""},
     new_map = ".map(c => ({ topic: String(c.topic).trim(), archetype: String(c.archetype || 'looks_fake_but_real').trim(), research_query: String(c.research_query || c.topic).trim(), first_frame_concept: String(c.first_frame_concept || ''), share_reason: String(c.share_reason || ''), evidence_score: Number(c.evidence_score) || 0, visual_score: Number(c.visual_score) || 0, share_score: Number(c.share_score) || 0, concept_score: Number(c.concept_score) || 0, payoff_score: Number(c.payoff_score) || 0, novelty_score: Number(c.novelty_score) || 0, execution_score: Number(c.execution_score) || 0, reason: String(c.reason || ''), score: Number(c.score) || 0 }))"
     code = replace_once(code, old_map, new_map, "topic commission parser")
     old_ret = "return { json: { topic: picked.topic, score: picked.score, research_query: picked.research_query || picked.topic, first_frame_concept: picked.first_frame_concept || '', share_reason: picked.share_reason || '', evidence_score: picked.evidence_score || 0, visual_score: picked.visual_score || 0, share_score: picked.share_score || 0, candidates } };"
-    new_ret = "return { json: { topic: picked.topic, archetype: picked.archetype || 'looks_fake_but_real', score: picked.score, research_query: picked.research_query || picked.topic, first_frame_concept: picked.first_frame_concept || '', share_reason: picked.share_reason || '', evidence_score: picked.evidence_score || 0, visual_score: picked.visual_score || 0, share_score: picked.share_score || 0, concept_score: picked.concept_score || 0, payoff_score: picked.payoff_score || 0, novelty_score: picked.novelty_score || 0, execution_score: picked.execution_score || 0, candidates, candidate_pool: $('Parse Topic Pool (V3)').item.json.pool || candidates } };"
+    new_ret = "return { json: { topic: picked.topic, archetype: picked.archetype || 'looks_fake_but_real', score: picked.score, research_query: picked.research_query || picked.topic, first_frame_concept: picked.first_frame_concept || '', share_reason: picked.share_reason || '', evidence_score: picked.evidence_score || 0, visual_score: picked.visual_score || 0, share_score: picked.share_score || 0, concept_score: picked.concept_score || 0, payoff_score: picked.payoff_score || 0, novelty_score: picked.novelty_score || 0, execution_score: picked.execution_score || 0, candidates, candidate_pool: $('Parse Topic Pool').item.json.pool || candidates } };"
     ex["parameters"]["jsCode"] = replace_once(code, old_ret, new_ret, "topic commission return")
 
 
@@ -114,29 +129,29 @@ def patch_writer_editor(w: dict) -> None:
     voice = voice_bible().replace('"', '\\"')
     writer = node_by_name(w, "Claude: Draft Script (Stage 1)")
     body = writer["parameters"]["jsonBody"]
-    if "CHANNEL VOICE BIBLE - CREATIVE_SYSTEM_V3" not in body:
+    if "CHANNEL VOICE BIBLE - CREATIVE_SYSTEM" not in body:
         anchor = "HOOK - the single most important sentence in the video."
-        body = replace_once(body, anchor, "CHANNEL VOICE BIBLE - CREATIVE_SYSTEM_V3: " + voice + "\\n\\nSound like this channel, not generic viral narration.\\n\\n" + anchor, "writer voice")
-    if "ENGAGEMENT IS OPTIONAL - CREATIVE_SYSTEM_V3" not in body:
+        body = replace_once(body, anchor, "CHANNEL VOICE BIBLE - CREATIVE_SYSTEM: " + voice + "\\n\\nSound like this channel, not generic viral narration.\\n\\n" + anchor, "writer voice")
+    if "ENGAGEMENT IS OPTIONAL - CREATIVE_SYSTEM" not in body:
         anchor = "COMMENT MECHANIC (critical for engagement):"
-        rule = "ENGAGEMENT IS OPTIONAL - CREATIVE_SYSTEM_V3: a comment question and share outro are optional. If either weakens the viewing experience, omit it, set the matching field to null, and do not hide a spoken CTA elsewhere in narration.\\n\\n" + anchor
+        rule = "ENGAGEMENT IS OPTIONAL - CREATIVE_SYSTEM: a comment question and share outro are optional. If either weakens the viewing experience, omit it, set the matching field to null, and do not hide a spoken CTA elsewhere in narration.\\n\\n" + anchor
         body = replace_once(body, anchor, rule, "writer engagement")
     body = body.replace('\\"comment_hook\\": string, \\"outro_line\\": string', '\\"comment_hook\\": string|null, \\"outro_line\\": string|null')
-    topic_anchor = 'Topic: \\" + $json.topic + \\"\\nFirst-frame concept from selection:'
+    topic_anchor = 'Topic: \" + $json.topic + \"\\nFirst-frame concept from selection:'
     if topic_anchor in body:
-        body = body.replace(topic_anchor, 'Topic: \\" + $json.topic + \\"\\nConcept archetype: \\" + ($json.archetype || \'looks_fake_but_real\') + \\"\\nFirst-frame concept from selection:', 1)
+        body = body.replace(topic_anchor, 'Topic: \" + $json.topic + \"\\nConcept archetype: \" + ($json.archetype || \'looks_fake_but_real\') + \"\\nFirst-frame concept from selection:', 1)
     writer["parameters"]["jsonBody"] = body
 
     editor = node_by_name(w, "Claude: Editorial Rewrite (Stage 2)")
     body = editor["parameters"]["jsonBody"]
-    if "ENGAGEMENT OPTIONAL - CREATIVE_SYSTEM_V3" not in body:
-        # V2 has already prefixed the draft with its research-evidence block.
+    if "ENGAGEMENT OPTIONAL - CREATIVE_SYSTEM" not in body:
+        # The quality-gate stage has already prefixed the draft with its research-evidence block.
         anchor = "External research leads:"
         rules = (
-            "20. ENGAGEMENT OPTIONAL - CREATIVE_SYSTEM_V3: keep a comment question or share outro only when it improves the Short. If removing one improves the ending/middle, remove its spoken line and set comment_hook/outro_line to null.\\n\\n"
-            "21. CHANNEL VOICE - CREATIVE_SYSTEM_V3: judge the rewrite against this voice bible: " + voice + "\\n\\n" + anchor
+            "20. ENGAGEMENT OPTIONAL - CREATIVE_SYSTEM: keep a comment question or share outro only when it improves the Short. If removing one improves the ending/middle, remove its spoken line and set comment_hook/outro_line to null.\\n\\n"
+            "21. CHANNEL VOICE - CREATIVE_SYSTEM: judge the rewrite against this voice bible: " + voice + "\\n\\n" + anchor
         )
-        body = replace_once(body, anchor, rules, "editor V3 rules")
+        body = replace_once(body, anchor, rules, "editor archetype rules")
     body = body.replace("naturalness, overall. Grade against the best Shorts", "naturalness, distinctiveness, voice_specificity, overall. Grade against the best Shorts")
     editor["parameters"]["jsonBody"] = body
 
@@ -195,9 +210,9 @@ if (outroLine && wantsShareOutro && Array.isArray(parsed.scenes) && parsed.scene
 }
 """
     code = replace_once(code, old, new, "optional outro")
-    if "CREATIVE_SYSTEM_V3 visual commissioning gate" not in code:
+    if "CREATIVE_SYSTEM visual commissioning gate" not in code:
         anchor = "// Medical/health exclusion backstop"
-        gate = """// CREATIVE_SYSTEM_V3 visual commissioning gate.
+        gate = """// CREATIVE_SYSTEM visual commissioning gate.
 const validFormats=['documentary_cinematic','comparison_reveal','minimal_proof','archival_history','macro_detail','kinetic_data'];
 const validCaptionModes=['karaoke','key_phrases','minimal'];
 const validEngagementModes=['none','comment_only','share_only','comment_and_share'];
@@ -245,11 +260,11 @@ def upgrade(w: dict) -> dict:
 
 def main() -> None:
     if len(sys.argv) != 3:
-        raise SystemExit("usage: upgrade-creative-system-v3.py INPUT_V2_WORKFLOW OUTPUT_V3_WORKFLOW")
+        raise SystemExit("usage: upgrade-creative-system.py INPUT_WORKFLOW OUTPUT_WORKFLOW")
     src, dst = map(Path, sys.argv[1:])
     w = json.loads(src.read_text())
     dst.write_text(json.dumps(upgrade(w), indent=2) + "\n")
-    print(f"creative system V3 workflow written to {dst}")
+    print(f"creative system workflow written to {dst}")
 
 
 if __name__ == "__main__":

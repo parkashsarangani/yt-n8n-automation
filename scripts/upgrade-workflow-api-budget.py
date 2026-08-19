@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Attach a stable n8n execution id to V3 b-roll requests for run-wide budgets."""
+"""Attach a stable n8n execution id to b-roll requests for run-wide budgets."""
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
 
-MARKER = "API_BUDGET_V4"
+MARKER = "API_BUDGET"
 
 
 def node_by_name(workflow: dict, name: str) -> dict:
@@ -32,11 +32,11 @@ def upgrade(workflow: dict) -> dict:
 
 def main() -> None:
     if len(sys.argv) != 3:
-        raise SystemExit("usage: upgrade-workflow-budget-v4.py INPUT_V3_WORKFLOW OUTPUT_V4_WORKFLOW")
+        raise SystemExit("usage: upgrade-workflow-api-budget.py INPUT_WORKFLOW OUTPUT_WORKFLOW")
     src, dst = map(Path, sys.argv[1:])
     workflow = json.loads(src.read_text())
     dst.write_text(json.dumps(upgrade(workflow), indent=2) + "\n")
-    print(f"API budget V4 workflow written to {dst}")
+    print(f"API budget workflow written to {dst}")
 
 
 if __name__ == "__main__":
