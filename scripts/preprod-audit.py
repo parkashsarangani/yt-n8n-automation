@@ -196,7 +196,7 @@ def build_workflow(tmp: Path) -> dict:
 def audit() -> None:
     required_py = [
         "upgrade-viral-shorts.py", "upgrade-creative-system.py", "upgrade-workflow-api-budget.py",
-        "upgrade-topic-latency.py", "upgrade-quality_alignment.py", "upgrade-anthropic-parser.py",
+        "upgrade-topic-latency.py", "upgrade_quality_alignment.py", "upgrade-anthropic-parser.py",
         "upgrade-compose-creative-system.py", "upgrade-compose-api-budget.py", "upgrade-compose-runtime-hardening.py",
         "preprod-audit.py",
     ]
@@ -359,7 +359,7 @@ console.log('score recovery OK');
             die(f"run vision cap {run_cap} is below valid 8-scene maximum {first + 7 * support}")
 
         quality_ci = (ROOT / ".github/workflows/quality-check.yml").read_text()
-        for path in ["scripts/upgrade-quality_alignment.py", "scripts/upgrade-compose-runtime-hardening.py", "scripts/preprod-audit.py"]:
+        for path in ["scripts/upgrade_quality_alignment.py", "scripts/upgrade-compose-runtime-hardening.py", "scripts/preprod-audit.py"]:
             if path not in quality_ci:
                 die(f"quality-check path filters do not cover {path}")
         if "python3 scripts/preprod-audit.py" not in quality_ci:
