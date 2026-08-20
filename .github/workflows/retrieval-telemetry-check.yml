@@ -1,0 +1,90 @@
+name: Validate Retrieval Telemetry
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/retrieval_observability.py'
+      - 'scripts/workflow_retrieval_telemetry.py'
+      - 'scripts/compose_retrieval_telemetry.py'
+      - 'scripts/upgrade-compose-retrieval-telemetry.py'
+      - 'scripts/upgrade-compose-runtime-hardening.py'
+      - 'scripts/upgrade_quality_alignment.py'
+      - 'shorts-compose/retrievalTelemetryStore.js'
+      - 'shorts-compose/tests/retrieval-telemetry.test.js'
+      - '.github/workflows/retrieval-telemetry-check.yml'
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'scripts/retrieval_observability.py'
+      - 'scripts/workflow_retrieval_telemetry.py'
+      - 'scripts/compose_retrieval_telemetry.py'
+      - 'scripts/upgrade-compose-retrieval-telemetry.py'
+      - 'scripts/upgrade-compose-runtime-hardening.py'
+      - 'scripts/upgrade_quality_alignment.py'
+      - 'shorts-compose/retrievalTelemetryStore.js'
+      - 'shorts-compose/tests/retrieval-telemetry.test.js'
+      - '.github/workflows/retrieval-telemetry-check.yml'
+
+jobs:
+  telemetry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile telemetry transforms
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/retrieval_observability.py \
+            scripts/workflow_retrieval_telemetry.py \
+            scripts/compose_retrieval_telemetry.py \
+            scripts/upgrade-compose-retrieval-telemetry.py \
+            scripts/upgrade-compose-runtime-hardening.py \
+            scripts/upgrade_quality_alignment.py
+
+      - name: Verify workflow telemetry payload
+        run: |
+          set -euo pipefail
+          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/t1.json
+          python3 scripts/upgrade-creative-system.py /tmp/t1.json /tmp/t2.json
+          python3 scripts/upgrade-workflow-api-budget.py /tmp/t2.json /tmp/t3.json
+          python3 scripts/upgrade-topic-latency.py /tmp/t3.json /tmp/t4.json
+          python3 scripts/upgrade-anthropic-parser.py /tmp/t4.json /tmp/final.json
+          python3 - <<'PY'
+          import json
+          w=json.load(open('/tmp/final.json'))
+          names={n['name']:n for n in w['nodes']}
+          tag=names['Tag B-roll']['parameters']['jsCode']
+          template=names['Tag Template Video']['parameters']['jsCode']
+          merge=names['Merge By scene_index (not position)']['parameters']['jsCode']
+          log=names['Log Published Video']['parameters']['jsonBody']
+          assert 'RETRIEVAL_TELEMETRY_V1' in tag
+          assert 'RETRIEVAL_TELEMETRY_V1' in template
+          for marker in ['candidate_source_counts','candidate_type_counts','top_local_similarity','requested_queries','queries_tried']:
+              assert marker in tag, marker
+          assert 'retrieval_telemetry' in merge
+          assert 'retrieval_telemetry:' in log
+          print('workflow retrieval telemetry contract OK')
+          PY
+
+      - name: Verify compose and resolver telemetry transforms
+        run: |
+          set -euo pipefail
+          cp shorts-compose/compose.js /tmp/compose.js
+          cp shorts-compose/brollResolver.js /tmp/brollResolver.js
+          python3 scripts/upgrade-compose-creative-system.py /tmp/compose.js
+          python3 scripts/upgrade-compose-api-budget.py /tmp/compose.js /tmp/brollResolver.js
+          python3 scripts/upgrade-compose-runtime-hardening.py /tmp/brollResolver.js
+          grep -q 'RETRIEVAL_OBSERVABILITY_V1' /tmp/brollResolver.js
+          grep -q 'candidate_source_counts' /tmp/brollResolver.js
+          grep -q 'top_local_similarity' /tmp/brollResolver.js
+          grep -q 'RETRIEVAL_TELEMETRY_ENDPOINT_V1' /tmp/compose.js
+          grep -q '/performance/retrieval' /tmp/compose.js
+          node --check /tmp/brollResolver.js
+          node --check /tmp/compose.js
+
+      - name: Test telemetry normalization
+        run: |
+          set -euo pipefail
+          node --test shorts-compose/tests/retrieval-telemetry.test.js
