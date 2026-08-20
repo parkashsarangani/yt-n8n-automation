@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Align Shorts prompts and runtime settings to reliable video completion."""
+"""Align Shorts prompts and runtime settings to reliable video completion.
+
+This transform is imported and executed by upgrade-anthropic-parser.py. Keep n8n
+HTTP JSON bodies as literal n8n expressions; do not wrap the expression itself
+in a Python f-string because ``{{``/``}}`` are significant to both syntaxes.
+"""
 from __future__ import annotations
 
 import re
@@ -7,9 +12,6 @@ import re
 MARKER = "QUALITY_ALIGNMENT"
 RELIABILITY_MARKER = "RELIABILITY_FIRST_VIDEO"
 
-# These are deliberately competent-video floors, not premium-commissioning
-# floors. Evidence remains comparatively strict; packaging/voice/novelty are
-# allowed more latitude so a truthful usable Short reaches render/publish.
 PUBLISH_MINIMUMS = {
     "concept_strength": 68,
     "hook_strength": 70,
@@ -34,12 +36,13 @@ def node_by_name(workflow: dict, name: str) -> dict:
     raise KeyError(f"required n8n node not found: {name}")
 
 
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    if new in text:
-        return text
-    if old not in text:
-        raise ValueError(f"could not patch {label}: anchor not found")
-    return text.replace(old, new, 1)
+def _prepend_user_instruction(body: str, instruction: str) -> str:
+    marker = 'content: "'
+    if instruction in body:
+        return body
+    if marker not in body:
+        raise ValueError("Claude JSON body has no user content anchor")
+    return body.replace(marker, marker + instruction.replace('"', '\\"') + "\\n\\n", 1)
 
 
 def patch_commissioning(workflow: dict) -> None:
@@ -48,65 +51,58 @@ def patch_commissioning(workflow: dict) -> None:
     node["parameters"].setdefault("options", {})["timeout"] = 120000
 
 
-def patch_extractor(workflow: dict) -> None:
-    node = node_by_name(workflow, "Extract Generated Topic")
-    code = node["parameters"]["jsCode"]
-    code = replace_once(
-        code,
-        "execution_score: Number(c.execution_score) || 0, reason:",
-        "execution_score: Number(c.execution_score) || 0, distinctiveness_score: Number(c.distinctiveness_score) || 0, share_trigger: String(c.share_trigger || ''), send_to_person: String(c.send_to_person || ''), novelty_delta: String(c.novelty_delta || ''), proof_visual: String(c.proof_visual || ''), stock_feasibility: Number(c.stock_feasibility) || 0, stock_query_seed: Array.isArray(c.stock_query_seed) ? c.stock_query_seed.map(String).slice(0, 4) : [], reason:",
-        "commissioning metadata parser",
-    )
-    code = replace_once(
-        code,
-        "execution_score: picked.execution_score || 0, candidates,",
-        "execution_score: picked.execution_score || 0, distinctiveness_score: picked.distinctiveness_score || 0, share_trigger: picked.share_trigger || '', send_to_person: picked.send_to_person || '', novelty_delta: picked.novelty_delta || '', proof_visual: picked.proof_visual || '', stock_feasibility: picked.stock_feasibility || 0, stock_query_seed: picked.stock_query_seed || [], candidates,",
-        "commissioning metadata return",
-    )
-    node["parameters"]["jsCode"] = code
-
-
 def patch_writer(workflow: dict) -> None:
     node = node_by_name(workflow, "Claude: Draft Script (Stage 1)")
-    body = node["parameters"]["jsonBody"]
-    if f"{MARKER} WRITER" not in body:
-        anchor = "HOOK - the single most important sentence in the video."
-        rules = (
-            f"{MARKER} WRITER - RELIABILITY_FIRST_VIDEO:\\n"
-            "- Finish a complete, truthful script before optimizing flourishes.\\n"
-            "- Keep claims inside the supplied evidence boundaries; never invent precision.\\n"
-            "- Make the payoff repeatable in one sentence and scene 0 visually retrievable.\\n"
-            "- Prefer concrete visible nouns/actions over abstract or obscure visuals.\\n"
-            "- A competent natural Short is publishable; do not overcomplicate the structure to chase a perfect score.\\n\\n"
-            + anchor
-        )
-        body = replace_once(body, anchor, rules, "writer quality alignment")
-    node["parameters"]["jsonBody"] = body
+    instruction = (
+        f"{MARKER} WRITER - {RELIABILITY_MARKER}: Finish a COMPLETE truthful JSON script before optimizing flourishes. "
+        "Keep claims inside supplied evidence boundaries. Prefer concrete retrievable visuals and a clear repeatable payoff. "
+        "A competent natural Short is publishable; do not make the structure fragile while chasing premium polish."
+    )
+    node["parameters"]["jsonBody"] = _prepend_user_instruction(node["parameters"]["jsonBody"], instruction)
 
 
 def patch_editor(workflow: dict) -> None:
     node = node_by_name(workflow, "Claude: Editorial Rewrite (Stage 2)")
-    body = node["parameters"]["jsonBody"]
-    if f"{MARKER} EDITOR" not in body:
-        anchor = "External research leads:"
-        m = PUBLISH_MINIMUMS
-        rules = (
-            f"23. {MARKER} EDITOR - RELIABILITY_FIRST_VIDEO:\\n"
-            "- Repair obvious weakness, but prioritize returning a complete valid script.\\n"
-            "- Never raise factual confidence beyond the supplied evidence.\\n"
-            "- Prefer a clear, natural, producible Short over a more ambitious fragile one.\\n"
-            "- Use templates for abstract numbers/comparisons rather than demanding impossible stock.\\n"
-            f"- CALIBRATION: validator floors are concept>={m['concept_strength']}, hook>={m['hook_strength']}, evidence>={m['evidence_strength']}, payoff>={m['payoff_strength']}, information_density>={m['information_density']}, first_frame>={m['first_frame_strength']}, visual_progression>={m['visual_progression']}, shareability>={m['shareability']}, naturalness>={m['naturalness']}, distinctiveness>={m['distinctiveness']}, voice_specificity>={m['voice_specificity']}, overall>={m['overall']}. Score honestly; a competent truthful script should not be discarded merely for lacking premium polish.\\n\\n"
-            + anchor
-        )
-        body = replace_once(body, anchor, rules, "editor quality alignment")
-    node["parameters"]["jsonBody"] = body
+    m = PUBLISH_MINIMUMS
+    instruction = (
+        f"{MARKER} EDITOR - {RELIABILITY_MARKER}: Prioritize a COMPLETE valid truthful script. "
+        "Repair obvious weakness without inventing evidence. Prefer a clear producible Short over a more ambitious fragile one. "
+        f"These reliability-first publish floors SUPERSEDE stricter numeric floors elsewhere in this prompt: "
+        f"concept>={m['concept_strength']}, hook>={m['hook_strength']}, evidence>={m['evidence_strength']}, "
+        f"payoff>={m['payoff_strength']}, information_density>={m['information_density']}, "
+        f"first_frame>={m['first_frame_strength']}, visual_progression>={m['visual_progression']}, "
+        f"shareability>={m['shareability']}, naturalness>={m['naturalness']}, distinctiveness>={m['distinctiveness']}, "
+        f"voice_specificity>={m['voice_specificity']}, overall>={m['overall']}."
+    )
+    node["parameters"]["jsonBody"] = _prepend_user_instruction(node["parameters"]["jsonBody"], instruction)
 
 
 def patch_visual_director(workflow: dict) -> None:
     node = node_by_name(workflow, "Claude: Visual Director")
     m = PUBLISH_MINIMUMS
-    node["parameters"]["jsonBody"] = rf'''={{ JSON.stringify({{ model: "claude-sonnet-5", max_tokens: 8192, thinking: {{ type: "disabled" }}, messages: [{{ role: "user", content: "You are the INDEPENDENT QUALITY CRITIC and VISUAL DIRECTOR for a YouTube Shorts channel. QUALITY_ALIGNMENT RELIABILITY_FIRST_VIDEO. Return a COMPLETE production-ready JSON script. Reliability and truthfulness outrank perfection.\n\nSCRIPT: " + JSON.stringify($json.script) + "\n\nCOMMISSIONING INTENT: " + JSON.stringify({{ share_trigger: $('Extract Generated Topic').item.json.share_trigger || '', send_to_person: $('Extract Generated Topic').item.json.send_to_person || '', novelty_delta: $('Extract Generated Topic').item.json.novelty_delta || '', proof_visual: $('Extract Generated Topic').item.json.proof_visual || '', stock_feasibility: $('Extract Generated Topic').item.json.stock_feasibility || 0, stock_query_seed: $('Extract Generated Topic').item.json.stock_query_seed || [] }}) + "\n\nPHASE 1 - QUALITY CHECK\nJudge the actual script against these publish floors: concept_strength {m['concept_strength']}; hook_strength {m['hook_strength']}; evidence_strength {m['evidence_strength']}; payoff_strength {m['payoff_strength']}; information_density {m['information_density']}; first_frame_strength {m['first_frame_strength']}; visual_progression {m['visual_progression']}; shareability {m['shareability']}; naturalness {m['naturalness']}; distinctiveness {m['distinctiveness']}; voice_specificity {m['voice_specificity']}; overall {m['overall']}. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 8.\n\nClassify internally as PASS, REPAIRABLE_NEAR_MISS, or HARD_REJECT. HARD_REJECT only if evidence is below its gate, the factual premise itself must change, or a core dimension is more than 8 points below its floor. REPAIRABLE_NEAR_MISS applies when evidence is sound and packaging/writing can be fixed in one pass. Perform at most ONE bounded repair. Preserve factual boundaries, scene order/count, and every scene_index. Rebuild full_script after any wording repair. If the script is competent and truthful, prefer PASS over discarding it for premium-level polish. Set quality_route to pass, repaired_near_miss, or hard_reject and score the FINAL returned script.\n\nPHASE 2 - RETRIEVABLE VISUALS\nChoose creative_format from documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat. Assign visual_role=hero/evidence/detail/comparison/breath/payoff.\n\nFor every NON-TEMPLATE scene create at least 3 concrete Pexels/Unsplash/Wikipedia search_queries: (1) literal query: visible subject/action, (2) broad fallback: high-inventory core visible noun, (3) a distinct visual variant. Scene 0 should have 4 when useful. Set stock_search_query to the strongest query. Queries must be short visible nouns/actions, not cinematic adjectives or abstract concepts. If stock would be generic or obscure, use a template instead.\n\nSet caption_mode=karaoke/key_phrases/minimal, transition_style=hard_cut, engagement_mode from the actual CTA fields, open_loop_count honestly, and visual_plan_quality 0-100. A usable coherent plan should clear {VISUAL_PLAN_MINIMUM}; reserve lower scores for genuinely unrenderable plans.\n\nFINAL INTEGRITY PASS: return ONLY the COMPLETE script JSON. Every scene needs sequential scene_index and non-empty point. Every non-template scene needs visual_role, stock_search_query, and >=3 search_queries. first_frame_type is required. Preserve/rebuild hook_candidates, caption_style, trigger, payoff, quality, full_script, title, tags, seo_description and all other required fields. No prose, markdown, or thinking text." }}] }}) }}'''
+
+    # IMPORTANT: this is deliberately a raw string, not an f-string. n8n needs
+    # the literal expression wrapper `={{ ... }}`. Interpolate numeric values
+    # afterwards so Python cannot consume one brace from that wrapper.
+    body = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "disabled" }, messages: [{ role: "user", content: "You are the INDEPENDENT QUALITY CRITIC and VISUAL DIRECTOR for a YouTube Shorts channel. QUALITY_ALIGNMENT RELIABILITY_FIRST_VIDEO. Return a COMPLETE production-ready JSON script. Reliability and truthfulness outrank perfection.\n\nSCRIPT: " + JSON.stringify($json.script) + "\n\nCOMMISSIONING INTENT: " + JSON.stringify({ share_trigger: $('Extract Generated Topic').item.json.share_trigger || '', send_to_person: $('Extract Generated Topic').item.json.send_to_person || '', novelty_delta: $('Extract Generated Topic').item.json.novelty_delta || '', proof_visual: $('Extract Generated Topic').item.json.proof_visual || '', stock_feasibility: $('Extract Generated Topic').item.json.stock_feasibility || 0, stock_query_seed: $('Extract Generated Topic').item.json.stock_query_seed || [] }) + "\n\nPHASE 1 - QUALITY CHECK\nJudge the actual script against these publish floors: concept_strength __CONCEPT__; hook_strength __HOOK__; evidence_strength __EVIDENCE__; payoff_strength __PAYOFF__; information_density __INFO__; first_frame_strength __FIRST__; visual_progression __VISUAL__; shareability __SHARE__; naturalness __NATURAL__; distinctiveness __DISTINCT__; voice_specificity __VOICE__; overall __OVERALL__. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 8.\n\nClassify internally as PASS, REPAIRABLE_NEAR_MISS, or HARD_REJECT. HARD_REJECT only if evidence is below its gate, the factual premise itself must change, or a core dimension is more than 8 points below its floor. REPAIRABLE_NEAR_MISS applies when evidence is sound and packaging/writing can be fixed in one pass. Perform at most ONE bounded repair. Preserve factual boundaries, scene order/count, and every scene_index. Rebuild full_script after any wording repair. If the script is competent and truthful, prefer PASS over discarding it for premium-level polish. Set quality_route to pass, repaired_near_miss, or hard_reject and score the FINAL returned script.\n\nPHASE 2 - RETRIEVABLE VISUALS\nChoose creative_format from documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat. Assign visual_role=hero/evidence/detail/comparison/breath/payoff.\n\nFor every NON-TEMPLATE scene create at least 3 concrete Pexels/Unsplash/Wikipedia search_queries: (1) literal query: visible subject/action, (2) broad fallback: high-inventory core visible noun, (3) a distinct visual variant. Scene 0 should have 4 when useful. Set stock_search_query to the strongest query. Queries must be short visible nouns/actions, not cinematic adjectives or abstract concepts. If stock would be generic or obscure, use a template instead.\n\nSet caption_mode=karaoke/key_phrases/minimal, transition_style=hard_cut, engagement_mode from the actual CTA fields, open_loop_count honestly, and visual_plan_quality 0-100. A usable coherent plan should clear __VISUAL_PLAN__; reserve lower scores for genuinely unrenderable plans.\n\nFINAL INTEGRITY PASS: return ONLY the COMPLETE script JSON. Every scene needs sequential scene_index and non-empty point. Every non-template scene needs visual_role, stock_search_query, and >=3 search_queries. first_frame_type is required. Preserve/rebuild hook_candidates, caption_style, trigger, payoff, quality, full_script, title, tags, seo_description and all other required fields. No prose, markdown, or thinking text." }] }) }}'''
+    replacements = {
+        "__CONCEPT__": m["concept_strength"],
+        "__HOOK__": m["hook_strength"],
+        "__EVIDENCE__": m["evidence_strength"],
+        "__PAYOFF__": m["payoff_strength"],
+        "__INFO__": m["information_density"],
+        "__FIRST__": m["first_frame_strength"],
+        "__VISUAL__": m["visual_progression"],
+        "__SHARE__": m["shareability"],
+        "__NATURAL__": m["naturalness"],
+        "__DISTINCT__": m["distinctiveness"],
+        "__VOICE__": m["voice_specificity"],
+        "__OVERALL__": m["overall"],
+        "__VISUAL_PLAN__": VISUAL_PLAN_MINIMUM,
+    }
+    for token, value in replacements.items():
+        body = body.replace(token, str(value))
+    node["parameters"]["jsonBody"] = body
     node["parameters"].setdefault("options", {})["timeout"] = 120000
 
 
@@ -135,9 +131,6 @@ def _prioritize_complete_json(node: dict, max_tokens: int) -> None:
 
 
 def patch_reliability(workflow: dict) -> None:
-    # Hidden adaptive reasoning consumes the same response budget needed for the
-    # JSON payload. All model stages here are structured-output stages, so favor
-    # complete JSON and let the explicit editor/critic prompts do the reasoning.
     for name, tokens in {
         "Claude: Generate Topic": 6000,
         "Claude: Commission Topic Shortlist": 8192,
@@ -163,7 +156,6 @@ def patch_reliability(workflow: dict) -> None:
 
 def upgrade(workflow: dict) -> dict:
     patch_commissioning(workflow)
-    patch_extractor(workflow)
     patch_writer(workflow)
     patch_editor(workflow)
     patch_visual_director(workflow)
@@ -172,13 +164,13 @@ def upgrade(workflow: dict) -> dict:
 
 
 def assert_alignment(workflow: dict) -> None:
-    commission_node = node_by_name(workflow, "Claude: Commission Topic Shortlist")
-    commission = commission_node["parameters"]["jsonBody"]
+    commission = node_by_name(workflow, "Claude: Commission Topic Shortlist")["parameters"]["jsonBody"]
     writer = node_by_name(workflow, "Claude: Draft Script (Stage 1)")["parameters"]["jsonBody"]
     editor = node_by_name(workflow, "Claude: Editorial Rewrite (Stage 2)")["parameters"]["jsonBody"]
     visual = node_by_name(workflow, "Claude: Visual Director")["parameters"]["jsonBody"]
     extractor = node_by_name(workflow, "Extract Generated Topic")["parameters"]["jsCode"]
     validator = node_by_name(workflow, "Validate Final Script")["parameters"]["jsCode"]
+
     required = [
         (commission, RELIABILITY_MARKER, "commissioning reliability mode"),
         (commission, "TWO strongest candidates", "bounded commissioner output"),
@@ -196,6 +188,8 @@ def assert_alignment(workflow: dict) -> None:
     if missing:
         raise RuntimeError("quality alignment did not land: " + ", ".join(missing))
 
+    # Regression guard for the production failure on 2026-08-20: an f-string
+    # collapsed `={{ ... }}` to `={ ... }`, which n8n treated as invalid JSON.
     for name in [
         "Claude: Generate Topic",
         "Claude: Commission Topic Shortlist",
@@ -203,7 +197,9 @@ def assert_alignment(workflow: dict) -> None:
         "Claude: Editorial Rewrite (Stage 2)",
         "Claude: Visual Director",
     ]:
-        body = node_by_name(workflow, name)["parameters"]["jsonBody"]
+        body = str(node_by_name(workflow, name)["parameters"]["jsonBody"]).strip()
+        if not (body.startswith("={{") and body.endswith("}}") and "JSON.stringify(" in body):
+            raise RuntimeError(f"{name} JSON Body lost its n8n expression wrapper")
         if 'thinking: { type: "adaptive" }' in body or 'thinking: { type: "disabled" }' not in body:
             raise RuntimeError(f"{name} is not configured to prioritize complete JSON")
 
