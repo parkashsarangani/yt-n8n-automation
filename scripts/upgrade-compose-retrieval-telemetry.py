@@ -56,10 +56,7 @@ app.get("/performance/retrieval", async (req, res) => {
     return text.replace(old, new, 1)
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: upgrade-compose-retrieval-telemetry.py COMPOSE_JS")
-    path = Path(sys.argv[1])
+def patch_file(path: Path) -> None:
     text = patch(path.read_text())
     path.write_text(text)
     p = subprocess.run(["node", "--check", str(path)], text=True, capture_output=True)
@@ -67,6 +64,13 @@ def main() -> None:
         raise RuntimeError("compose retrieval telemetry syntax check failed:\n" + p.stdout + p.stderr)
     if MARKER not in text or '/performance/retrieval' not in text:
         raise RuntimeError("compose retrieval telemetry patch did not land")
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: upgrade-compose-retrieval-telemetry.py COMPOSE_JS")
+    path = Path(sys.argv[1])
+    patch_file(path)
     print(f"retrieval telemetry endpoints written to {path}")
 
 
