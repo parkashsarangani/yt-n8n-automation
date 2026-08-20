@@ -179,22 +179,52 @@ function main() {
   // -------------------------------------------------------------------
   section('3. Retry-attempt counter (the unbounded-loop bug)');
   // -------------------------------------------------------------------
+  // IMPORTANT: an earlier version of this test mocked $('NodeName').item as a
+  // simple dictionary lookup and the fix appeared to pass - but that mock did
+  // not reflect n8n's real behavior. $('NodeName').item depends on
+  // paired-item lineage, which the loop-back edge through the independent
+  // "Claude: Generate Topic" HTTP call does not reliably preserve. Confirmed
+  // live in production: 5 full retry cycles, scriptAttempt=1 every single
+  // time. The fix now uses $getWorkflowStaticData('node'), which does not
+  // depend on dataflow/lineage at all - a plain persistent object is an
+  // accurate mock of it, unlike $('NodeName').item.
   {
-    const code = nodes['Increment Script Attempt'].parameters.jsCode;
-    const history = { 'Init Script Attempt Counter': { item: { json: { scriptAttempt: 0 } } } };
-    const dollar = (name) => {
-      if (!(name in history)) throw new Error(`Referenced node is unrun: ${name}`);
-      return history[name];
-    };
-    function iterate(errs) {
-      const fn = new Function('$', '$input', 'return (function(){' + code + '})()');
-      const result = fn(dollar, { first: () => ({ json: { _validationErrors: errs } }) });
-      history['Increment Script Attempt'] = { item: result };
+    // Workflow static data persists across the whole n8n instance for this
+    // workflow, not just within the mock - model that with one shared object
+    // both nodes read/write, exactly like the real $getWorkflowStaticData('node').
+    const staticStore = {};
+    const getStaticData = () => staticStore;
+
+    const initCode = nodes['Init Script Attempt Counter'].parameters.jsCode;
+    const incrementCode = nodes['Increment Script Attempt'].parameters.jsCode;
+
+    function runInit(inputItems) {
+      const fn = new Function('$getWorkflowStaticData', '$input', 'return (function(){' + initCode + '})()');
+      return fn(getStaticData, { all: () => inputItems });
+    }
+    function runIncrement(errs) {
+      const fn = new Function('$getWorkflowStaticData', '$input', 'return (function(){' + incrementCode + '})()');
+      const result = fn(getStaticData, { first: () => ({ json: { _validationErrors: errs } }) });
       return result.json.scriptAttempt;
     }
-    const seq = [iterate(['a']), iterate(['b']), iterate(['c']), iterate(['d'])];
+
+    // Simulate a stale counter left over from a PREVIOUS execution (static
+    // data persists across runs) - Init must reset it, not just skip if unset.
+    staticStore.scriptAttempt = 7;
+    runInit([{ json: { topics: [] } }]);
+    check('Init resets a stale cross-execution counter back to 0', staticStore.scriptAttempt === 0, `got ${staticStore.scriptAttempt}`);
+
+    const seq = [runIncrement(['a']), runIncrement(['b']), runIncrement(['c']), runIncrement(['d'])];
     check('counter increments 1,2,3,4 across loop iterations', JSON.stringify(seq) === JSON.stringify([1, 2, 3, 4]), `got ${JSON.stringify(seq)}`);
     check('counter would now correctly cap at attempt 3 (3 < 3 is false)', !(seq[2] < 3), undefined);
+
+    // A second execution must not see the first execution's leftover count.
+    runInit([{ json: { topics: [] } }]);
+    check('a fresh execution starts the counter at 0 again after Init', staticStore.scriptAttempt === 0, `got ${staticStore.scriptAttempt}`);
+    check('Init passes input items through unchanged', (() => {
+      const passed = runInit([{ json: { topics: ['x', 'y'] } }]);
+      return Array.isArray(passed) && passed[0].json.topics.length === 2;
+    })());
   }
 
   // -------------------------------------------------------------------
@@ -367,6 +397,48 @@ function main() {
     check('Log Published Video no longer hardcodes null', !logCode.includes('asset_quality_min: null'));
     check('Log Published Video references the real aggregated field', logCode.includes("$('Merge By scene_index (not position)').item.json.asset_quality_min"));
   }
+
+  // -------------------------------------------------------------------
+  section('8. Prompt integrity - every HTTP node\'s n8n expression must build valid JSON');
+  // -------------------------------------------------------------------
+  // Catches exactly the class of bug found earlier this session: a prompt
+  // edit whose escaping is wrong at some layer (Python source -> n8n export
+  // JSON -> n8n expression -> JSON.stringify) can silently produce a broken
+  // request body, or - worse - silently no-op a prompt addition entirely,
+  // with no error anywhere until a real API call fails downstream.
+  {
+    const sampleCtx = {
+      topic: 'a sample topic', archetype: 'looks_fake_but_real', draft: { hook: 'h' }, script: { hook: 'h', scenes: [] },
+    };
+    // Only syntax/escaping validity is under test here, not real cross-node
+    // values, so a generic stand-in for any $('NodeName') reference is fine.
+    // Unknown property access (e.g. .guidance, .signals, .topics from nodes
+    // this test doesn't model in sampleCtx) defaults to [] so the common
+    // .map()/.filter()/.join() chains prompts build over "prior data" don't
+    // throw - only real syntax/escaping bugs should fail this check.
+    const jsonStub = new Proxy(sampleCtx, { get: (target, prop) => (prop in target ? target[prop] : []) });
+    const genericNodeStub = new Proxy(
+      { item: { json: jsonStub }, first: () => ({ json: jsonStub }), all: () => [{ json: jsonStub }] },
+      { get: (target, prop) => (prop in target ? target[prop] : jsonStub[prop]) },
+    );
+    const dollarStub = (_name) => genericNodeStub;
+    const executionStub = { id: 'test-execution-id' };
+    for (const n of workflow.nodes) {
+      const body = n.parameters && n.parameters.jsonBody;
+      if (typeof body !== 'string' || !body.includes('{{')) continue;
+      const inner = body.slice(body.indexOf('{{') + 2, body.lastIndexOf('}}'));
+      doesNotThrow(() => {
+        const fn = new Function('$json', '$', '$execution', 'return (' + inner + ')');
+        const payload = fn(jsonStub, dollarStub, executionStub);
+        if (typeof payload !== 'string') throw new Error('expression did not produce a string');
+        JSON.parse(payload); // must itself be valid JSON, not just valid JS
+      }, `${n.name}: jsonBody expression evaluates and produces valid JSON`);
+    }
+  }
+  check('Editorial Rewrite prompt reinforces caption_style/trigger/hook_candidates validity',
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('STRUCTURAL FIELD INTEGRITY'));
+  check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('caption_style, trigger, quality, scene order'));
 
   // -------------------------------------------------------------------
   console.log('\n' + '='.repeat(70));
