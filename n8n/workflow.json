@@ -490,23 +490,12 @@
     },
     {
       "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "script-attempt-init",
-              "name": "scriptAttempt",
-              "value": 0,
-              "type": "number"
-            }
-          ]
-        },
-        "includeOtherFields": true,
-        "options": {}
+        "jsCode": "// Reset the run-scoped retry counter. Workflow static data persists\n// ACROSS executions (not just within one), so this must run once at the\n// start of every execution or a stale count could leak in from a prior run.\n$getWorkflowStaticData('node').scriptAttempt = 0;\nreturn $input.all();"
       },
       "id": "7c2b6d6e-49e8-49f7-a6e9-277c5d3f6062",
       "name": "Init Script Attempt Counter",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         1800,
         300
@@ -547,7 +536,7 @@
     },
     {
       "parameters": {
-        "jsCode": "let prevAttempt = 0;\ntry {\n  prevAttempt = $('Increment Script Attempt').item.json.scriptAttempt ?? 0;\n} catch (e) {\n  prevAttempt = $('Init Script Attempt Counter').item.json.scriptAttempt ?? 0;\n}\nconst newAttempt = prevAttempt + 1;\nconst errors = $input.first().json._validationErrors || [];\nconsole.log(`Script validation failed on attempt ${newAttempt}: ${errors.join(' | ')}`);\nreturn { json: { scriptAttempt: newAttempt, lastErrors: errors } };"
+        "jsCode": "// Workflow static data, not $('NodeName').item back-reference: the loop-back\n// edge routes through \"Claude: Generate Topic\", an independent HTTP call that\n// does not reliably carry paired-item lineage back to this node's own prior\n// run, so $('Increment Script Attempt').item silently fails to resolve across\n// iterations and this counter gets stuck re-reading Init's one-time value\n// forever - confirmed live: 5 full retry cycles, scriptAttempt=1 every time.\nconst staticData = $getWorkflowStaticData('node');\nconst newAttempt = (staticData.scriptAttempt || 0) + 1;\nstaticData.scriptAttempt = newAttempt;\nconst errors = $input.first().json._validationErrors || [];\nconsole.log(`Script validation failed on attempt ${newAttempt}: ${errors.join(' | ')}`);\nreturn { json: { scriptAttempt: newAttempt, lastErrors: errors } };"
       },
       "id": "a1278d48-f5a1-40b3-8140-759c390c0d08",
       "name": "Increment Script Attempt",
