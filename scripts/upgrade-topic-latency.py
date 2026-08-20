@@ -1,21 +1,11 @@
 #!/usr/bin/env python3
-"""Apply topic-generation latency/budget guardrails after the API-budget workflow upgrade.
+"""Apply topic/model latency guardrails and dataflow-independent workflow state.
 
-The creative-system upgrade widens topic ideation from 12 to 36 candidates
-while the exported Anthropic request still carries an 8,192-token ceiling, a
-60s HTTP timeout, and n8n's 3-attempt automatic retry. This post-transform
-keeps the two-stage commissioning design while bounding the first call's
-latency, output size, and duplicate spend.
-
-POOL_SIZE was cut 24 -> 12 here, which still overflowed MAX_TOKENS in
-production: with the archetype-enriched schema (10 fields/candidate vs the
-original 3) plus adaptive thinking sharing the same 6,000-token ceiling,
-Claude's response was truncated mid-array, crashing "Parse Topic Pool" with a
-raw JSON.parse SyntaxError - confirmed live twice, at 24 and again at 12
-(smaller truncation position, same failure). Rather than raise MAX_TOKENS
-(more latency per call, the thing this guardrail exists to bound), POOL_SIZE
-is cut further to 4, which leaves adaptive thinking comfortable headroom
-against the 6,000-token ceiling regardless of how much it varies run to run.
+This transform keeps expensive Anthropic calls single-attempt at the n8n
+transport layer, keys script retries by execution id, and makes async render
+polling independent of paired-item lineage. Scheduled executions are the retry
+boundary for transport errors; the explicit fresh-topic loop remains the retry
+boundary for script quality.
 """
 from __future__ import annotations
 
@@ -24,6 +14,9 @@ import sys
 from pathlib import Path
 
 MARKER = "TOPIC_LATENCY"
+RUNTIME_MARKER = "WORKFLOW_RUNTIME_GUARDS"
+POLL_MARKER = "COMPOSE_POLL_STATE"
+SCRIPT_RETRY_MARKER = "SCRIPT_RETRY_STATE"
 TOPIC_NODE = "Claude: Generate Topic"
 POOL_SIZE = 4
 MAX_TOKENS = 6000
@@ -35,6 +28,44 @@ def node_by_name(workflow: dict, name: str) -> dict:
         if node.get("name") == name:
             return node
     raise KeyError(f"required n8n node not found: {name}")
+
+
+def patch_single_attempt_model(node: dict, timeout_ms: int) -> None:
+    node["retryOnFail"] = False
+    node["maxTries"] = 1
+    node["waitBetweenTries"] = 0
+    node.setdefault("parameters", {}).setdefault("options", {})["timeout"] = timeout_ms
+    node["notes"] = RUNTIME_MARKER + ": single bounded model call; do not duplicate paid requests after a client timeout"
+
+
+def patch_script_retry_state(workflow: dict) -> None:
+    init = node_by_name(workflow, "Init Script Attempt Counter")
+    init["parameters"]["jsCode"] = f"""// {SCRIPT_RETRY_MARKER}: execution-scoped script retry state.\nconst staticData=$getWorkflowStaticData('node');\nconst runId=String($execution.id||'unknown');\nstaticData.scriptAttempts=staticData.scriptAttempts||{{}};\nconst now=Date.now();\nfor(const [key,value] of Object.entries(staticData.scriptAttempts)){{if(!value||now-Number(value.updatedAt||0)>21600000)delete staticData.scriptAttempts[key];}}\nstaticData.scriptAttempts[runId]={{attempt:0,updatedAt:now}};\nreturn $input.all();"""
+
+    increment = node_by_name(workflow, "Increment Script Attempt")
+    increment["parameters"]["jsCode"] = f"""// {SCRIPT_RETRY_MARKER}: no paired-item lineage and no shared cross-execution scalar.\nconst staticData=$getWorkflowStaticData('node');\nconst runId=String($execution.id||'unknown');\nstaticData.scriptAttempts=staticData.scriptAttempts||{{}};\nconst state=staticData.scriptAttempts[runId]||{{attempt:0,updatedAt:Date.now()}};\nconst newAttempt=Number(state.attempt||0)+1;\nstate.attempt=newAttempt;state.updatedAt=Date.now();staticData.scriptAttempts[runId]=state;\nconst errors=$input.first().json._validationErrors||[];\nconsole.log(`Script validation failed on attempt ${{newAttempt}}: ${{errors.join(' | ')}}`);\nreturn {{json:{{scriptAttempt:newAttempt,lastErrors:errors}}}};"""
+
+    fail = node_by_name(workflow, "Fail: Script Generation Exhausted")
+    fail["parameters"]["jsCode"] = f"""// {SCRIPT_RETRY_MARKER}: terminal retry-state cleanup.\nconst staticData=$getWorkflowStaticData('node');\nconst runId=String($execution.id||'unknown');\nif(staticData.scriptAttempts)delete staticData.scriptAttempts[runId];\nconst lastErrors=$input.first().json.lastErrors||[];\nthrow new Error('Script generation failed validation 3 times in a row with fresh topics each time - giving up for this scheduled run rather than posting a bad video. Last errors: '+lastErrors.join(' | '));"""
+
+
+def patch_compose_polling(workflow: dict) -> None:
+    init = node_by_name(workflow, "Init Poll Counter")
+    init["parameters"]["jsCode"] = f"""// {POLL_MARKER}: execution-scoped render polling state.\nconst staticData=$getWorkflowStaticData('node');\nconst runId=String($execution.id||'unknown');\nstaticData.composePolls=staticData.composePolls||{{}};\nconst now=Date.now();\nfor(const [key,value] of Object.entries(staticData.composePolls)){{if(!value||now-Number(value.updatedAt||0)>21600000)delete staticData.composePolls[key];}}\nconst jobId=String($input.first().json.job_id||'').trim();\nif(!jobId)throw new Error('Start Compose Job response missing job_id');\nstaticData.composePolls[runId]={{jobId,pollAttempt:0,updatedAt:now}};\nreturn {{json:{{jobId,pollAttempt:0}}}};"""
+
+    check = node_by_name(workflow, "Check Compose Status")
+    check["parameters"]["url"] = "={{ 'https://shorts.interviewbuddy.cloud/compose-status/' + encodeURIComponent(String($json.jobId || '')) }}"
+
+    increment = node_by_name(workflow, "Increment Poll Attempt")
+    increment["parameters"]["jsCode"] = f"""// {POLL_MARKER}: dataflow-independent poll counter.\nconst staticData=$getWorkflowStaticData('node');\nconst runId=String($execution.id||'unknown');\nconst state=staticData.composePolls?.[runId];\nif(!state||!state.jobId)throw new Error('Compose poll state missing for execution '+runId);\nconst next=Number(state.pollAttempt||0)+1;\nstate.pollAttempt=next;state.updatedAt=Date.now();\nreturn {{json:{{jobId:state.jobId,pollAttempt:next}}}};"""
+
+    cleanup = f"// {POLL_MARKER}: terminal render-state cleanup.\nconst staticData=$getWorkflowStaticData('node');\nconst runId=String($execution.id||'unknown');\nif(staticData.composePolls)delete staticData.composePolls[runId];\n"
+    validate = node_by_name(workflow, "Validate Compose Result")
+    if POLL_MARKER not in validate["parameters"]["jsCode"]:
+        validate["parameters"]["jsCode"] = cleanup + validate["parameters"]["jsCode"]
+
+    fail = node_by_name(workflow, "Fail: Compose Polling Timeout")
+    fail["parameters"]["jsCode"] = cleanup + "throw new Error('Compose job did not finish within 40 poll attempts (~320s) - job_id: '+$input.first().json.jobId+'. The render may be stuck; check shorts-compose logs directly.');"
 
 
 def upgrade(workflow: dict) -> dict:
@@ -68,15 +99,37 @@ def upgrade(workflow: dict) -> dict:
             raise ValueError("could not patch topic max_tokens: known token anchors not found")
 
     params["jsonBody"] = body
-    params.setdefault("options", {})["timeout"] = TIMEOUT_MS
-
-    # A timeout must not fan out into three expensive duplicate topic calls.
-    # A later scheduled run is a safer retry boundary than n8n retrying the same
-    # large prompt immediately.
-    node["retryOnFail"] = False
-    node["maxTries"] = 1
-    node["waitBetweenTries"] = 0
+    patch_single_attempt_model(node, TIMEOUT_MS)
+    patch_single_attempt_model(node_by_name(workflow, "Claude: Draft Script (Stage 1)"), 120000)
+    patch_single_attempt_model(node_by_name(workflow, "Claude: Editorial Rewrite (Stage 2)"), 120000)
+    patch_script_retry_state(workflow)
+    patch_compose_polling(workflow)
     return workflow
+
+
+def assert_guardrails(workflow: dict) -> None:
+    for name in [TOPIC_NODE, "Claude: Draft Script (Stage 1)", "Claude: Editorial Rewrite (Stage 2)"]:
+        node = node_by_name(workflow, name)
+        if node.get("retryOnFail") is not False or node.get("maxTries") != 1:
+            raise RuntimeError(f"automatic retry survived on {name}")
+
+    script_init = node_by_name(workflow, "Init Script Attempt Counter")["parameters"]["jsCode"]
+    script_increment = node_by_name(workflow, "Increment Script Attempt")["parameters"]["jsCode"]
+    if SCRIPT_RETRY_MARKER not in script_init or SCRIPT_RETRY_MARKER not in script_increment:
+        raise RuntimeError("script retry state hardening did not land")
+    if ".scriptAttempt = 0" in script_init or "staticData.scriptAttempt ||" in script_increment or "staticData.scriptAttempt =" in script_increment:
+        raise RuntimeError("shared scalar script retry state survived")
+    if "$execution.id" not in script_init or "$execution.id" not in script_increment:
+        raise RuntimeError("script retry state is not keyed by execution id")
+
+    init_code = node_by_name(workflow, "Init Poll Counter")["parameters"]["jsCode"]
+    increment_code = node_by_name(workflow, "Increment Poll Attempt")["parameters"]["jsCode"]
+    if POLL_MARKER not in init_code or POLL_MARKER not in increment_code:
+        raise RuntimeError("compose polling state hardening did not land")
+    if "$('Init Poll Counter').item" in increment_code:
+        raise RuntimeError("compose poll counter still depends on paired-item lineage")
+    if "$json.jobId" not in node_by_name(workflow, "Check Compose Status")["parameters"]["url"]:
+        raise RuntimeError("compose status lookup lost loop-carried jobId")
 
 
 def main() -> None:
@@ -84,8 +137,10 @@ def main() -> None:
         raise SystemExit("usage: upgrade-topic-latency.py INPUT_WORKFLOW OUTPUT_WORKFLOW")
     src, dst = map(Path, sys.argv[1:])
     workflow = json.loads(src.read_text())
-    dst.write_text(json.dumps(upgrade(workflow), indent=2) + "\n")
-    print(f"topic latency workflow written to {dst}")
+    upgraded = upgrade(workflow)
+    assert_guardrails(upgraded)
+    dst.write_text(json.dumps(upgraded, indent=2) + "\n")
+    print(f"topic/runtime latency workflow written to {dst}")
 
 
 if __name__ == "__main__":

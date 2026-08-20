@@ -31,16 +31,17 @@ services:
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
-      # Paid-vision budget guardrails. Defaults are deliberately conservative:
-      # try 2 queries first, broaden to at most 4, score max 7 candidates for the
-      # first frame / 3 for supporting scenes, and never exceed 18 paid vision
-      # calls for one n8n execution. The extra first-frame headroom is bounded by
-      # the same run-level cap and only gets used if earlier candidates fail 88.
+      # Paid-vision budget guardrails. Search progressively and stop as soon as
+      # an asset clears its quality gate. Scene 0 may use up to 7 evaluations;
+      # each supporting scene may use up to 3. The validator permits at most 8
+      # content scenes, so 28 is the exact worst-case ceiling (7 + 7*3) rather
+      # than an inconsistent cap that can reject a later scene solely because
+      # earlier scenes used their legitimate per-scene budgets.
       - BROLL_INITIAL_SEARCH_QUERIES=${BROLL_INITIAL_SEARCH_QUERIES:-2}
       - BROLL_MAX_SEARCH_QUERIES=${BROLL_MAX_SEARCH_QUERIES:-4}
       - BROLL_FIRST_FRAME_MAX_VISION_CALLS=${BROLL_FIRST_FRAME_MAX_VISION_CALLS:-7}
       - BROLL_SUPPORT_MAX_VISION_CALLS=${BROLL_SUPPORT_MAX_VISION_CALLS:-3}
-      - BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-18}
+      - BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-28}
       - BROLL_SCORE_CACHE_TTL_MS=${BROLL_SCORE_CACHE_TTL_MS:-21600000}
       # Competitor outlier mining (/competitors/mine): a YouTube Data API v3 key
       # (public data only - NOT the OAuth analytics credential). If empty, the

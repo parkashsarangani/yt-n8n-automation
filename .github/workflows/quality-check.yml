@@ -8,9 +8,12 @@ on:
       - 'scripts/upgrade-creative-system.py'
       - 'scripts/upgrade-compose-creative-system.py'
       - 'scripts/upgrade-compose-api-budget.py'
+      - 'scripts/upgrade-compose-runtime-hardening.py'
       - 'scripts/upgrade-workflow-api-budget.py'
       - 'scripts/upgrade-topic-latency.py'
+      - 'scripts/upgrade_quality_alignment.py'
       - 'scripts/upgrade-anthropic-parser.py'
+      - 'scripts/preprod-audit.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
@@ -27,9 +30,12 @@ on:
       - 'scripts/upgrade-creative-system.py'
       - 'scripts/upgrade-compose-creative-system.py'
       - 'scripts/upgrade-compose-api-budget.py'
+      - 'scripts/upgrade-compose-runtime-hardening.py'
       - 'scripts/upgrade-workflow-api-budget.py'
       - 'scripts/upgrade-topic-latency.py'
+      - 'scripts/upgrade_quality_alignment.py'
       - 'scripts/upgrade-anthropic-parser.py'
+      - 'scripts/preprod-audit.py'
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/feedbackLoop.js'
       - 'shorts-compose/competitorMining.js'
@@ -47,7 +53,7 @@ jobs:
       - name: Apply workflow upgrades
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade-anthropic-parser.py
+          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade_quality_alignment.py scripts/upgrade-anthropic-parser.py scripts/preprod-audit.py
           python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_quality_gate.json
           python3 scripts/upgrade-creative-system.py /tmp/workflow_quality_gate.json /tmp/workflow_creative_system.json
           python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_creative_system.json /tmp/workflow_api_budget.json
@@ -55,24 +61,7 @@ jobs:
           python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_final.json
           python3 -m json.tool /tmp/workflow_final.json >/dev/null
 
-      - name: Assert commissioning graph and budget plumbing
-        run: |
-          set -euo pipefail
-          grep -q 'QUALITY_GATE' /tmp/workflow_final.json
-          grep -q 'CREATIVE_SYSTEM' /tmp/workflow_final.json
-          grep -q 'API_BUDGET' /tmp/workflow_final.json
-          grep -q 'TOPIC_LATENCY' /tmp/workflow_final.json
-          grep -q 'ANTHROPIC_TEXT_BLOCK_GUARD' /tmp/workflow_final.json
-          grep -q 'Wikipedia: Research Topic' /tmp/workflow_final.json
-          grep -q 'Claude: Commission Topic Shortlist' /tmp/workflow_final.json
-          grep -q 'Claude: Visual Director' /tmp/workflow_final.json
-          grep -q 'visual_plan_quality' /tmp/workflow_final.json
-          grep -q 'creative_dna' /tmp/workflow_final.json
-          grep -q 'search_queries' /tmp/workflow_final.json
-          grep -q 'run_id' /tmp/workflow_final.json
-          grep -q '\$execution.id' /tmp/workflow_final.json
-
-      - name: Verify graph, latency, and response parsing
+      - name: Verify graph, latency, retries, and response parsing
         run: |
           python3 - <<'PY'
           import json
@@ -94,39 +83,38 @@ jobs:
           topic_body = topic['parameters']['jsonBody']
           assert 'TOPIC_LATENCY' in topic_body
           assert 'GENERATE 4 DISTINCT candidate topics' in topic_body
-          assert 'GENERATE 36 DISTINCT candidate topics' not in topic_body
           assert 'max_tokens: 6000' in topic_body
-          assert 'max_tokens: 8192' not in topic_body
-          assert 'max_tokens: 9000' not in topic_body
           assert topic['parameters']['options']['timeout'] == 120000
-          assert topic.get('retryOnFail') is False
-          assert topic.get('maxTries') == 1
-          assert topic.get('waitBetweenTries') == 0
+          assert topic.get('retryOnFail') is False and topic.get('maxTries') == 1
 
           commission = names['Claude: Commission Topic Shortlist']
-          assert commission['parameters']['options']['timeout'] == 90000
+          assert commission['parameters']['options']['timeout'] == 120000
+          assert commission.get('retryOnFail') is False and commission.get('maxTries') == 1
           assert 'shortlist:pool.slice(0,4)' in names['Parse Topic Pool']['parameters']['jsCode']
 
-          for node_name in ['Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
+          visual = names['Claude: Visual Director']
+          assert visual['parameters']['options']['timeout'] == 180000
+          assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
+          assert 'thinking: { type: "disabled" }' in visual['parameters']['jsonBody']
+          assert names['Resolve B-roll']['parameters']['options']['timeout'] == 180000
+
+          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
               assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
+              assert 'LAST_VALID_JSON_OBJECT' in code, node_name
               assert 'content?.[0]?.text' not in code, node_name
-              assert "type === 'text'" in code or "type==='text'" in code, node_name
-              assert 'content types:' in code or 'content types: ' in code, node_name
-
-          pool_code = names['Parse Topic Pool']['parameters']['jsCode']
-          assert 'try {' in pool_code or 'try{' in pool_code, 'Parse Topic Pool must guard JSON.parse'
-          assert 'stop_reason' in pool_code, 'Parse Topic Pool must diagnose max_tokens truncation'
+              assert 'stop_reason' in code, node_name
 
           writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
-          assert 'Concept archetype' in writer_body, 'archetype context must reach the script writer'
-
+          assert 'Concept archetype' in writer_body
           validate = names['Validate Final Script']['parameters']['jsCode']
           assert 'visual_plan_quality' in validate
+          assert 'needs at least 3 search_queries' in validate
+          assert 'rebuiltFullScript' in validate
           resolver = names['Resolve B-roll']['parameters']['jsonBody']
           assert 'search_queries' in resolver and 'first_frame' in resolver
           assert 'run_id' in resolver and '$execution.id' in resolver
-          print('Graph + latency + Anthropic parser hardening OK')
+          print('Graph + runtime + Anthropic parser hardening OK')
           PY
 
       - name: Execute parser nodes against synthetic Claude responses
@@ -138,12 +126,13 @@ jobs:
           const names = {};
           for (const n of wf.nodes) names[n.name] = n;
 
-          function run(nodeName, input) {
-            const fn = new Function('$input', names[nodeName].parameters.jsCode);
-            return fn({ first: () => ({ json: input }) });
+          function run(nodeName, input, prior = {}) {
+            const fn = new Function('$input', '$', '$execution', names[nodeName].parameters.jsCode);
+            const $ = (name) => ({ item: { json: prior[name] || {} } });
+            return fn({ first: () => ({ json: input }) }, $, { id: 'ci-exec' });
           }
           function assertItem(result, label) {
-            if (result === undefined || result === null) throw new Error(label + ': node returned ' + result + ' instead of an item - string-presence CI checks miss this, execution does not');
+            if (result === undefined || result === null) throw new Error(label + ': node returned ' + result);
             if (Array.isArray(result)) {
               if (!result.every((x) => x && typeof x === 'object')) throw new Error(label + ': array items must be objects');
             } else if (typeof result !== 'object') {
@@ -152,36 +141,45 @@ jobs:
           }
 
           const candidates = Array.from({ length: 4 }, (_, i) => ({
-            topic: 't' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
+            topic: 'recognizable topic ' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
             share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
           }));
           assertItem(run('Parse Topic Pool', { content: [{ type: 'text', text: JSON.stringify({ candidates }) }], stop_reason: 'end_turn' }), 'Parse Topic Pool happy path');
 
-          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: '{"hook":"h"}' }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
+          const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
+          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
 
-          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' });
+          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
           assertItem(editorial, 'Parse Editorial For Visual Director happy path');
           if (!editorial || !editorial.json || !editorial.json.script) throw new Error('Parse Editorial For Visual Director did not return {json:{script}}');
 
-          console.log('Executable node smoke tests OK (Parse Topic Pool, Parse Draft JSON, Parse Editorial For Visual Director)');
+          const corrected = run('Parse Editorial For Visual Director', {
+            content: [{ type: 'text', text: '{"hook":"bad",]\nWait\n' + JSON.stringify(script) }], stop_reason: 'end_turn'
+          });
+          if (corrected.json.script.hook !== script.hook) throw new Error('Editorial parser did not choose final corrected JSON');
+
+          console.log('Executable parser smoke tests OK');
           JS
 
-      - name: Validate compose and b-roll budget transforms
+      - name: Validate compose and b-roll runtime transforms
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py
+          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py
           cp shorts-compose/compose.js /tmp/compose_final.js
           cp shorts-compose/brollResolver.js /tmp/broll_final.js
           python3 scripts/upgrade-compose-creative-system.py /tmp/compose_final.js
           python3 scripts/upgrade-compose-api-budget.py /tmp/compose_final.js /tmp/broll_final.js
+          python3 scripts/upgrade-compose-runtime-hardening.py /tmp/broll_final.js
           grep -q 'CREATIVE_SYSTEM_COMPOSE' /tmp/compose_final.js
           grep -q 'API_BUDGET_COMPOSE' /tmp/compose_final.js
           grep -q 'run_id' /tmp/compose_final.js
           grep -q 'API_BUDGET' /tmp/broll_final.js
+          grep -q 'PREPROD_BROLL_HARDENING' /tmp/broll_final.js
           grep -q 'INITIAL_SEARCH_QUERIES' /tmp/broll_final.js
           grep -q 'FIRST_FRAME_MAX_VISION_CALLS' /tmp/broll_final.js
           grep -q 'SUPPORT_MAX_VISION_CALLS' /tmp/broll_final.js
           grep -q 'RUN_MAX_VISION_CALLS' /tmp/broll_final.js
+          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' /tmp/broll_final.js
           grep -q 'scoreCache' /tmp/broll_final.js
           grep -q 'runBudgets' /tmp/broll_final.js
           grep -q 'scoreOneBatch' /tmp/broll_final.js
@@ -201,3 +199,8 @@ jobs:
           grep -q 'return { ok: false' /tmp/broll_final.js
           grep -q 'visual_hook_proxy' shorts-compose/competitorMining.js
           grep -q 'creative_dna' shorts-compose/feedbackLoop.js
+
+      - name: Run comprehensive pre-production audit
+        run: |
+          set -euo pipefail
+          python3 scripts/preprod-audit.py
