@@ -7,11 +7,15 @@ from pathlib import Path
 
 from retrieval_observability import patch_file as patch_retrieval_observability
 from runtime_hardening_impl import upgrade as _upgrade
+from upgrade_compose_retrieval_telemetry import patch_file as patch_compose_retrieval_telemetry
 
 
 def upgrade(path: Path) -> None:
     _upgrade(path)
     patch_retrieval_observability(path)
+    compose_path = path.with_name("compose.js")
+    if compose_path.exists():
+        patch_compose_retrieval_telemetry(compose_path)
 
 
 def main() -> None:
