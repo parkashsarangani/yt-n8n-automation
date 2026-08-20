@@ -5,9 +5,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from compose_retrieval_telemetry import patch_file as patch_compose_retrieval_telemetry
 from retrieval_observability import patch_file as patch_retrieval_observability
 from runtime_hardening_impl import upgrade as _upgrade
-from upgrade_compose_retrieval_telemetry import patch_file as patch_compose_retrieval_telemetry
 
 
 def upgrade(path: Path) -> None:
