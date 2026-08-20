@@ -2,6 +2,7 @@
 """Final runtime hardening for the transformed b-roll resolver."""
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -238,6 +239,23 @@ function softFallbackResponse(best, context, reason) {
 '''
 
 
+def self_test_soft_fallback(text: str) -> None:
+    start = text.index("// BROLL_SOFT_FALLBACK: preserve completion while retaining quality telemetry.")
+    end = text.index("async function resolveBroll({", start)
+    helper = text[start:end]
+    harness = helper + r'''
+const candidate={type:'image',url:'https://example.invalid/fallback.jpg',source:'pexels',query:'shark underwater',score:15,relevance:22,scroll_stop:15,mobile_clarity:35,composition:20,motion_energy:10,uniqueness:12};
+const result=softFallbackResponse(candidate,{threshold:78,isFirstFrame:true,queryList:['shark underwater'],queriesTried:['shark underwater'],candidates:[candidate],state:{scored:[candidate],scene_vision_calls:7,scene_vision_limit:7,cache_hits:0},searchRounds:2,runBudget:{used:7,remaining:21}},'scene_vision_budget_exhausted');
+if(!result||result.ok!==true||result.degraded!==true||result.quality_gate_passed!==false)throw new Error('soft fallback did not preserve completion');
+if(result.score!==15||result.threshold!==78||result.fallback_reason!=='scene_vision_budget_exhausted')throw new Error('soft fallback telemetry drifted');
+if(result.url!==candidate.url)throw new Error('soft fallback dropped usable asset URL');
+console.log('b-roll soft fallback regression OK');
+'''
+    p = subprocess.run(["node", "-e", harness], text=True, capture_output=True)
+    if p.returncode != 0:
+        raise RuntimeError("b-roll soft fallback regression failed:\n" + p.stdout + p.stderr)
+
+
 def upgrade(path: Path) -> None:
     text = path.read_text()
     text = replace_required(text, SAFE_GET_OLD, SAFE_GET_NEW, "stock lookup retry")
@@ -261,6 +279,7 @@ def upgrade(path: Path) -> None:
         raise RuntimeError("b-roll soft fallback did not land")
     if "BROLL_RUN_MAX_VISION_CALLS || 18" in text:
         raise RuntimeError("stale 18-call run default survived runtime hardening")
+    self_test_soft_fallback(text)
     path.write_text(text)
 
 
