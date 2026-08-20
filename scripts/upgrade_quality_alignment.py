@@ -6,6 +6,7 @@ import quality_alignment_impl as _impl
 from workflow_contracts import OVERALL_WEAKEST_CAP, QUALITY_MINIMUMS, VISUAL_PLAN_MINIMUM
 from workflow_guardrails import assert_workflow_contracts, finalize_workflow
 from workflow_retrieval_telemetry import apply as apply_retrieval_telemetry, assert_applied as assert_retrieval_telemetry
+from workflow_retrieval_recall_phase2 import apply as apply_retrieval_recall_phase2, assert_applied as assert_retrieval_recall_phase2
 
 _impl.PUBLISH_MINIMUMS = dict(QUALITY_MINIMUMS)
 _impl.VISUAL_PLAN_MINIMUM = VISUAL_PLAN_MINIMUM
@@ -36,10 +37,10 @@ def upgrade(workflow: dict) -> dict:
 
 
 def assert_alignment(workflow: dict) -> None:
-    # Finalize existing production guardrails first; telemetry then layers on top
-    # without changing any selection/ranking/threshold behavior.
     finalize_workflow(workflow)
     apply_retrieval_telemetry(workflow)
+    apply_retrieval_recall_phase2(workflow)
     _impl.assert_alignment(workflow)
     assert_workflow_contracts(workflow)
     assert_retrieval_telemetry(workflow)
+    assert_retrieval_recall_phase2(workflow)
