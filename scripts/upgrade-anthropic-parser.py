@@ -9,12 +9,17 @@ The Visual Director can also omit or contradict non-creative schema metadata
 (first_frame_type, engagement_mode, search_queries). Those omissions should not
 burn the whole script/topic retry budget. Repair only deterministic metadata
 before the existing fail-closed quality and asset gates run.
+
+The final transform also aligns commissioning/writer/editor/visual prompts to
+the deterministic quality and b-roll gates.
 """
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
+
+from upgrade_quality_alignment import assert_alignment, upgrade as upgrade_quality_alignment
 
 MARKER = "ANTHROPIC_TEXT_BLOCK_GUARD"
 VISUAL_SCHEMA_MARKER = "VISUAL_SCHEMA_NORMALIZER"
@@ -106,6 +111,7 @@ def upgrade(workflow: dict) -> dict:
     patch_editor_parser(workflow)
     patch_final_parser(workflow)
     patch_visual_schema_normalizer(workflow)
+    upgrade_quality_alignment(workflow)
     return workflow
 
 
@@ -129,6 +135,8 @@ def main() -> None:
         raise RuntimeError(
             "visual schema normalizer ordering is unsafe: it must precede all validation checks"
         )
+
+    assert_alignment(upgraded)
 
     dst.write_text(json.dumps(upgraded, indent=2) + "\n")
     print(f"Anthropic parser workflow written to {dst}")
