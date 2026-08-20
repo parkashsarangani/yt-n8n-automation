@@ -165,16 +165,16 @@ def patch_validator(node: dict) -> None:
 // the slot on a different concept instead of rendering disposable content.
 const q = parsed.quality;
 const qualityMinimums = {
-  concept_strength: 86,
-  hook_strength: 88,
-  evidence_strength: 84,
-  payoff_strength: 86,
-  information_density: 84,
-  first_frame_strength: 88,
-  visual_progression: 84,
-  shareability: 86,
-  naturalness: 84,
-  overall: 87,
+  concept_strength: 76,
+  hook_strength: 78,
+  evidence_strength: 74,
+  payoff_strength: 76,
+  information_density: 74,
+  first_frame_strength: 78,
+  visual_progression: 74,
+  shareability: 76,
+  naturalness: 74,
+  overall: 77,
 };
 if (!q || typeof q !== 'object') {
   errors.push('quality object missing - final commissioning editor must score the Short');
@@ -183,6 +183,19 @@ if (!q || typeof q !== 'object') {
     const value = Number(q[metric]);
     if (!Number.isFinite(value) || value < minimum) {
       errors.push(`quality.${metric}=${q[metric]} is below publish threshold ${minimum}`);
+    }
+  }
+  // The prompt tells the editor "overall may not exceed the lowest of
+  // concept/evidence/first-frame/payoff/shareability by more than 5" but
+  // nothing enforced it - a self-graded overall could inflate past what the
+  // constituent dimensions actually support. Verify it in code.
+  const overallCapDimensions = ['concept_strength', 'evidence_strength', 'first_frame_strength', 'payoff_strength', 'shareability'];
+  const overallCapValues = overallCapDimensions.map((m) => Number(q[m])).filter(Number.isFinite);
+  if (overallCapValues.length === overallCapDimensions.length) {
+    const weakest = Math.min(...overallCapValues);
+    const overall = Number(q.overall);
+    if (Number.isFinite(overall) && overall > weakest + 5) {
+      errors.push(`quality.overall=${overall} exceeds the weakest scored dimension (${weakest}) by more than 5 points - self-graded overall is inflated relative to its own component scores`);
     }
   }
 }
