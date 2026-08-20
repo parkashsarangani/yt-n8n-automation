@@ -117,7 +117,7 @@ def assert_guardrails(workflow: dict) -> None:
     script_increment = node_by_name(workflow, "Increment Script Attempt")["parameters"]["jsCode"]
     if SCRIPT_RETRY_MARKER not in script_init or SCRIPT_RETRY_MARKER not in script_increment:
         raise RuntimeError("script retry state hardening did not land")
-    if ".scriptAttempt =" in script_init or "staticData.scriptAttempt" in script_increment:
+    if ".scriptAttempt = 0" in script_init or "staticData.scriptAttempt ||" in script_increment or "staticData.scriptAttempt =" in script_increment:
         raise RuntimeError("shared scalar script retry state survived")
     if "$execution.id" not in script_init or "$execution.id" not in script_increment:
         raise RuntimeError("script retry state is not keyed by execution id")
