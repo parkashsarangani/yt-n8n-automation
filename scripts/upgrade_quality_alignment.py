@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Stable entry point for quality alignment plus final production guardrails."""
+"""Stable entry point for quality alignment, production guardrails, and retrieval telemetry."""
 from __future__ import annotations
 
 import quality_alignment_impl as _impl
 from workflow_contracts import OVERALL_WEAKEST_CAP, QUALITY_MINIMUMS, VISUAL_PLAN_MINIMUM
 from workflow_guardrails import assert_workflow_contracts, finalize_workflow
+from workflow_retrieval_telemetry import apply as apply_retrieval_telemetry, assert_applied as assert_retrieval_telemetry
 
-# Explicit policy decision: now that retrieval can fall back to relevant
-# templates instead of killing the run, restore the pre-reliability script bar
-# rather than leaving the emergency lowered floors as a silent permanent state.
 _impl.PUBLISH_MINIMUMS = dict(QUALITY_MINIMUMS)
 _impl.VISUAL_PLAN_MINIMUM = VISUAL_PLAN_MINIMUM
 
-# Preserve the historical import surface used by upgrade-anthropic-parser.py.
 from quality_alignment_impl import *  # noqa: F401,F403,E402
 
 
@@ -21,9 +18,6 @@ def upgrade(workflow: dict) -> dict:
     _impl.VISUAL_PLAN_MINIMUM = VISUAL_PLAN_MINIMUM
     upgraded = _impl.upgrade(workflow)
 
-    # The reliability hotfix widened the overall-score cap to +8. Restore the
-    # earlier +5 calibration while leaving the separate HARD_REJECT repair
-    # tolerance untouched.
     visual = _impl.node_by_name(upgraded, "Claude: Visual Director")
     body = str(visual["parameters"]["jsonBody"])
     body = body.replace(
@@ -42,9 +36,10 @@ def upgrade(workflow: dict) -> dict:
 
 
 def assert_alignment(workflow: dict) -> None:
-    # This assertion is invoked by upgrade-anthropic-parser.py only after all
-    # parser/runtime transforms have landed.  Use that final point to normalize
-    # cross-transform issues and enforce the shared contract table.
+    # Finalize existing production guardrails first; telemetry then layers on top
+    # without changing any selection/ranking/threshold behavior.
     finalize_workflow(workflow)
+    apply_retrieval_telemetry(workflow)
     _impl.assert_alignment(workflow)
     assert_workflow_contracts(workflow)
+    assert_retrieval_telemetry(workflow)
