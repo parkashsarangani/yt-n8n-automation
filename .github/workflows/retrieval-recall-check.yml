@@ -1,0 +1,102 @@
+name: Validate Retrieval Recall Phase 2
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/retrieval_recall_phase2.py'
+      - 'scripts/workflow_retrieval_recall_phase2.py'
+      - 'scripts/upgrade-compose-runtime-hardening.py'
+      - 'scripts/upgrade_quality_alignment.py'
+      - 'scripts/retrieval_observability.py'
+      - 'scripts/workflow_retrieval_telemetry.py'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/retrieval-recall-check.yml'
+  push:
+    branches:
+      - 'agent/**'
+    paths:
+      - 'scripts/retrieval_recall_phase2.py'
+      - 'scripts/workflow_retrieval_recall_phase2.py'
+      - 'scripts/upgrade-compose-runtime-hardening.py'
+      - 'scripts/upgrade_quality_alignment.py'
+      - 'scripts/retrieval_observability.py'
+      - 'scripts/workflow_retrieval_telemetry.py'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
+      - '.github/workflows/retrieval-recall-check.yml'
+
+jobs:
+  retrieval-recall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile phase 2 transforms
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/retrieval_recall_phase2.py \
+            scripts/workflow_retrieval_recall_phase2.py \
+            scripts/upgrade-compose-runtime-hardening.py \
+            scripts/upgrade_quality_alignment.py
+
+      - name: Verify generated workflow source routing
+        run: |
+          set -euo pipefail
+          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/t1.json
+          python3 scripts/upgrade-creative-system.py /tmp/t1.json /tmp/t2.json
+          python3 scripts/upgrade-workflow-api-budget.py /tmp/t2.json /tmp/t3.json
+          python3 scripts/upgrade-topic-latency.py /tmp/t3.json /tmp/t4.json
+          python3 scripts/upgrade-anthropic-parser.py /tmp/t4.json /tmp/final.json
+          python3 - <<'PY'
+          import json
+          w=json.load(open('/tmp/final.json'))
+          names={n['name']:n for n in w['nodes']}
+          visual=names['Claude: Visual Director']['parameters']['jsonBody']
+          validator=names['Validate Final Script']['parameters']['jsCode']
+          tag=names['Tag B-roll']['parameters']['jsCode']
+          assert 'RETRIEVAL_RECALL_PHASE2' in visual
+          assert 'pixabay_video' in visual and 'pixabay' in visual
+          assert 'pixabay_video' in validator and 'pixabay' in validator
+          assert 'compiled_query_plan' in tag
+          print('phase2 workflow routing contract OK')
+          PY
+
+      - name: Verify bounded resolver transform
+        run: |
+          set -euo pipefail
+          cp shorts-compose/compose.js /tmp/compose.js
+          cp shorts-compose/brollResolver.js /tmp/brollResolver.js
+          python3 scripts/upgrade-compose-creative-system.py /tmp/compose.js
+          python3 scripts/upgrade-compose-api-budget.py /tmp/compose.js /tmp/brollResolver.js
+          python3 scripts/upgrade-compose-runtime-hardening.py /tmp/brollResolver.js
+          grep -q 'RETRIEVAL_RECALL_PHASE2' /tmp/brollResolver.js
+          grep -q 'SOURCE_QUERY_COMPILER_V1' /tmp/brollResolver.js
+          grep -q 'PIXABAY_RETRIEVAL_V1' /tmp/brollResolver.js
+          grep -q 'fromPixabayVideos' /tmp/brollResolver.js
+          grep -q 'fromPixabayPhotos' /tmp/brollResolver.js
+          grep -q 'PIXABAY_CACHE_TTL_MS' /tmp/brollResolver.js
+          grep -q 'RETRIEVAL_TOTAL_TIMEOUT_MS' /tmp/brollResolver.js
+          grep -q 'CANDIDATE_POOL_MAX' /tmp/brollResolver.js
+          grep -q 'RUN_MAX_VISION_CALLS' /tmp/brollResolver.js
+          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' /tmp/brollResolver.js
+          node --check /tmp/brollResolver.js
+          node --check /tmp/compose.js
+
+      - name: Verify production configuration
+        run: |
+          set -euo pipefail
+          grep -q 'PIXABAY_KEY=${PIXABAY_KEY:-}' docker-compose.yml
+          grep -q 'BROLL_SOURCE_PER_QUERY=${BROLL_SOURCE_PER_QUERY:-20}' docker-compose.yml
+          grep -q 'BROLL_SOURCE_QUERY_LIMIT=${BROLL_SOURCE_QUERY_LIMIT:-2}' docker-compose.yml
+          grep -q 'BROLL_CANDIDATE_POOL_MAX=${BROLL_CANDIDATE_POOL_MAX:-120}' docker-compose.yml
+          grep -q 'BROLL_RETRIEVAL_TOTAL_TIMEOUT_MS=${BROLL_RETRIEVAL_TOTAL_TIMEOUT_MS:-22000}' docker-compose.yml
+          grep -q 'BROLL_PIXABAY_CACHE_TTL_MS=${BROLL_PIXABAY_CACHE_TTL_MS:-86400000}' docker-compose.yml
+          grep -q 'BROLL_LOCAL_RERANK_CANDIDATES=${BROLL_LOCAL_RERANK_CANDIDATES:-20}' docker-compose.yml
+          grep -q 'PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}' .github/workflows/deploy.yml
+
+      - name: Run full production preflight
+        run: |
+          set -euo pipefail
+          python3 scripts/preprod-audit.py
