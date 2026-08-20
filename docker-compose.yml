@@ -31,6 +31,10 @@ services:
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
+      # Reliability-first media gates: still reject obviously irrelevant assets,
+      # but do not throw away an otherwise valid Short chasing premium stock.
+      - BROLL_SCORE_THRESHOLD=${BROLL_SCORE_THRESHOLD:-72}
+      - BROLL_FIRST_FRAME_THRESHOLD=${BROLL_FIRST_FRAME_THRESHOLD:-78}
       # Paid-vision budget guardrails. Search progressively and stop as soon as
       # an asset clears its quality gate. Scene 0 may use up to 7 evaluations;
       # each supporting scene may use up to 3. The validator permits at most 8
