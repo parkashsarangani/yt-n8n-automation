@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 MARKER = "PREPROD_BROLL_HARDENING"
-SOFT_FALLBACK_MARKER = "BROLL_SOFT_FALLBACK"
+SOFT_FALLBACK_MARKER = "function softFallbackResponse("
 
 
 def replace_required(text: str, old: str, new: str, label: str) -> str:
@@ -104,9 +104,6 @@ function parseScoreJson(text) {
       )) return parsed;
     } catch { /* try the previous complete object */ }
   }
-  // Fail closed when there is no complete score object. Never promote a
-  // stray number from malformed model prose/truncated JSON into every quality
-  // dimension; the resolver can continue to another candidate instead.
   return {
     relevance: 0,
     scroll_stop: 0,
