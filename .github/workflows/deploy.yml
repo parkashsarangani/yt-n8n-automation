@@ -27,6 +27,7 @@ jobs:
         env:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
+          PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           COMPETITOR_CHANNELS: ${{ secrets.COMPETITOR_CHANNELS }}
@@ -42,6 +43,9 @@ jobs:
           grep -q 'API_BUDGET_COMPOSE' shorts-compose/compose.js
           grep -q 'API_BUDGET' shorts-compose/brollResolver.js
           grep -q 'PREPROD_BROLL_HARDENING' shorts-compose/brollResolver.js
+          grep -q 'RETRIEVAL_RECALL_PHASE2' shorts-compose/brollResolver.js
+          grep -q 'SOURCE_QUERY_COMPILER_V1' shorts-compose/brollResolver.js
+          grep -q 'fromPixabayVideos' shorts-compose/brollResolver.js
           grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
           grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/brollResolver.js
           grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
@@ -123,6 +127,8 @@ jobs:
           visual = names['Claude: Visual Director']
           visual_body = visual['parameters']['jsonBody']
           assert 'QUALITY_ALIGNMENT' in visual_body
+          assert 'RETRIEVAL_RECALL_PHASE2' in visual_body
+          assert 'pixabay_video' in visual_body and 'pixabay' in visual_body
           assert visual['parameters']['options']['timeout'] == 180000
           assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
           assert 'thinking: { type: "disabled" }' in visual_body
@@ -146,6 +152,9 @@ jobs:
           assert 'visual_plan_quality' in validate
           assert 'needs at least 3 search_queries' in validate
           assert 'rebuiltFullScript' in validate
+          assert 'pixabay_video' in validate and 'pixabay' in validate
+          tag = names['Tag B-roll']['parameters']['jsCode']
+          assert 'compiled_query_plan' in tag
           print('Generated workflow contract OK')
           PY
 
