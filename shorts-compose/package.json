@@ -9,6 +9,7 @@
     "remotion:studio": "cd remotion && npx remotion studio"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "axios": "^1.7.0",
     "express": "^4.19.0",
     "ffmpeg-static": "^5.2.0",
