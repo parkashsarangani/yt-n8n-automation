@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Harden Anthropic response parsing after the topic-latency workflow upgrade.
+"""Harden Anthropic response parsing and deterministic visual-schema repair.
 
 Anthropic adaptive-thinking responses may place thinking/signature blocks before
 text. The production workflow still had parsers that assumed content[0].text,
 which fails even when a valid text block is present later in the response.
+
+The Visual Director can also omit or contradict non-creative schema metadata
+(first_frame_type, engagement_mode, search_queries). Those omissions should not
+burn the whole script/topic retry budget. Repair only deterministic metadata
+before the existing fail-closed quality and asset gates run.
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ import sys
 from pathlib import Path
 
 MARKER = "ANTHROPIC_TEXT_BLOCK_GUARD"
+VISUAL_SCHEMA_MARKER = "VISUAL_SCHEMA_NORMALIZER"
 
 
 def node_by_name(workflow: dict, name: str) -> dict:
@@ -78,10 +84,24 @@ def patch_final_parser(workflow: dict) -> None:
     )
 
 
+def patch_visual_schema_normalizer(workflow: dict) -> None:
+    node = node_by_name(workflow, "Validate Final Script")
+    code = node["parameters"]["jsCode"]
+    if VISUAL_SCHEMA_MARKER in code:
+        return
+
+    anchor = "// CREATIVE_SYSTEM visual commissioning gate."
+    normalizer = f"""// {VISUAL_SCHEMA_MARKER}: repair deterministic Visual Director omissions before fail-closed validation.\n// This only normalizes metadata/search hints; it does not change narration, facts, quality scores, or asset thresholds.\nconst normalizeSearchQuery=(value,maxWords=5)=>String(value||'').replace(/[^a-zA-Z0-9' -]+/g,' ').replace(/\\s+/g,' ').trim().split(' ').filter(Boolean).slice(0,maxWords).join(' ');\nconst dedupeSearchQueries=(values)=>{{const out=[];const seen=new Set();for(const value of values){{const q=normalizeSearchQuery(value);const key=q.toLowerCase();if(q&&!seen.has(key)){{seen.add(key);out.push(q);}}}}return out;}};\nif(!parsed.first_frame_type){{const byFormat={{documentary_cinematic:'hero_motion',comparison_reveal:'scale_comparison',minimal_proof:'result_first',archival_history:'archive_proof',macro_detail:'macro_anomaly',kinetic_data:'kinetic_stat'}};parsed.first_frame_type=byFormat[parsed.creative_format]||'result_first';}}\nconst hasComment=Boolean(String(parsed.comment_hook||'').trim());\nconst hasShareOutro=Boolean(String(parsed.outro_line||'').trim());\nparsed.engagement_mode=hasComment&&hasShareOutro?'comment_and_share':hasComment?'comment_only':hasShareOutro?'share_only':'none';\nif(Array.isArray(parsed.scenes)){{parsed.scenes.forEach((s,i)=>{{if(!s||s?.template_data?.is_outro||s.visual_source==='template')return;let queries=dedupeSearchQueries([...(Array.isArray(s.search_queries)?s.search_queries:[]),s.stock_search_query,s.visual_prompt,s.named_subject,s.point]);const base=queries[0]||normalizeSearchQuery(s.visual_prompt||s.named_subject||s.point||parsed.title||'visual subject',4);if(queries.length<2&&base){{const suffix=i===0?'close up':s.visual_role==='comparison'?'comparison':'detail';queries=dedupeSearchQueries([...queries,`${{base}} ${{suffix}}`,`${{base}} footage`]);}}s.search_queries=queries.slice(0,4);if(!String(s.stock_search_query||'').trim()&&s.search_queries[0])s.stock_search_query=s.search_queries[0];}});}}\n\n"""
+    if anchor not in code:
+        raise ValueError("could not patch visual schema normalizer: commissioning gate anchor not found")
+    node["parameters"]["jsCode"] = code.replace(anchor, normalizer + anchor, 1)
+
+
 def upgrade(workflow: dict) -> dict:
     patch_draft_parser(workflow)
     patch_editor_parser(workflow)
     patch_final_parser(workflow)
+    patch_visual_schema_normalizer(workflow)
     return workflow
 
 
@@ -90,7 +110,11 @@ def main() -> None:
         raise SystemExit("usage: upgrade-anthropic-parser.py INPUT_WORKFLOW OUTPUT_WORKFLOW")
     src, dst = map(Path, sys.argv[1:])
     workflow = json.loads(src.read_text())
-    dst.write_text(json.dumps(upgrade(workflow), indent=2) + "\n")
+    upgraded = upgrade(workflow)
+    validate_code = node_by_name(upgraded, "Validate Final Script")["parameters"]["jsCode"]
+    if VISUAL_SCHEMA_MARKER not in validate_code:
+        raise RuntimeError("visual schema normalizer did not land in Validate Final Script")
+    dst.write_text(json.dumps(upgraded, indent=2) + "\n")
     print(f"Anthropic parser workflow written to {dst}")
 
 
