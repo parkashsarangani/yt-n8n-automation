@@ -124,6 +124,13 @@ def _prioritize_complete_json(node: dict, max_tokens: int) -> None:
         1,
     )
     body = body.replace('thinking: { type: "adaptive" },', 'thinking: { type: "disabled" },', 1)
+    if "thinking:" not in body:
+        body = re.sub(
+            r"(max_tokens:\s*\d+\s*,)",
+            r'\1 thinking: { type: "disabled" },',
+            body,
+            count=1,
+        )
     node["parameters"]["jsonBody"] = body
 
 
