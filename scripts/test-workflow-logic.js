@@ -399,6 +399,48 @@ function main() {
   }
 
   // -------------------------------------------------------------------
+  section('8. Prompt integrity - every HTTP node\'s n8n expression must build valid JSON');
+  // -------------------------------------------------------------------
+  // Catches exactly the class of bug found earlier this session: a prompt
+  // edit whose escaping is wrong at some layer (Python source -> n8n export
+  // JSON -> n8n expression -> JSON.stringify) can silently produce a broken
+  // request body, or - worse - silently no-op a prompt addition entirely,
+  // with no error anywhere until a real API call fails downstream.
+  {
+    const sampleCtx = {
+      topic: 'a sample topic', archetype: 'looks_fake_but_real', draft: { hook: 'h' }, script: { hook: 'h', scenes: [] },
+    };
+    // Only syntax/escaping validity is under test here, not real cross-node
+    // values, so a generic stand-in for any $('NodeName') reference is fine.
+    // Unknown property access (e.g. .guidance, .signals, .topics from nodes
+    // this test doesn't model in sampleCtx) defaults to [] so the common
+    // .map()/.filter()/.join() chains prompts build over "prior data" don't
+    // throw - only real syntax/escaping bugs should fail this check.
+    const jsonStub = new Proxy(sampleCtx, { get: (target, prop) => (prop in target ? target[prop] : []) });
+    const genericNodeStub = new Proxy(
+      { item: { json: jsonStub }, first: () => ({ json: jsonStub }), all: () => [{ json: jsonStub }] },
+      { get: (target, prop) => (prop in target ? target[prop] : jsonStub[prop]) },
+    );
+    const dollarStub = (_name) => genericNodeStub;
+    const executionStub = { id: 'test-execution-id' };
+    for (const n of workflow.nodes) {
+      const body = n.parameters && n.parameters.jsonBody;
+      if (typeof body !== 'string' || !body.includes('{{')) continue;
+      const inner = body.slice(body.indexOf('{{') + 2, body.lastIndexOf('}}'));
+      doesNotThrow(() => {
+        const fn = new Function('$json', '$', '$execution', 'return (' + inner + ')');
+        const payload = fn(jsonStub, dollarStub, executionStub);
+        if (typeof payload !== 'string') throw new Error('expression did not produce a string');
+        JSON.parse(payload); // must itself be valid JSON, not just valid JS
+      }, `${n.name}: jsonBody expression evaluates and produces valid JSON`);
+    }
+  }
+  check('Editorial Rewrite prompt reinforces caption_style/trigger/hook_candidates validity',
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('STRUCTURAL FIELD INTEGRITY'));
+  check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('caption_style, trigger, quality, scene order'));
+
+  // -------------------------------------------------------------------
   console.log('\n' + '='.repeat(70));
   console.log(`${pass} passed, ${fail} failed`);
   if (fail > 0) {
