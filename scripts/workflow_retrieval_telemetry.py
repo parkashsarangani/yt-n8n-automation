@@ -12,7 +12,8 @@ def node_by_name(workflow: dict, name: str) -> dict:
     raise RuntimeError(f"required workflow node missing: {name}")
 
 
-TAG_BROLL = r"""// RETRIEVAL_TELEMETRY_V1: observational trace only.
+TAG_BROLL = r"""// VISUAL_RETRIEVAL_TELEMETRY_V2
+// RETRIEVAL_TELEMETRY_V1: observational trace only.
 const r=$json;const scene=$('Split Out Scenes').item.json;const sceneIndex=scene.scene_index;
 if(!r||r.ok!==true)throw new Error('B-roll commissioning rejected scene '+sceneIndex+': '+(r?.reason||r?.fallback_reason||'no asset')+' best_score='+(r?.best_score??r?.score??'n/a')+' threshold='+(r?.threshold??'n/a'));
 if(r.degraded===true)console.warn('[broll] degraded asset scene='+sceneIndex+' score='+(r.score??'n/a')+' threshold='+(r.threshold??'n/a')+' reason='+(r.fallback_reason||'below_quality_target'));
@@ -40,7 +41,6 @@ def apply(workflow: dict) -> dict:
         code = code.replace(anchor, replacement, 1)
 
     if "const retrieval_telemetry" not in code:
-        # Production guardrails may have already inserted degraded-media aggregates.
         anchor = "const quality_gate_fail_count = merged.filter(v => v.quality_gate_passed === false).length;"
         if anchor in code:
             code = code.replace(
