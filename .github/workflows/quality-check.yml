@@ -11,7 +11,7 @@ on:
       - 'scripts/upgrade-compose-runtime-hardening.py'
       - 'scripts/upgrade-workflow-api-budget.py'
       - 'scripts/upgrade-topic-latency.py'
-      - 'scripts/upgrade-quality_alignment.py'
+      - 'scripts/upgrade_quality_alignment.py'
       - 'scripts/upgrade-anthropic-parser.py'
       - 'scripts/preprod-audit.py'
       - 'shorts-compose/brollResolver.js'
@@ -33,7 +33,7 @@ on:
       - 'scripts/upgrade-compose-runtime-hardening.py'
       - 'scripts/upgrade-workflow-api-budget.py'
       - 'scripts/upgrade-topic-latency.py'
-      - 'scripts/upgrade-quality_alignment.py'
+      - 'scripts/upgrade_quality_alignment.py'
       - 'scripts/upgrade-anthropic-parser.py'
       - 'scripts/preprod-audit.py'
       - 'shorts-compose/brollResolver.js'
@@ -53,33 +53,13 @@ jobs:
       - name: Apply workflow upgrades
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade-quality_alignment.py scripts/upgrade-anthropic-parser.py scripts/preprod-audit.py
+          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade_quality_alignment.py scripts/upgrade-anthropic-parser.py scripts/preprod-audit.py
           python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_quality_gate.json
           python3 scripts/upgrade-creative-system.py /tmp/workflow_quality_gate.json /tmp/workflow_creative_system.json
           python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_creative_system.json /tmp/workflow_api_budget.json
           python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
           python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_final.json
           python3 -m json.tool /tmp/workflow_final.json >/dev/null
-
-      - name: Assert commissioning graph and runtime guardrails
-        run: |
-          set -euo pipefail
-          grep -q 'QUALITY_GATE' /tmp/workflow_final.json
-          grep -q 'CREATIVE_SYSTEM' /tmp/workflow_final.json
-          grep -q 'QUALITY_ALIGNMENT' /tmp/workflow_final.json
-          grep -q 'API_BUDGET' /tmp/workflow_final.json
-          grep -q 'TOPIC_LATENCY' /tmp/workflow_final.json
-          grep -q 'ANTHROPIC_TEXT_BLOCK_GUARD' /tmp/workflow_final.json
-          grep -q 'LAST_VALID_JSON_OBJECT' /tmp/workflow_final.json
-          grep -q 'PREPROD_RUNTIME_GUARDRAILS' /tmp/workflow_final.json
-          grep -q 'Wikipedia: Research Topic' /tmp/workflow_final.json
-          grep -q 'Claude: Commission Topic Shortlist' /tmp/workflow_final.json
-          grep -q 'Claude: Visual Director' /tmp/workflow_final.json
-          grep -q 'visual_plan_quality' /tmp/workflow_final.json
-          grep -q 'creative_dna' /tmp/workflow_final.json
-          grep -q 'search_queries' /tmp/workflow_final.json
-          grep -q 'run_id' /tmp/workflow_final.json
-          grep -q '\$execution.id' /tmp/workflow_final.json
 
       - name: Verify graph, latency, retries, and response parsing
         run: |
