@@ -90,6 +90,33 @@ def patch_visual_director(workflow: dict) -> None:
     node["parameters"]["jsonBody"] = body
     node["parameters"].setdefault("options", {})["timeout"] = 120000
 
+    # REPAIR_LOOP_V1: reuse the identical critic/visual-director template for
+    # the repair pass, but source the script from the failed validation output
+    # instead of the fresh editorial draft, and tell it exactly which
+    # deterministic checks it needs to fix.
+    repair_node = node_by_name(workflow, "Claude: Repair Script")
+    script_source_old = "$json.script"
+    script_source_new = r"$('Validate Final Script').item.json._failedScript"
+    if script_source_old not in body:
+        raise ValueError("repair pass: visual-director script-source anchor missing")
+    repair_body = body.replace(script_source_old, script_source_new, 1)
+    phase1_anchor = "PHASE 1 - QUALITY CHECK"
+    if phase1_anchor not in repair_body:
+        raise ValueError("repair pass: PHASE 1 anchor missing")
+    repair_preamble = (
+        "REPAIR PASS - this script already failed the deterministic quality "
+        "gate on the exact checks below. Fix precisely these issues while "
+        "preserving everything else that already worked, especially every "
+        "scene's scene_index/point and full_script consistency. Do not "
+        'start over or change the topic.\\n\\nFAILED CHECKS: " + '
+        "JSON.stringify($('Validate Final Script').item.json._validationErrors || []) + \""
+        "\\n\\n" + phase1_anchor
+    )
+    repair_body = repair_body.replace(phase1_anchor, repair_preamble, 1
+    )
+    repair_node["parameters"]["jsonBody"] = repair_body
+    repair_node["parameters"].setdefault("options", {})["timeout"] = 120000
+
 
 def _prioritize_complete_json(node: dict, max_tokens: int) -> None:
     body = str(node.get("parameters", {}).get("jsonBody", ""))

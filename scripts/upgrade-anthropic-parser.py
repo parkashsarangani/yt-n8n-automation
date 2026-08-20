@@ -142,6 +142,13 @@ def patch_runtime_guardrails(workflow: dict) -> None:
         1,
     )
     visual["parameters"]["jsonBody"] = body
+
+    repair = node_by_name(workflow, "Claude: Repair Script")
+    repair["retryOnFail"] = False
+    repair["maxTries"] = 1
+    repair["waitBetweenTries"] = 0
+    repair["parameters"].setdefault("options", {})["timeout"] = 180000
+    repair["notes"] = RUNTIME_MARKER + ": single bounded repair call"
     visual["notes"] = RUNTIME_MARKER + ": protect full JSON output; no duplicate client retry"
 
     # Seven first-frame evaluations are scored in batches of two. With two

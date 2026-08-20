@@ -61,6 +61,16 @@ EXPECTED_NODE_CONTRACTS = {
             "VISUAL_SOURCE_ROUTER_V2",
         ),
     },
+    "Claude: Repair Script": {
+        "timeout": 180000,
+        "single_attempt": True,
+        "body_markers": (
+            "REPAIR PASS",
+            "FAILED CHECKS",
+            "_failedScript",
+            "_validationErrors",
+        ),
+    },
     "ElevenLabs: TTS+Timestamps": {
         "timeout": 60000,
         "single_attempt": False,
