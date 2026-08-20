@@ -90,10 +90,14 @@ def patch_visual_schema_normalizer(workflow: dict) -> None:
     if VISUAL_SCHEMA_MARKER in code:
         return
 
-    anchor = "// CREATIVE_SYSTEM visual commissioning gate."
+    # This must run immediately after the Visual Director JSON has parsed and
+    # before *any* schema checks. A previous version inserted it beside the
+    # later creative-system gate, after the legacy scene validator had already
+    # rejected missing stock_search_query values.
+    anchor = "const errors = [];"
     normalizer = f"""// {VISUAL_SCHEMA_MARKER}: repair deterministic Visual Director omissions before fail-closed validation.\n// This only normalizes metadata/search hints; it does not change narration, facts, quality scores, or asset thresholds.\nconst normalizeSearchQuery=(value,maxWords=5)=>String(value||'').replace(/[^a-zA-Z0-9' -]+/g,' ').replace(/\\s+/g,' ').trim().split(' ').filter(Boolean).slice(0,maxWords).join(' ');\nconst dedupeSearchQueries=(values)=>{{const out=[];const seen=new Set();for(const value of values){{const q=normalizeSearchQuery(value);const key=q.toLowerCase();if(q&&!seen.has(key)){{seen.add(key);out.push(q);}}}}return out;}};\nif(!parsed.first_frame_type){{const byFormat={{documentary_cinematic:'hero_motion',comparison_reveal:'scale_comparison',minimal_proof:'result_first',archival_history:'archive_proof',macro_detail:'macro_anomaly',kinetic_data:'kinetic_stat'}};parsed.first_frame_type=byFormat[parsed.creative_format]||'result_first';}}\nconst hasComment=Boolean(String(parsed.comment_hook||'').trim());\nconst hasShareOutro=Boolean(String(parsed.outro_line||'').trim());\nparsed.engagement_mode=hasComment&&hasShareOutro?'comment_and_share':hasComment?'comment_only':hasShareOutro?'share_only':'none';\nif(Array.isArray(parsed.scenes)){{parsed.scenes.forEach((s,i)=>{{if(!s||s?.template_data?.is_outro||s.visual_source==='template')return;let queries=dedupeSearchQueries([...(Array.isArray(s.search_queries)?s.search_queries:[]),s.stock_search_query,s.visual_prompt,s.named_subject,s.point]);const base=queries[0]||normalizeSearchQuery(s.visual_prompt||s.named_subject||s.point||parsed.title||'visual subject',4);if(queries.length<2&&base){{const suffix=i===0?'close up':s.visual_role==='comparison'?'comparison':'detail';queries=dedupeSearchQueries([...queries,`${{base}} ${{suffix}}`,`${{base}} footage`]);}}s.search_queries=queries.slice(0,4);if(!String(s.stock_search_query||'').trim()&&s.search_queries[0])s.stock_search_query=s.search_queries[0];}});}}\n\n"""
     if anchor not in code:
-        raise ValueError("could not patch visual schema normalizer: commissioning gate anchor not found")
+        raise ValueError("could not patch visual schema normalizer: pre-validation anchor not found")
     node["parameters"]["jsCode"] = code.replace(anchor, normalizer + anchor, 1)
 
 
@@ -114,6 +118,18 @@ def main() -> None:
     validate_code = node_by_name(upgraded, "Validate Final Script")["parameters"]["jsCode"]
     if VISUAL_SCHEMA_MARKER not in validate_code:
         raise RuntimeError("visual schema normalizer did not land in Validate Final Script")
+
+    # Regression guard for the production failure that followed PR #73: the
+    # normalizer must execute before both the errors array is created and the
+    # legacy stock_search_query validation branch runs.
+    marker_pos = validate_code.index(VISUAL_SCHEMA_MARKER)
+    errors_pos = validate_code.index("const errors = [];")
+    stock_check_pos = validate_code.index("missing stock_search_query")
+    if not marker_pos < errors_pos < stock_check_pos:
+        raise RuntimeError(
+            "visual schema normalizer ordering is unsafe: it must precede all validation checks"
+        )
+
     dst.write_text(json.dumps(upgraded, indent=2) + "\n")
     print(f"Anthropic parser workflow written to {dst}")
 
