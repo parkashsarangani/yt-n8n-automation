@@ -102,16 +102,17 @@ function parseScoreJson(text) {
       )) return parsed;
     } catch { /* try the previous complete object */ }
   }
-  const n = raw.match(/\\d{1,3}/);
-  const v = n ? Math.max(0, Math.min(100, Number(n[0]))) : 0;
+  // Fail closed when there is no complete score object. Never promote a
+  // stray number from malformed model prose/truncated JSON into every quality
+  // dimension; the resolver can continue to another candidate instead.
   return {
-    relevance: v,
-    scroll_stop: v,
-    mobile_clarity: v,
-    composition: v,
-    motion_energy: v,
-    uniqueness: v,
-    overall: v,
+    relevance: 0,
+    scroll_stop: 0,
+    mobile_clarity: 0,
+    composition: 0,
+    motion_energy: 0,
+    uniqueness: 0,
+    overall: 0,
   };
 }'''
 
