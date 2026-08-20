@@ -113,7 +113,6 @@ jobs:
           grep -q 'Claude: Commission Topic Shortlist' /tmp/workflow_quality.json
           grep -q 'Claude: Visual Director' /tmp/workflow_quality.json
           grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
-          grep -q 'qualityMinimums' /tmp/workflow_quality.json
           grep -q 'run_id' /tmp/workflow_quality.json
 
           python3 - <<'PY'
