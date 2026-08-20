@@ -42,6 +42,15 @@ services:
       - BROLL_PIXABAY_CACHE_TTL_MS=${BROLL_PIXABAY_CACHE_TTL_MS:-86400000}
       - BROLL_PIXABAY_CACHE_MAX=${BROLL_PIXABAY_CACHE_MAX:-500}
       - PIXABAY_CACHE_PATH=${PIXABAY_CACHE_PATH:-/app/data/pixabay_search_cache.json}
+      # Phase-3 video semantics: inspect only the top few real-video candidates.
+      # A single scene-wide 12s deadline covers downloads, FFmpeg contact sheets,
+      # and local CLIP scoring across both retrieval rounds. Any failure falls
+      # back to the existing thumbnail/local ranking without blocking the Short.
+      - BROLL_MULTIFRAME_ENABLED=${BROLL_MULTIFRAME_ENABLED:-true}
+      - BROLL_MULTIFRAME_CANDIDATES=${BROLL_MULTIFRAME_CANDIDATES:-3}
+      - BROLL_MULTIFRAME_FRAMES=${BROLL_MULTIFRAME_FRAMES:-3}
+      - BROLL_MULTIFRAME_TIMEOUT_MS=${BROLL_MULTIFRAME_TIMEOUT_MS:-12000}
+      - BROLL_MULTIFRAME_MAX_BYTES=${BROLL_MULTIFRAME_MAX_BYTES:-12582912}
       # Local CLIP coarse reranker. The Hugging Face model is lazily downloaded
       # once and cached under /app/data, which is backed by the persistent
       # shorts_data named volume, so deploys do not repeatedly download it.
