@@ -437,8 +437,16 @@ function main() {
   }
   check('Editorial Rewrite prompt reinforces caption_style/trigger/hook_candidates validity',
     nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('STRUCTURAL FIELD INTEGRITY'));
+  check('Editorial Rewrite prompt requires scene_index/point on every scene',
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('EVERY SINGLE SCENE, no exceptions, must keep BOTH a scene_index'));
+  check('Editorial Rewrite prompt requires payoff.claim and title bounds',
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('payoff must be an object with a real claim string'));
   check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
     nodes['Claude: Visual Director'].parameters.jsonBody.includes('caption_style, trigger, quality, scene order'));
+  check('Visual Director prompt explicitly protects per-scene scene_index/point from being dropped',
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes("This includes EVERY scene's scene_index and point fields"));
+  check('Visual Director prompt requires its own fields (first_frame_type, search_queries) as REQUIRED',
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('this is REQUIRED, never leave it unset'));
 
   // -------------------------------------------------------------------
   console.log('\n' + '='.repeat(70));
