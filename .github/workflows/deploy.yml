@@ -98,7 +98,7 @@ jobs:
           python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
 
           echo "=== Applying quality alignment + Anthropic parser/runtime hardening ==="
-          python3 -m py_compile scripts/upgrade-quality_alignment.py scripts/upgrade-anthropic-parser.py
+          python3 -m py_compile scripts/upgrade-anthropic-parser.py
           python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
