@@ -24,15 +24,24 @@ services:
       - OUTPUT_DIR=/app/outputs
       - TOPIC_HISTORY_PATH=/app/data/topic_history.json
       - NODE_OPTIONS=--max-old-space-size=4096
-      # Multi-source b-roll resolver (/resolve-broll): all real-media sources,
-      # ranked by AI-vision relevance. There is NO AI image generation - real
-      # footage only. Set these in the server env/.env. If a key is empty that
-      # source is skipped; ANTHROPIC_KEY is required for the relevance scoring.
+      # Multi-source b-roll resolver (/resolve-broll): real-media sources are
+      # routed by scene intent, locally reranked for semantic match, then judged
+      # by bounded Claude vision. There is NO AI image/video generation.
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
-      # Reliability-first media gates: still reject obviously irrelevant assets,
-      # but do not throw away an otherwise valid Short chasing premium stock.
+      # Local CLIP coarse reranker. The Hugging Face model is lazily downloaded
+      # once and cached under /app/data, which is backed by the persistent
+      # shorts_data named volume, so deploys do not repeatedly download it.
+      - BROLL_LOCAL_RERANK_ENABLED=${BROLL_LOCAL_RERANK_ENABLED:-true}
+      - BROLL_LOCAL_RERANK_MODEL=${BROLL_LOCAL_RERANK_MODEL:-Xenova/clip-vit-base-patch32}
+      - BROLL_LOCAL_RERANK_CANDIDATES=${BROLL_LOCAL_RERANK_CANDIDATES:-12}
+      - BROLL_LOCAL_RERANK_TIMEOUT_MS=${BROLL_LOCAL_RERANK_TIMEOUT_MS:-18000}
+      - BROLL_TEMPLATE_FALLBACK_THRESHOLD=${BROLL_TEMPLATE_FALLBACK_THRESHOLD:-60}
+      - HF_CACHE_DIR=${HF_CACHE_DIR:-/app/data/hf-cache}
+      # Reliability-first media gates: 78/72 are preferred targets. A real asset
+      # below the catastrophic mismatch floor above can be replaced by a
+      # deterministic Remotion template instead of showing misleading stock.
       - BROLL_SCORE_THRESHOLD=${BROLL_SCORE_THRESHOLD:-72}
       - BROLL_FIRST_FRAME_THRESHOLD=${BROLL_FIRST_FRAME_THRESHOLD:-78}
       # Paid-vision budget guardrails. Search progressively and stop as soon as
@@ -74,7 +83,8 @@ services:
       # outputs: ephemeral rendered videos, downloaded via the /outputs HTTP
       # route (nothing on the host reads this dir), then cleaned up per job.
       - shorts_outputs:/app/outputs
-      # topic history: PERSISTENT dedup state, must survive every deploy.
+      # topic history + Hugging Face model cache: PERSISTENT dedup/retrieval
+      # state that must survive every deploy.
       - shorts_data:/app/data
       # No music mount by design: there are currently no music tracks, so the
       # renderer runs without a soundtrack (pickMusicTrack finds none and
