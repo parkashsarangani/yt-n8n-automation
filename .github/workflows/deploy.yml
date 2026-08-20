@@ -18,6 +18,11 @@ jobs:
         with:
           clean: true
 
+      - name: Pre-production audit
+        run: |
+          set -euo pipefail
+          python3 scripts/preprod-audit.py
+
       - name: Build creative-system compose service
         env:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
@@ -29,13 +34,16 @@ jobs:
           set -euo pipefail
 
           echo "=== Validating compose source transforms ==="
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py
+          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py
           python3 scripts/upgrade-compose-creative-system.py shorts-compose/compose.js
           python3 scripts/upgrade-compose-api-budget.py shorts-compose/compose.js shorts-compose/brollResolver.js
+          python3 scripts/upgrade-compose-runtime-hardening.py shorts-compose/brollResolver.js
           grep -q 'CREATIVE_SYSTEM_COMPOSE' shorts-compose/compose.js
           grep -q 'API_BUDGET_COMPOSE' shorts-compose/compose.js
           grep -q 'API_BUDGET' shorts-compose/brollResolver.js
+          grep -q 'PREPROD_BROLL_HARDENING' shorts-compose/brollResolver.js
           grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
+          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/brollResolver.js
           grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
           node --check shorts-compose/compose.js
           node --check shorts-compose/brollResolver.js
@@ -89,16 +97,19 @@ jobs:
           python3 -m py_compile scripts/upgrade-topic-latency.py
           python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
 
-          echo "=== Applying Anthropic parser hardening ==="
-          python3 -m py_compile scripts/upgrade-anthropic-parser.py
+          echo "=== Applying quality alignment + Anthropic parser/runtime hardening ==="
+          python3 -m py_compile scripts/upgrade-quality_alignment.py scripts/upgrade-anthropic-parser.py
           python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
           grep -q 'QUALITY_GATE' /tmp/workflow_quality.json
           grep -q 'CREATIVE_SYSTEM' /tmp/workflow_quality.json
+          grep -q 'QUALITY_ALIGNMENT' /tmp/workflow_quality.json
           grep -q 'API_BUDGET' /tmp/workflow_quality.json
           grep -q 'TOPIC_LATENCY' /tmp/workflow_quality.json
           grep -q 'ANTHROPIC_TEXT_BLOCK_GUARD' /tmp/workflow_quality.json
+          grep -q 'LAST_VALID_JSON_OBJECT' /tmp/workflow_quality.json
+          grep -q 'PREPROD_RUNTIME_GUARDRAILS' /tmp/workflow_quality.json
           grep -q 'Claude: Commission Topic Shortlist' /tmp/workflow_quality.json
           grep -q 'Claude: Visual Director' /tmp/workflow_quality.json
           grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
@@ -113,21 +124,27 @@ jobs:
           body = topic['parameters']['jsonBody']
           assert 'GENERATE 4 DISTINCT candidate topics' in body
           assert 'max_tokens: 6000' in body
-          assert 'max_tokens: 8192' not in body
-          assert 'max_tokens: 9000' not in body
           assert topic['parameters']['options']['timeout'] == 120000
-          assert topic.get('retryOnFail') is False
-          assert topic.get('maxTries') == 1
-          for node_name in ['Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
+          assert topic.get('retryOnFail') is False and topic.get('maxTries') == 1
+          commissioner = names['Claude: Commission Topic Shortlist']
+          assert commissioner['parameters']['options']['timeout'] == 120000
+          assert commissioner.get('retryOnFail') is False and commissioner.get('maxTries') == 1
+          visual = names['Claude: Visual Director']
+          assert visual['parameters']['options']['timeout'] == 180000
+          assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
+          assert 'thinking: { type: "disabled" }' in visual['parameters']['jsonBody']
+          assert names['Resolve B-roll']['parameters']['options']['timeout'] == 180000
+          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
               assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
+              assert 'LAST_VALID_JSON_OBJECT' in code, node_name
               assert 'content?.[0]?.text' not in code, node_name
-          pool_code = names['Parse Topic Pool']['parameters']['jsCode']
-          assert 'try {' in pool_code or 'try{' in pool_code, 'Parse Topic Pool must guard JSON.parse'
-          assert 'stop_reason' in pool_code, 'Parse Topic Pool must diagnose max_tokens truncation'
           writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
-          assert 'Concept archetype' in writer_body, 'archetype context must reach the script writer'
-          print('Topic latency + Anthropic parser guardrails OK')
+          assert 'Concept archetype' in writer_body
+          validate = names['Validate Final Script']['parameters']['jsCode']
+          assert 'needs at least 3 search_queries' in validate
+          assert 'rebuiltFullScript' in validate
+          print('Topic + parser + runtime guardrails OK')
           PY
 
       - name: Execute parser nodes against synthetic Claude responses
@@ -139,12 +156,13 @@ jobs:
           const names = {};
           for (const n of wf.nodes) names[n.name] = n;
 
-          function run(nodeName, input) {
-            const fn = new Function('$input', names[nodeName].parameters.jsCode);
-            return fn({ first: () => ({ json: input }) });
+          function run(nodeName, input, prior = {}) {
+            const fn = new Function('$input', '$', '$execution', names[nodeName].parameters.jsCode);
+            const $ = (name) => ({ item: { json: prior[name] || {} } });
+            return fn({ first: () => ({ json: input }) }, $, { id: 'deploy-smoke' });
           }
           function assertItem(result, label) {
-            if (result === undefined || result === null) throw new Error(label + ': node returned ' + result + ' instead of an item - string-presence CI checks miss this, execution does not');
+            if (result === undefined || result === null) throw new Error(label + ': node returned ' + result);
             if (Array.isArray(result)) {
               if (!result.every((x) => x && typeof x === 'object')) throw new Error(label + ': array items must be objects');
             } else if (typeof result !== 'object') {
@@ -153,18 +171,24 @@ jobs:
           }
 
           const candidates = Array.from({ length: 4 }, (_, i) => ({
-            topic: 't' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
+            topic: 'recognizable topic ' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
             share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
           }));
           assertItem(run('Parse Topic Pool', { content: [{ type: 'text', text: JSON.stringify({ candidates }) }], stop_reason: 'end_turn' }), 'Parse Topic Pool happy path');
 
-          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: '{"hook":"h"}' }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
+          const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
+          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
 
-          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' });
+          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
           assertItem(editorial, 'Parse Editorial For Visual Director happy path');
           if (!editorial || !editorial.json || !editorial.json.script) throw new Error('Parse Editorial For Visual Director did not return {json:{script}}');
 
-          console.log('Executable node smoke tests OK (Parse Topic Pool, Parse Draft JSON, Parse Editorial For Visual Director)');
+          const corrected = run('Parse Editorial For Visual Director', {
+            content: [{ type: 'text', text: '{"hook":"bad",]\nWait\n' + JSON.stringify(script) }], stop_reason: 'end_turn'
+          });
+          if (corrected.json.script.hook !== script.hook) throw new Error('Editorial parser did not recover corrected JSON');
+
+          console.log('Executable parser smoke tests OK');
           JS
 
       - name: Deploy n8n workflow
