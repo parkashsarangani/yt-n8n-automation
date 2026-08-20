@@ -87,14 +87,51 @@ if(!raw){
   if(response.stop_reason==='max_tokens') throw new Error('Topic pool hit max_tokens before producing a text block (content types: '+blockTypes+')');
   throw new Error('Topic pool returned no text block (stop_reason: '+(response.stop_reason||'unknown')+', content types: '+blockTypes+')');
 }
-const a=raw.indexOf('{'), z=raw.lastIndexOf('}');
-if(a<0||z<=a) throw new Error('Topic pool returned no JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');
-let obj;
-try {
-  obj=JSON.parse(raw.slice(a,z+1));
-} catch (err) {
-  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (parse error: '+err.message+') - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
-  throw new Error('Topic pool JSON failed to parse (stop_reason: '+(response.stop_reason||'unknown')+', parse error: '+err.message+')');
+function extractBalancedObjects(s){
+  const out=[];
+  let i=0;
+  while(i<s.length){
+    const start=s.indexOf('{',i);
+    if(start<0) break;
+    let depth=0,inStr=false,esc=false,end=-1;
+    for(let j=start;j<s.length;j++){
+      const ch=s[j];
+      if(inStr){ if(esc) esc=false; else if(ch==='\\\\') esc=true; else if(ch==='\"') inStr=false; }
+      else if(ch==='\"') inStr=true;
+      else if(ch==='{') depth++;
+      else if(ch==='}'){ depth--; if(depth===0){ end=j; break; } }
+    }
+    if(end<0) break;
+    out.push(s.slice(start,end+1));
+    i=end+1;
+  }
+  return out;
+}
+// Claude occasionally second-guesses itself mid-response (a broken false
+// start, then "Wait, I need to output proper JSON only." followed by the
+// real, correct JSON) - both land in the same response even though it
+// completes normally (stop_reason:'end_turn', not truncated). A naive
+// indexOf('{')..lastIndexOf('}') slice grabs from the broken false start's
+// opening brace to the real JSON's closing brace, mashing garbage and valid
+// JSON together. Instead, find every balanced top-level {...} block and try
+// them from LAST to FIRST (the self-corrected answer is always the latest
+// one), keeping the first one that both parses and has a candidates array.
+const candidateBlocks=extractBalancedObjects(raw);
+if(!candidateBlocks.length){
+  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (no balanced JSON object found) - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
+  throw new Error('Topic pool returned no JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');
+}
+let obj,lastErr;
+for(let k=candidateBlocks.length-1;k>=0;k--){
+  try{
+    const parsed=JSON.parse(candidateBlocks[k]);
+    if(Array.isArray(parsed.candidates)){ obj=parsed; break; }
+  }catch(err){ lastErr=err; }
+}
+if(!obj){
+  const reason=lastErr?lastErr.message:'no balanced JSON block contained a candidates array';
+  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (parse error: '+reason+') - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
+  throw new Error('Topic pool JSON failed to parse (stop_reason: '+(response.stop_reason||'unknown')+', parse error: '+reason+')');
 }
 let pool=Array.isArray(obj.candidates)?obj.candidates:[];
 pool=pool.filter(c=>c?.topic).map(c=>({topic:String(c.topic).trim(),archetype:String(c.archetype||'looks_fake_but_real').trim(),research_query:String(c.research_query||c.topic).trim(),first_frame_concept:String(c.first_frame_concept||'').trim(),share_reason:String(c.share_reason||'').trim(),evidence_score:Number(c.evidence_score)||0,visual_score:Number(c.visual_score)||0,share_score:Number(c.share_score)||0,reason:String(c.reason||''),score:Number(c.score)||0})).sort((x,y)=>y.score-x.score);
