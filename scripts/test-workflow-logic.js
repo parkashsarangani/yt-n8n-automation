@@ -85,6 +85,7 @@ function buildWorkflow() {
     path.join(shortsDir, 'channel-voice.json'),
   );
   fs.copyFileSync(path.join(REPO_ROOT, 'n8n', 'workflow.json'), path.join(n8nDir, 'workflow.json'));
+  fs.copyFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), path.join(tmp, 'docker-compose.yml'));
 
   const steps = [
     ['upgrade-viral-shorts.py', 'workflow.json', 'v1.json'],
@@ -153,6 +154,7 @@ function main() {
 
   const c = workflow.connections;
   const first = (src) => c[src] && c[src].main[0][0] && c[src].main[0][0].node;
+  const second = (src) => c[src] && c[src].main[1] && c[src].main[1][0] && c[src].main[1][0].node;
   check('topic chain: Generate Topic -> Parse Topic Pool', first('Claude: Generate Topic') === 'Parse Topic Pool');
   check('topic chain: Parse Topic Pool -> Commission Shortlist', first('Parse Topic Pool') === 'Claude: Commission Topic Shortlist');
   check('topic chain: Commission Shortlist -> Extract Generated Topic', first('Claude: Commission Topic Shortlist') === 'Extract Generated Topic');
@@ -165,8 +167,9 @@ function main() {
   // -------------------------------------------------------------------
   const timeoutExpectations = {
     'Claude: Generate Topic': 120000,
-    'Claude: Commission Topic Shortlist': 90000,
-    'Claude: Visual Director': 90000,
+    'Claude: Commission Topic Shortlist': 120000,
+    'Claude: Visual Director': 180000,
+    'Claude: Repair Script': 180000,
     'Claude: Draft Script (Stage 1)': 120000,
     'Claude: Editorial Rewrite (Stage 2)': 120000,
     'ElevenLabs: TTS+Timestamps': 60000,
@@ -185,46 +188,62 @@ function main() {
   // paired-item lineage, which the loop-back edge through the independent
   // "Claude: Generate Topic" HTTP call does not reliably preserve. Confirmed
   // live in production: 5 full retry cycles, scriptAttempt=1 every single
-  // time. The fix now uses $getWorkflowStaticData('node'), which does not
-  // depend on dataflow/lineage at all - a plain persistent object is an
-  // accurate mock of it, unlike $('NodeName').item.
+  // time. The current implementation uses $getWorkflowStaticData('global'),
+  // keyed by $execution.id so concurrent executions of the same workflow
+  // cannot see or clobber each other's counters - a plain shared object plus
+  // a mocked $execution.id is an accurate mock of it.
   {
     // Workflow static data persists across the whole n8n instance for this
     // workflow, not just within the mock - model that with one shared object
-    // both nodes read/write, exactly like the real $getWorkflowStaticData('node').
+    // both nodes read/write, exactly like the real $getWorkflowStaticData('global').
     const staticStore = {};
     const getStaticData = () => staticStore;
 
     const initCode = nodes['Init Script Attempt Counter'].parameters.jsCode;
     const incrementCode = nodes['Increment Script Attempt'].parameters.jsCode;
 
-    function runInit(inputItems) {
-      const fn = new Function('$getWorkflowStaticData', '$input', 'return (function(){' + initCode + '})()');
-      return fn(getStaticData, { all: () => inputItems });
+    function runInit(inputItems, executionId) {
+      const fn = new Function(
+        '$getWorkflowStaticData', '$input', '$execution',
+        'return (function(){' + initCode + '})()',
+      );
+      return fn(getStaticData, { all: () => inputItems }, { id: executionId });
     }
-    function runIncrement(errs) {
-      const fn = new Function('$getWorkflowStaticData', '$input', 'return (function(){' + incrementCode + '})()');
-      const result = fn(getStaticData, { first: () => ({ json: { _validationErrors: errs } }) });
+    function runIncrement(errs, executionId) {
+      const fn = new Function(
+        '$getWorkflowStaticData', '$input', '$execution',
+        'return (function(){' + incrementCode + '})()',
+      );
+      const result = fn(
+        getStaticData,
+        { first: () => ({ json: { _validationErrors: errs } }) },
+        { id: executionId },
+      );
       return result.json.scriptAttempt;
     }
 
-    // Simulate a stale counter left over from a PREVIOUS execution (static
-    // data persists across runs) - Init must reset it, not just skip if unset.
-    staticStore.scriptAttempt = 7;
-    runInit([{ json: { topics: [] } }]);
-    check('Init resets a stale cross-execution counter back to 0', staticStore.scriptAttempt === 0, `got ${staticStore.scriptAttempt}`);
+    // Simulate a stale counter left over from a PREVIOUS execution id (static
+    // data persists across runs, keyed by execution id) - Init must reset
+    // THIS execution's counter, not just skip if the key is already present.
+    staticStore.scriptAttempts = { 'run-A': { attempt: 7, updatedAt: Date.now() } };
+    runInit([{ json: { topics: [] } }], 'run-A');
+    check('Init resets a stale counter for this execution id back to 0', staticStore.scriptAttempts['run-A'].attempt === 0, `got ${staticStore.scriptAttempts['run-A'].attempt}`);
 
-    const seq = [runIncrement(['a']), runIncrement(['b']), runIncrement(['c']), runIncrement(['d'])];
+    const seq = [runIncrement(['a'], 'run-A'), runIncrement(['b'], 'run-A'), runIncrement(['c'], 'run-A'), runIncrement(['d'], 'run-A')];
     check('counter increments 1,2,3,4 across loop iterations', JSON.stringify(seq) === JSON.stringify([1, 2, 3, 4]), `got ${JSON.stringify(seq)}`);
     check('counter would now correctly cap at attempt 3 (3 < 3 is false)', !(seq[2] < 3), undefined);
 
-    // A second execution must not see the first execution's leftover count.
-    runInit([{ json: { topics: [] } }]);
-    check('a fresh execution starts the counter at 0 again after Init', staticStore.scriptAttempt === 0, `got ${staticStore.scriptAttempt}`);
+    // A second, concurrent execution id must not see or affect the first
+    // execution's counter - this is the exact isolation the 'global' +
+    // execution-id-keyed design exists to guarantee.
+    runInit([{ json: { topics: [] } }], 'run-B');
+    check('a second concurrent execution id starts its own counter at 0', staticStore.scriptAttempts['run-B'].attempt === 0, `got ${staticStore.scriptAttempts['run-B'].attempt}`);
+    check("a second execution id's Init does not disturb the first execution's counter", staticStore.scriptAttempts['run-A'].attempt === 4, `got ${staticStore.scriptAttempts['run-A'].attempt}`);
     check('Init passes input items through unchanged', (() => {
-      const passed = runInit([{ json: { topics: ['x', 'y'] } }]);
+      const passed = runInit([{ json: { topics: ['x', 'y'] } }], 'run-C');
       return Array.isArray(passed) && passed[0].json.topics.length === 2;
     })());
+    throws(() => runInit([{ json: {} }], ''), 'Init throws without a usable $execution.id rather than silently sharing state');
   }
 
   // -------------------------------------------------------------------
@@ -280,7 +299,7 @@ function main() {
   section('5. Parse Draft JSON / Parse Editorial For Visual Director (undefined-return bug)');
   // -------------------------------------------------------------------
   {
-    const draftOk = { content: [{ type: 'text', text: '{"hook":"h"}' }], stop_reason: 'end_turn' };
+    const draftOk = { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' };
     const r1 = runNodeCode(nodes, 'Parse Draft JSON', draftOk);
     check('Parse Draft JSON returns a real item, not undefined', r1 !== undefined && r1.json && r1.json.draft.hook === 'h');
 
@@ -344,6 +363,9 @@ function main() {
     const belowGate = validate(goodQuality({ hook_strength: 70 }));
     check('a script scoring below the new mid-70s gate is still rejected', belowGate.json._scriptValid === false &&
       belowGate.json._validationErrors.some((e) => e.includes('hook_strength')));
+    check('a failed validation preserves the failed script for the repair loop, not just the error list',
+      belowGate.json._failedScript && belowGate.json._failedScript.hook === buildScript(goodQuality()).hook,
+      JSON.stringify(belowGate.json._failedScript));
 
     const inflated = validate(goodQuality({ concept_strength: 76, overall: 90 }));
     check('inflated overall (exceeds weakest dimension by >5) is rejected',
@@ -353,6 +375,40 @@ function main() {
     const hasOverallError = consistent.json._validationErrors && consistent.json._validationErrors.some((e) => e.includes('overall'));
     check('consistent overall (within 5 of weakest dimension) is not flagged by the overall-consistency check', !hasOverallError,
       JSON.stringify(consistent.json._validationErrors));
+  }
+
+  // -------------------------------------------------------------------
+  section('6b. Repair loop - a failed quality gate revises the same script, not a fresh topic');
+  // -------------------------------------------------------------------
+  {
+    check('If Under Max Script Attempts retries into Claude: Repair Script, not Claude: Generate Topic',
+      first('If Under Max Script Attempts') === 'Claude: Repair Script');
+    check('Claude: Repair Script feeds back into Validate Final Script',
+      first('Claude: Repair Script') === 'Validate Final Script');
+    check('the retry path still falls through to Fail: Script Generation Exhausted once attempts are used up',
+      second('If Under Max Script Attempts') === 'Fail: Script Generation Exhausted');
+
+    const repairBody = nodes['Claude: Repair Script'].parameters.jsonBody;
+    check('Repair Script sources the script from the failed validation output, not a fresh draft',
+      repairBody.includes("$('Validate Final Script').item.json._failedScript"));
+    check('Repair Script is told exactly which checks failed',
+      repairBody.includes("$('Validate Final Script').item.json._validationErrors"));
+
+    const expr = repairBody.slice(3, -2).trim();
+    const failedScript = { hook: 'old weak hook', scenes: [{ scene_index: 0, point: 'p' }] };
+    const validationErrors = ['quality.hook_strength=65 is below publish threshold 78'];
+    function fakeDollar(name) {
+      if (name === 'Validate Final Script') return { item: { json: { _failedScript: failedScript, _validationErrors: validationErrors } } };
+      return { item: { json: {} } };
+    }
+    const fn = new Function('$', '$json', 'return ' + expr);
+    const raw = fn(fakeDollar, {});
+    const built = JSON.parse(raw);
+    const content = built.messages[0].content;
+    check('Repair Script prompt embeds the actual failed script content', content.includes('old weak hook'));
+    check('Repair Script prompt embeds the actual failure reason', content.includes('quality.hook_strength=65'));
+    check('Repair Script node is bounded to a single attempt (no silent 3x retry cost)',
+      nodes['Claude: Repair Script'].retryOnFail === false && nodes['Claude: Repair Script'].maxTries === 1);
   }
 
   // -------------------------------------------------------------------
@@ -442,11 +498,11 @@ function main() {
   check('Editorial Rewrite prompt requires payoff.claim and title bounds',
     nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('payoff must be an object with a real claim string'));
   check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
-    nodes['Claude: Visual Director'].parameters.jsonBody.includes('caption_style, trigger, quality, scene order'));
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('Preserve/rebuild hook_candidates, caption_style, trigger, payoff, quality'));
   check('Visual Director prompt explicitly protects per-scene scene_index/point from being dropped',
-    nodes['Claude: Visual Director'].parameters.jsonBody.includes("This includes EVERY scene's scene_index and point fields"));
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('Every scene needs sequential scene_index and non-empty point'));
   check('Visual Director prompt requires its own fields (first_frame_type, search_queries) as REQUIRED',
-    nodes['Claude: Visual Director'].parameters.jsonBody.includes('this is REQUIRED, never leave it unset'));
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('first_frame_type is required'));
 
   // -------------------------------------------------------------------
   console.log('\n' + '='.repeat(70));

@@ -12,6 +12,7 @@ POOL_NODE = "Parse Topic Pool"
 COMMISSION_NODE = "Claude: Commission Topic Shortlist"
 EDITOR_PARSE_NODE = "Parse Editorial For Visual Director"
 VISUAL_NODE = "Claude: Visual Director"
+REPAIR_NODE = "Claude: Repair Script"
 
 ARCHETYPES = [
     "impossible_comparison", "visual_demonstration", "hidden_mechanism",
@@ -218,10 +219,31 @@ def add_visual_director(w: dict) -> None:
         v["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, output_config: { effort: "medium" }, messages: [{ role: "user", content: "You are the VISUAL DIRECTOR for a high-end YouTube Shorts channel. Editorial is locked. Do NOT change hook, hook_candidates, hook_type, title, seo_description, tags, comment_hook, outro_line, full_script, narration text, payoff, caption_style, trigger, quality, scene order, or scene count - copy every one of these fields through byte-for-byte exactly as given in SCRIPT, even the ones you are not directly working with. This includes EVERY scene's scene_index and point fields specifically - these two are the most frequently dropped fields in the whole pipeline when scenes get rebuilt to add visual fields, so copy them through explicitly, unchanged, on every single scene.\n\nSCRIPT: " + JSON.stringify($json.script) + "\n\nChoose one creative_format: documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Scene 0 must work muted; set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat - this is REQUIRED, never leave it unset. Assign each content scene visual_role = hero/evidence/detail/comparison/breath/payoff. For each stock scene, REQUIRED: add 3-4 DISTINCT concrete search_queries (2-5 words, at least 2 required) and set stock_search_query to the strongest - never leave a stock scene without both. Preserve named_subject for exact real entities. Use templates only when the beat is fundamentally a number/comparison/punchy line. Choose caption_mode = karaoke/key_phrases/minimal. Set transition_style=hard_cut. Carry the editor CTA decision through and set engagement_mode=none/comment_only/share_only/comment_and_share; do not invent a CTA. Set open_loop_count honestly (usually 0-2). Set visual_plan_quality 0-100; generic scene 0 or repetitive roles must score below 78. Before returning, verify as a final pass: every scene still has its original scene_index and point; every stock scene has stock_search_query and at least 2 search_queries; first_frame_type is set. Return ONLY the COMPLETE script JSON: every field from the input SCRIPT copied through exactly (hook_candidates, caption_style, trigger, quality, and every scene's scene_index/point are the fields most often accidentally dropped while focusing on the new visual fields below - double check they are all still present and unchanged) plus these new visual fields added." }] }) }}'''
         v["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(v)
+    if REPAIR_NODE not in names:
+        # REPAIR_LOOP_V1: on a failed quality gate, revise the SAME script using
+        # the deterministic validator's exact failure reasons instead of
+        # discarding the topic and starting a brand-new generation from scratch.
+        # jsonBody gets its real content from quality_alignment_impl.patch_visual_director,
+        # which builds it from the same template as Visual Director's prompt.
+        r = copy.deepcopy(editor)
+        r["id"] = "9b7b6a2b-7a7f-4b3f-9a4a-2f8b6e1c9a3d"
+        r["name"] = REPAIR_NODE
+        r["position"] = [5100, 500]
+        r["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, messages: [{ role: "user", content: "placeholder - overwritten by quality_alignment_impl.patch_visual_director" }] }) }}'''
+        r["parameters"].setdefault("options", {})["timeout"] = 90000
+        w["nodes"].append(r)
     c = w.setdefault("connections", {})
     c["Claude: Editorial Rewrite (Stage 2)"] = {"main": [[{"node": EDITOR_PARSE_NODE, "type": "main", "index": 0}]]}
     c[EDITOR_PARSE_NODE] = {"main": [[{"node": VISUAL_NODE, "type": "main", "index": 0}]]}
     c[VISUAL_NODE] = {"main": [[{"node": "Validate Final Script", "type": "main", "index": 0}]]}
+    c[REPAIR_NODE] = {"main": [[{"node": "Validate Final Script", "type": "main", "index": 0}]]}
+    # REPAIR_LOOP_V1: a failed quality gate now revises the same script instead
+    # of burning a fresh topic - "Claude: Generate Topic" runs at most once per
+    # scheduled run.
+    c["If Under Max Script Attempts"] = {"main": [
+        [{"node": REPAIR_NODE, "type": "main", "index": 0}],
+        [{"node": "Fail: Script Generation Exhausted", "type": "main", "index": 0}],
+    ]}
 
 
 def patch_validator(w: dict) -> None:
