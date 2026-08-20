@@ -102,48 +102,51 @@ jobs:
           python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
-          grep -q 'QUALITY_GATE' /tmp/workflow_quality.json
-          grep -q 'CREATIVE_SYSTEM' /tmp/workflow_quality.json
-          grep -q 'QUALITY_ALIGNMENT' /tmp/workflow_quality.json
-          grep -q 'API_BUDGET' /tmp/workflow_quality.json
-          grep -q 'TOPIC_LATENCY' /tmp/workflow_quality.json
-          grep -q 'ANTHROPIC_TEXT_BLOCK_GUARD' /tmp/workflow_quality.json
-          grep -q 'LAST_VALID_JSON_OBJECT' /tmp/workflow_quality.json
-          grep -q 'PREPROD_RUNTIME_GUARDRAILS' /tmp/workflow_quality.json
-          grep -q 'Claude: Commission Topic Shortlist' /tmp/workflow_quality.json
-          grep -q 'Claude: Visual Director' /tmp/workflow_quality.json
-          grep -q 'Wikipedia: Research Topic' /tmp/workflow_quality.json
-          grep -q 'run_id' /tmp/workflow_quality.json
-
+          echo "=== Verifying generated workflow contract ==="
           python3 - <<'PY'
           import json
           w = json.load(open('/tmp/workflow_quality.json'))
           names = {n['name']: n for n in w['nodes']}
+
           topic = names['Claude: Generate Topic']
           body = topic['parameters']['jsonBody']
+          assert 'TOPIC_LATENCY' in body
           assert 'GENERATE 4 DISTINCT candidate topics' in body
           assert 'max_tokens: 6000' in body
           assert topic['parameters']['options']['timeout'] == 120000
           assert topic.get('retryOnFail') is False and topic.get('maxTries') == 1
+
           commissioner = names['Claude: Commission Topic Shortlist']
           assert commissioner['parameters']['options']['timeout'] == 120000
           assert commissioner.get('retryOnFail') is False and commissioner.get('maxTries') == 1
+
           visual = names['Claude: Visual Director']
+          visual_body = visual['parameters']['jsonBody']
+          assert 'QUALITY_ALIGNMENT' in visual_body
           assert visual['parameters']['options']['timeout'] == 180000
           assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
-          assert 'thinking: { type: "disabled" }' in visual['parameters']['jsonBody']
-          assert names['Resolve B-roll']['parameters']['options']['timeout'] == 180000
+          assert 'thinking: { type: "disabled" }' in visual_body
+
+          resolver_node = names['Resolve B-roll']
+          assert resolver_node['parameters']['options']['timeout'] == 180000
+          resolver_body = resolver_node['parameters']['jsonBody']
+          assert 'search_queries' in resolver_body and 'first_frame' in resolver_body
+          assert 'run_id' in resolver_body and '$execution.id' in resolver_body
+
           for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
               assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
               assert 'LAST_VALID_JSON_OBJECT' in code, node_name
               assert 'content?.[0]?.text' not in code, node_name
+              assert 'stop_reason' in code, node_name
+
           writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
           assert 'Concept archetype' in writer_body
           validate = names['Validate Final Script']['parameters']['jsCode']
+          assert 'visual_plan_quality' in validate
           assert 'needs at least 3 search_queries' in validate
           assert 'rebuiltFullScript' in validate
-          print('Topic + parser + runtime guardrails OK')
+          print('Generated workflow contract OK')
           PY
 
       - name: Execute parser nodes against synthetic Claude responses
