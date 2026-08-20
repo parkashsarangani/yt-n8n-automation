@@ -9,7 +9,8 @@ transform:
 - preserve fail-closed creative and asset-quality gates.
 
 The final transform also aligns commissioning/writer/editor/visual prompts to
-the deterministic quality and b-roll gates.
+the deterministic quality and b-roll gates, and applies final runtime guardrails
+that must win over earlier inherited n8n settings.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from upgrade_quality_alignment import assert_alignment, upgrade as upgrade_quali
 MARKER = "ANTHROPIC_TEXT_BLOCK_GUARD"
 JSON_RECOVERY_MARKER = "LAST_VALID_JSON_OBJECT"
 VISUAL_SCHEMA_MARKER = "VISUAL_SCHEMA_NORMALIZER"
+RUNTIME_MARKER = "PREPROD_RUNTIME_GUARDRAILS"
 
 
 def node_by_name(workflow: dict, name: str) -> dict:
@@ -31,7 +33,30 @@ def node_by_name(workflow: dict, name: str) -> dict:
     raise KeyError(f"required n8n node not found: {name}")
 
 
-def replace_once(text: str, old: str, new: str, label: str) -> str:
+def robust_text_extract(label: str) -> str:
+    # Join with no separator: if Anthropic splits one JSON string across text
+    # blocks, injecting a newline can corrupt a JSON string literal.
+    return f"""// {MARKER}: Anthropic may emit thinking/signature blocks before or between text.\nconst contentBlocks = Array.isArray(response.content) ? response.content : [];\nconst textBlocks = contentBlocks.filter(b => b && b.type === 'text' && typeof b.text === 'string');\nlet raw = textBlocks.map(b => b.text).join('').trim();\nif (!raw) {{\n  const blockTypes = contentBlocks.map(b => b?.type || 'unknown').join(', ') || 'none';\n  if (response.stop_reason === 'max_tokens') {{\n    throw new Error('{label} hit max_tokens before producing a text block (content types: ' + blockTypes + ')');\n  }}\n  throw new Error('{label} returned no text block (stop_reason: ' + (response.stop_reason || 'unknown') + ', content types: ' + blockTypes + ')');\n}}"""
+
+
+def last_valid_json_js() -> str:
+    # Scan every possible object start. If an earlier false start never closes,
+    # continue from the next opening brace so a later corrected object can win.
+    return f"""// {JSON_RECOVERY_MARKER}: recover the last complete object after a Claude false start/self-correction.\nfunction extractBalancedJsonObjects(s) {{\n  const out = [];\n  let i = 0;\n  while (i < s.length) {{\n    const start = s.indexOf('{{', i);\n    if (start < 0) break;\n    let depth = 0, inStr = false, esc = false, end = -1;\n    for (let j = start; j < s.length; j++) {{\n      const ch = s[j];\n      if (inStr) {{\n        if (esc) esc = false;\n        else if (ch === '\\\\') esc = true;\n        else if (ch === '\"') inStr = false;\n      }} else if (ch === '\"') inStr = true;\n      else if (ch === '{{') depth += 1;\n      else if (ch === '}}') {{\n        depth -= 1;\n        if (depth === 0) {{ end = j; break; }}\n      }}\n    }}\n    if (end < 0) {{ i = start + 1; continue; }}\n    out.push(s.slice(start, end + 1));\n    i = end + 1;\n  }}\n  return out;\n}}\nfunction parseLastValidJsonObject(s) {{\n  const value = String(s || '');\n  // Stage 1/2 can use an assistant prefill of "{{", so also scan a prefixed copy.\n  // Prefill-repaired candidates are appended last and therefore win when valid.\n  const candidates = [...extractBalancedJsonObjects(value), ...extractBalancedJsonObjects('{{' + value)];\n  for (let i = candidates.length - 1; i >= 0; i--) {{\n    try {{\n      const parsed = JSON.parse(candidates[i]);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    }} catch {{}}\n  }}\n  for (const candidate of [value, '{{' + value]) {{\n    try {{\n      const parsed = JSON.parse(candidate);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    }} catch {{}}\n  }}\n  return undefined;\n}}"""
+
+
+def patch_topic_pool_parser(workflow: dict) -> None:
+    node = node_by_name(workflow, "Parse Topic Pool")
+    node["parameters"]["jsCode"] = f"""const response=$input.first().json;\nif(response.error)throw new Error('Topic pool API error: '+JSON.stringify(response.error));\n{robust_text_extract('Topic pool response')}\nif(response.stop_reason==='max_tokens')throw new Error('Topic pool JSON was truncated by max_tokens - refusing a partial candidate pool');\nraw=raw.replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'').trim();\n{last_valid_json_js()}\nconst obj=parseLastValidJsonObject(raw);\nif(!obj||!Array.isArray(obj.candidates))throw new Error('Topic pool returned no valid candidates JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');\nlet pool=obj.candidates\n  .filter(c=>c&&c.topic)\n  .map(c=>({{\n    topic:String(c.topic).trim(),\n    archetype:String(c.archetype||'looks_fake_but_real').trim(),\n    research_query:String(c.research_query||c.topic).trim(),\n    first_frame_concept:String(c.first_frame_concept||'').trim(),\n    share_reason:String(c.share_reason||'').trim(),\n    evidence_score:Number(c.evidence_score)||0,\n    visual_score:Number(c.visual_score)||0,\n    share_score:Number(c.share_score)||0,\n    reason:String(c.reason||''),\n    score:Number(c.score)||0\n  }}))\n  .sort((a,b)=>b.score-a.score);\nif(pool.length<3)throw new Error('Topic pool produced fewer than 3 usable candidates');\nreturn {{json:{{pool,shortlist:pool.slice(0,4)}}}};"""
+
+
+def patch_commission_parser(workflow: dict) -> None:
+    """Strict parser for the commissioned shortlist; never convert malformed prose into a topic."""
+    node = node_by_name(workflow, "Extract Generated Topic")
+    node["parameters"]["jsCode"] = f"""const response=$input.first().json;\nif(response.error)throw new Error('Topic commissioning API error: '+JSON.stringify(response.error));\n{robust_text_extract('Topic commissioning response')}\nif(response.stop_reason==='max_tokens')throw new Error('Topic commissioning response was cut off by max_tokens - refusing a partial shortlist');\nraw=raw.replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'').trim();\n{last_valid_json_js()}\nconst obj=parseLastValidJsonObject(raw);\nif(!obj||!Array.isArray(obj.candidates))throw new Error('Topic commissioning returned no valid candidates JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');\nlet candidates=obj.candidates\n  .filter(c=>c&&c.topic&&String(c.topic).trim().length>=10)\n  .map(c=>({{\n    topic:String(c.topic).trim(), archetype:String(c.archetype||'looks_fake_but_real').trim(),\n    research_query:String(c.research_query||c.topic).trim(), first_frame_concept:String(c.first_frame_concept||'').trim(),\n    share_reason:String(c.share_reason||'').trim(), evidence_score:Number(c.evidence_score)||0, visual_score:Number(c.visual_score)||0,\n    share_score:Number(c.share_score)||0, concept_score:Number(c.concept_score)||0, payoff_score:Number(c.payoff_score)||0,\n    novelty_score:Number(c.novelty_score)||0, execution_score:Number(c.execution_score)||0,\n    distinctiveness_score:Number(c.distinctiveness_score)||0, share_trigger:String(c.share_trigger||''),\n    send_to_person:String(c.send_to_person||''), novelty_delta:String(c.novelty_delta||''), proof_visual:String(c.proof_visual||''),\n    stock_feasibility:Number(c.stock_feasibility)||0,\n    stock_query_seed:Array.isArray(c.stock_query_seed)?c.stock_query_seed.map(String).filter(Boolean).slice(0,4):[],\n    reason:String(c.reason||''), score:Number(c.score)||0\n  }}))\n  .sort((a,b)=>b.score-a.score);\nif(!candidates.length)throw new Error('Topic commissioning produced zero usable candidates');\nconst used=(($('Ensure Topics Array').item.json.topics)||[]).map(t=>String((t&&t.topic)||'').toLowerCase()).filter(Boolean);\nconst words=s=>String(s||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\\s+/).filter(w=>w.length>3);\nfunction tooSimilar(topic){{\n  const tl=String(topic||'').toLowerCase(); const w=new Set(words(topic));\n  for(const u of used){{\n    if(u&&(u.includes(tl)||tl.includes(u)))return true;\n    const uw=words(u); if(uw.length&&uw.filter(x=>w.has(x)).length/uw.length>=0.6)return true;\n  }}\n  return false;\n}}\nconst picked=candidates.find(c=>!tooSimilar(c.topic))||candidates[0];\nreturn {{json:{{\n  topic:picked.topic, archetype:picked.archetype||'looks_fake_but_real', score:picked.score,\n  research_query:picked.research_query||picked.topic, first_frame_concept:picked.first_frame_concept||'', share_reason:picked.share_reason||'',\n  evidence_score:picked.evidence_score||0, visual_score:picked.visual_score||0, share_score:picked.share_score||0,\n  concept_score:picked.concept_score||0, payoff_score:picked.payoff_score||0, novelty_score:picked.novelty_score||0,\n  execution_score:picked.execution_score||0, distinctiveness_score:picked.distinctiveness_score||0,\n  share_trigger:picked.share_trigger||'', send_to_person:picked.send_to_person||'', novelty_delta:picked.novelty_delta||'',\n  proof_visual:picked.proof_visual||'', stock_feasibility:picked.stock_feasibility||0, stock_query_seed:picked.stock_query_seed||[],\n  candidates, candidate_pool:$('Parse Topic Pool').item.json.pool||candidates\n}}}};"""
+
+
+def replace_required(text: str, old: str, new: str, label: str) -> str:
     if new in text:
         return text
     if old not in text:
@@ -39,65 +64,38 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def robust_text_extract(label: str) -> str:
-    # Join with no separator: if Anthropic splits a JSON string across two text
-    # blocks, injecting a newline would corrupt the JSON string literal.
-    return f"""// {MARKER}: Anthropic may emit thinking/signature blocks before or between text.\nconst contentBlocks = Array.isArray(response.content) ? response.content : [];\nconst textBlocks = contentBlocks.filter(b => b && b.type === 'text' && typeof b.text === 'string');\nlet raw = textBlocks.map(b => b.text).join('').trim();\nif (!raw) {{\n  const blockTypes = contentBlocks.map(b => b?.type || 'unknown').join(', ') || 'none';\n  if (response.stop_reason === 'max_tokens') {{\n    throw new Error('{label} hit max_tokens before producing a text block (content types: ' + blockTypes + ')');\n  }}\n  throw new Error('{label} returned no text block (stop_reason: ' + (response.stop_reason || 'unknown') + ', content types: ' + blockTypes + ')');\n}}"""
-
-
-def last_valid_json_js() -> str:
-    return f"""// {JSON_RECOVERY_MARKER}: Claude can emit a malformed false start and then a corrected JSON object.\nfunction extractBalancedJsonObjects(s) {{\n  const out = [];\n  let i = 0;\n  while (i < s.length) {{\n    const start = s.indexOf('{{', i);\n    if (start < 0) break;\n    let depth = 0, inStr = false, esc = false, end = -1;\n    for (let j = start; j < s.length; j++) {{\n      const ch = s[j];\n      if (inStr) {{\n        if (esc) esc = false;\n        else if (ch === '\\\\') esc = true;\n        else if (ch === '\"') inStr = false;\n      }} else if (ch === '\"') inStr = true;\n      else if (ch === '{{') depth += 1;\n      else if (ch === '}}') {{\n        depth -= 1;\n        if (depth === 0) {{ end = j; break; }}\n      }}\n    }}\n    if (end < 0) break;\n    out.push(s.slice(start, end + 1));\n    i = end + 1;\n  }}\n  return out;\n}}\nfunction parseLastValidJsonObject(s) {{\n  const value = String(s || '');\n  // Stage 1/2 use an assistant prefill of "{{", so also scan a prefixed copy.\n  // Direct candidates come first; prefixed candidates come last so a complete\n  // prefill-repaired object wins when the leading brace is absent.\n  const candidates = [...extractBalancedJsonObjects(value), ...extractBalancedJsonObjects('{{' + value)];\n  for (let i = candidates.length - 1; i >= 0; i--) {{\n    try {{\n      const parsed = JSON.parse(candidates[i]);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    }} catch {{}}\n  }}\n  for (const candidate of [value, '{{' + value]) {{\n    try {{\n      const parsed = JSON.parse(candidate);\n      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;\n    }} catch {{}}\n  }}\n  return undefined;\n}}"""
-
-
-def patch_topic_pool_parser(workflow: dict) -> None:
-    node = node_by_name(workflow, "Parse Topic Pool")
-    code = node["parameters"]["jsCode"]
-    old = "const tb=contentBlocks.find(b=>b&&b.type==='text');\nlet raw=String(tb?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');"
-    new = (
-        f"// {MARKER}: consume all text blocks, not only the first one.\n"
-        "const textBlocks=contentBlocks.filter(b=>b&&b.type==='text'&&typeof b.text==='string');\n"
-        "let raw=String(textBlocks.map(b=>b.text).join('')||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');"
-    )
-    node["parameters"]["jsCode"] = replace_once(code, old, new, "topic-pool Anthropic text blocks")
-
-
-def patch_commission_parser(workflow: dict) -> None:
-    """Replace the inherited Generate Topic parser with a strict commissioner parser.
-
-    Commission Topic Shortlist returns ranked candidates, so the old fallback
-    that treated malformed JSON as a single topic is unsafe here: it can silently
-    convert model prose/garbage into a production topic. Fail closed instead.
-    """
-    node = node_by_name(workflow, "Extract Generated Topic")
-    node["parameters"]["jsCode"] = f"""const response = $input.first().json;\nif (response.error) throw new Error('Topic commissioning API error: ' + JSON.stringify(response.error));\n{robust_text_extract('Topic commissioning response')}\nif (response.stop_reason === 'max_tokens') throw new Error('Topic commissioning response was cut off by max_tokens - refusing a partial shortlist');\nraw = raw.replace(/^```(?:json)?\\s*/i, '').replace(/```\\s*$/, '').trim();\n{last_valid_json_js()}\nconst obj = parseLastValidJsonObject(raw);\nif (!obj || !Array.isArray(obj.candidates)) throw new Error('Topic commissioning returned no valid candidates JSON object (stop_reason: ' + (response.stop_reason || 'unknown') + ')');\nlet candidates = obj.candidates\n  .filter(c => c && c.topic && String(c.topic).trim().length >= 10)\n  .map(c => ({{\n    topic: String(c.topic).trim(),\n    archetype: String(c.archetype || 'looks_fake_but_real').trim(),\n    research_query: String(c.research_query || c.topic).trim(),\n    first_frame_concept: String(c.first_frame_concept || '').trim(),\n    share_reason: String(c.share_reason || '').trim(),\n    evidence_score: Number(c.evidence_score) || 0,\n    visual_score: Number(c.visual_score) || 0,\n    share_score: Number(c.share_score) || 0,\n    concept_score: Number(c.concept_score) || 0,\n    payoff_score: Number(c.payoff_score) || 0,\n    novelty_score: Number(c.novelty_score) || 0,\n    execution_score: Number(c.execution_score) || 0,\n    distinctiveness_score: Number(c.distinctiveness_score) || 0,\n    share_trigger: String(c.share_trigger || ''),\n    send_to_person: String(c.send_to_person || ''),\n    novelty_delta: String(c.novelty_delta || ''),\n    proof_visual: String(c.proof_visual || ''),\n    stock_feasibility: Number(c.stock_feasibility) || 0,\n    stock_query_seed: Array.isArray(c.stock_query_seed) ? c.stock_query_seed.map(String).filter(Boolean).slice(0, 4) : [],\n    reason: String(c.reason || ''),\n    score: Number(c.score) || 0,\n  }}))\n  .sort((a, b) => b.score - a.score);\nif (!candidates.length) throw new Error('Topic commissioning produced zero usable candidates');\nconst used = (($('Ensure Topics Array').item.json.topics) || []).map(t => String((t && t.topic) || '').toLowerCase()).filter(Boolean);\nconst words = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\\s+/).filter(w => w.length > 3);\nfunction tooSimilar(topic) {{\n  const tl = String(topic || '').toLowerCase();\n  const w = new Set(words(topic));\n  for (const u of used) {{\n    if (u && (u.includes(tl) || tl.includes(u))) return true;\n    const uw = words(u);\n    if (uw.length && uw.filter(x => w.has(x)).length / uw.length >= 0.6) return true;\n  }}\n  return false;\n}}\nconst picked = candidates.find(c => !tooSimilar(c.topic)) || candidates[0];\nreturn {{ json: {{\n  topic: picked.topic, archetype: picked.archetype || 'looks_fake_but_real', score: picked.score,\n  research_query: picked.research_query || picked.topic, first_frame_concept: picked.first_frame_concept || '',\n  share_reason: picked.share_reason || '', evidence_score: picked.evidence_score || 0, visual_score: picked.visual_score || 0,\n  share_score: picked.share_score || 0, concept_score: picked.concept_score || 0, payoff_score: picked.payoff_score || 0,\n  novelty_score: picked.novelty_score || 0, execution_score: picked.execution_score || 0,\n  distinctiveness_score: picked.distinctiveness_score || 0, share_trigger: picked.share_trigger || '',\n  send_to_person: picked.send_to_person || '', novelty_delta: picked.novelty_delta || '', proof_visual: picked.proof_visual || '',\n  stock_feasibility: picked.stock_feasibility || 0, stock_query_seed: picked.stock_query_seed || [],\n  candidates, candidate_pool: $('Parse Topic Pool').item.json.pool || candidates\n}} }};"""
-
-
 def patch_draft_parser(workflow: dict) -> None:
     node = node_by_name(workflow, "Parse Draft JSON")
     code = node["parameters"]["jsCode"]
     old_text = """let raw = response.content?.[0]?.text;\nif (!raw) throw new Error('Claude draft response missing content[0].text');"""
-    code = replace_once(code, old_text, robust_text_extract("Claude draft response"), "draft Anthropic text parser")
+    code = replace_required(code, old_text, robust_text_extract("Claude draft response"), "draft Anthropic text parser")
     old_parse = "const parsed = tryParse(raw) || tryParse('{' + raw) || tryParse(extractJsonObject('{' + raw)) || tryParse(extractJsonObject(raw));"
     new_parse = last_valid_json_js() + "\nconst parsed = parseLastValidJsonObject(raw);"
-    node["parameters"]["jsCode"] = replace_once(code, old_parse, new_parse, "draft last-valid JSON recovery")
+    code = replace_required(code, old_parse, new_parse, "draft last-valid JSON recovery")
+    old_invalid = "if (!parsed) {\n  throw new Error('Claude draft did not return valid JSON: ' + raw.slice(0, 300));\n}"
+    new_invalid = "if (!parsed || typeof parsed.hook !== 'string' || !Array.isArray(parsed.scenes)) {\n  throw new Error('Claude draft did not return a complete script JSON object (stop_reason: ' + (response.stop_reason || 'unknown') + ')');\n}"
+    node["parameters"]["jsCode"] = replace_required(code, old_invalid, new_invalid, "draft complete-script guard")
 
 
 def patch_editor_parser(workflow: dict) -> None:
     node = node_by_name(workflow, "Parse Editorial For Visual Director")
-    node["parameters"]["jsCode"] = f"""const response=$input.first().json;\nif(response.error)throw new Error('Editorial API error: '+JSON.stringify(response.error));\n{robust_text_extract('Editorial API response')}\nif(response.stop_reason==='max_tokens')throw new Error('Editorial API hit max_tokens with partial text - the JSON response was truncated before completion');\nraw=raw.replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'').trim();\n{last_valid_json_js()}\nconst parsed=parseLastValidJsonObject(raw);\nif(!parsed)throw new Error('Editorial pass returned no valid complete JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');\nreturn {{json:{{script:parsed}}}};"""
+    node["parameters"]["jsCode"] = f"""const response=$input.first().json;\nif(response.error)throw new Error('Editorial API error: '+JSON.stringify(response.error));\n{robust_text_extract('Editorial API response')}\nif(response.stop_reason==='max_tokens')throw new Error('Editorial API hit max_tokens with partial text - the JSON response was truncated before completion');\nraw=raw.replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'').trim();\n{last_valid_json_js()}\nconst parsed=parseLastValidJsonObject(raw);\nif(!parsed||typeof parsed.hook!=='string'||!Array.isArray(parsed.scenes))throw new Error('Editorial pass returned no valid complete script JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');\nreturn {{json:{{script:parsed}}}};"""
 
 
 def patch_final_parser(workflow: dict) -> None:
     node = node_by_name(workflow, "Validate Final Script")
     code = node["parameters"]["jsCode"]
     old_text = """let raw = response.content?.[0]?.text;\nif (!raw) throw new Error('Claude editor response missing content[0].text');"""
-    code = replace_once(code, old_text, robust_text_extract("Claude visual-director response"), "final Anthropic text parser")
+    code = replace_required(code, old_text, robust_text_extract("Claude visual-director response"), "final Anthropic text parser")
     old_parse = "const parsed = tryParse(raw) || tryParse('{' + raw) || tryParse(extractJsonObject('{' + raw)) || tryParse(extractJsonObject(raw));"
     new_parse = last_valid_json_js() + "\nconst parsed = parseLastValidJsonObject(raw);"
-    code = replace_once(code, old_parse, new_parse, "final last-valid JSON recovery")
+    code = replace_required(code, old_parse, new_parse, "final last-valid JSON recovery")
+    old_invalid = "if (!parsed) {\n  throw new Error('Claude editor did not return valid JSON: ' + raw.slice(0, 300));\n}"
+    new_invalid = "if (!parsed || typeof parsed.hook !== 'string' || !Array.isArray(parsed.scenes)) {\n  throw new Error('Claude visual-director response did not return a complete script JSON object (stop_reason: ' + (response.stop_reason || 'unknown') + ')');\n}"
+    code = replace_required(code, old_invalid, new_invalid, "final complete-script guard")
     code = code.replace(
-        "Claude editorial rewrite was cut off by max_tokens - likely truncated mid-JSON. Increase max_tokens on the \\\"Claude: Editorial Rewrite (Stage 2)\\\" node.",
-        "Claude visual-director response was cut off by max_tokens - likely truncated mid-JSON; refusing partial output.",
+        'Claude editorial rewrite was cut off by max_tokens - likely truncated mid-JSON. Increase max_tokens on the "Claude: Editorial Rewrite (Stage 2)" node.',
+        'Claude visual-director response was cut off by max_tokens - refusing partial output.',
     )
     node["parameters"]["jsCode"] = code
 
@@ -109,12 +107,10 @@ def patch_visual_schema_normalizer(workflow: dict) -> None:
         return
 
     anchor = "const errors = [];"
-    normalizer = f"""// {VISUAL_SCHEMA_MARKER}: repair deterministic Visual Director omissions before fail-closed validation.\n// This normalizes metadata/search hints and keeps full_script synchronized with final scene narration.\n// It does not change facts, quality scores, evidence, or asset thresholds.\nconst normalizeSearchQuery=(value,maxWords=5)=>String(value||'').replace(/[^a-zA-Z0-9' -]+/g,' ').replace(/\\s+/g,' ').trim().split(' ').filter(Boolean).slice(0,maxWords).join(' ');\nconst dedupeSearchQueries=(values)=>{{const out=[];const seen=new Set();for(const value of values){{const q=normalizeSearchQuery(value);const key=q.toLowerCase();if(q&&!seen.has(key)){{seen.add(key);out.push(q);}}}}return out;}};\nif(!parsed.first_frame_type){{const byFormat={{documentary_cinematic:'hero_motion',comparison_reveal:'scale_comparison',minimal_proof:'result_first',archival_history:'archive_proof',macro_detail:'macro_anomaly',kinetic_data:'kinetic_stat'}};parsed.first_frame_type=byFormat[parsed.creative_format]||'result_first';}}\nconst hasComment=Boolean(String(parsed.comment_hook||'').trim());\nconst hasShareOutro=Boolean(String(parsed.outro_line||'').trim());\nparsed.engagement_mode=hasComment&&hasShareOutro?'comment_and_share':hasComment?'comment_only':hasShareOutro?'share_only':'none';\nif(Array.isArray(parsed.scenes)){{\n  const orderedContentScenes=parsed.scenes.filter(s=>s&&!s?.template_data?.is_outro).sort((a,b)=>Number(a.scene_index)-Number(b.scene_index));\n  const rebuiltFullScript=orderedContentScenes.map(s=>String(s.narration||'').trim()).filter(Boolean).join(' ');\n  if(rebuiltFullScript)parsed.full_script=rebuiltFullScript;\n  parsed.scenes.forEach((s,i)=>{{\n    if(!s||s?.template_data?.is_outro||s.visual_source==='template')return;\n    let queries=dedupeSearchQueries([...(Array.isArray(s.search_queries)?s.search_queries:[]),s.stock_search_query,s.named_subject,s.visual_prompt,s.point]);\n    const base=queries[0]||normalizeSearchQuery(s.named_subject||s.visual_prompt||s.point||parsed.title||'visual subject',4);\n    const broad=normalizeSearchQuery(s.named_subject||base,3)||base;\n    const variantSuffix=i===0?'close up':s.visual_role==='comparison'?'comparison':'detail';\n    queries=dedupeSearchQueries([...queries,broad,`${{broad}} ${{variantSuffix}}`,`${{broad}} footage`]);\n    const wanted=i===0?4:3;\n    s.search_queries=queries.slice(0,wanted);\n    if(!String(s.stock_search_query||'').trim()&&s.search_queries[0])s.stock_search_query=s.search_queries[0];\n  }});\n}}\n\n"""
+    normalizer = f"""// {VISUAL_SCHEMA_MARKER}: deterministic metadata/search repair before fail-closed validation.\n// Keep full_script synchronized with the final returned scene narration. Facts, evidence, quality scores, and asset thresholds are untouched.\nconst normalizeSearchQuery=(value,maxWords=5)=>String(value||'').replace(/[^a-zA-Z0-9' -]+/g,' ').replace(/\\s+/g,' ').trim().split(' ').filter(Boolean).slice(0,maxWords).join(' ');\nconst dedupeSearchQueries=(values)=>{{const out=[];const seen=new Set();for(const value of values){{const q=normalizeSearchQuery(value);const key=q.toLowerCase();if(q&&!seen.has(key)){{seen.add(key);out.push(q);}}}}return out;}};\nif(!parsed.first_frame_type){{const byFormat={{documentary_cinematic:'hero_motion',comparison_reveal:'scale_comparison',minimal_proof:'result_first',archival_history:'archive_proof',macro_detail:'macro_anomaly',kinetic_data:'kinetic_stat'}};parsed.first_frame_type=byFormat[parsed.creative_format]||'result_first';}}\nconst hasComment=Boolean(String(parsed.comment_hook||'').trim());\nconst hasShareOutro=Boolean(String(parsed.outro_line||'').trim());\nparsed.engagement_mode=hasComment&&hasShareOutro?'comment_and_share':hasComment?'comment_only':hasShareOutro?'share_only':'none';\nif(Array.isArray(parsed.scenes)){{\n  const orderedContentScenes=parsed.scenes.filter(s=>s&&!s?.template_data?.is_outro).sort((a,b)=>Number(a.scene_index)-Number(b.scene_index));\n  const rebuiltFullScript=orderedContentScenes.map(s=>String(s.narration||'').trim()).filter(Boolean).join(' ');\n  if(rebuiltFullScript)parsed.full_script=rebuiltFullScript;\n  parsed.scenes.forEach((s,i)=>{{\n    if(!s||s?.template_data?.is_outro||s.visual_source==='template')return;\n    let queries=dedupeSearchQueries([...(Array.isArray(s.search_queries)?s.search_queries:[]),s.stock_search_query,s.named_subject,s.visual_prompt,s.point]);\n    const base=queries[0]||normalizeSearchQuery(s.named_subject||s.visual_prompt||s.point||parsed.title||'visual subject',4);\n    const broad=normalizeSearchQuery(s.named_subject||base,3)||base;\n    const variantSuffix=i===0?'close up':s.visual_role==='comparison'?'comparison':'detail';\n    queries=dedupeSearchQueries([...queries,broad,`${{broad}} ${{variantSuffix}}`,`${{broad}} footage`]);\n    const wanted=i===0?4:3;\n    s.search_queries=queries.slice(0,wanted);\n    if(!String(s.stock_search_query||'').trim()&&s.search_queries[0])s.stock_search_query=s.search_queries[0];\n  }});\n}}\n\n"""
     if anchor not in code:
         raise ValueError("could not patch visual schema normalizer: pre-validation anchor not found")
     code = code.replace(anchor, normalizer + anchor, 1)
-    # Prompt + deterministic normalizer now guarantee three retrieval variants;
-    # enforce the same contract instead of silently accepting only two.
     code = code.replace(
         "(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<2))errors.push(`scene ${i} needs at least 2 search_queries`)",
         "(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<3))errors.push(`scene ${i} needs at least 3 search_queries`)",
@@ -122,9 +118,42 @@ def patch_visual_schema_normalizer(workflow: dict) -> None:
     node["parameters"]["jsCode"] = code
 
 
+def patch_runtime_guardrails(workflow: dict) -> None:
+    # The commissioner and Visual Director are cloned from older HTTP nodes and
+    # can inherit 3x automatic retries. The workflow-level fresh-topic loop is
+    # the deliberate retry boundary; do not multiply expensive model calls on a
+    # client timeout. Give each complex request enough wall-clock time instead.
+    commissioner = node_by_name(workflow, "Claude: Commission Topic Shortlist")
+    commissioner["retryOnFail"] = False
+    commissioner["maxTries"] = 1
+    commissioner["waitBetweenTries"] = 0
+    commissioner["parameters"].setdefault("options", {})["timeout"] = 120000
+    commissioner["notes"] = RUNTIME_MARKER + ": single bounded commissioning call"
+
+    visual = node_by_name(workflow, "Claude: Visual Director")
+    visual["retryOnFail"] = False
+    visual["maxTries"] = 1
+    visual["waitBetweenTries"] = 0
+    visual["parameters"].setdefault("options", {})["timeout"] = 180000
+    body = visual["parameters"]["jsonBody"]
+    body = body.replace(
+        'thinking: { type: "adaptive" }, output_config: { effort: "high" },',
+        'thinking: { type: "disabled" },',
+        1,
+    )
+    visual["parameters"]["jsonBody"] = body
+    visual["notes"] = RUNTIME_MARKER + ": protect full JSON output; no duplicate client retry"
+
+    # Seven first-frame evaluations are scored in batches of two. With two
+    # progressive search rounds, 60s is not a safe client bound; 180s still
+    # keeps the call finite while allowing the configured quality budget to run.
+    resolver = node_by_name(workflow, "Resolve B-roll")
+    resolver["parameters"].setdefault("options", {})["timeout"] = 180000
+    resolver["notes"] = RUNTIME_MARKER + ": timeout covers bounded 7-call first-frame commissioning"
+
+
 def upgrade(workflow: dict) -> dict:
-    # Apply prompt alignment first, then harden the final generated nodes so the
-    # parser layer always sees the exact schema/prompts that production will use.
+    # Prompt/schema alignment must happen before final parser/runtime hardening.
     upgrade_quality_alignment(workflow)
     patch_topic_pool_parser(workflow)
     patch_commission_parser(workflow)
@@ -132,6 +161,7 @@ def upgrade(workflow: dict) -> dict:
     patch_editor_parser(workflow)
     patch_final_parser(workflow)
     patch_visual_schema_normalizer(workflow)
+    patch_runtime_guardrails(workflow)
     return workflow
 
 
@@ -141,21 +171,16 @@ def main() -> None:
     src, dst = map(Path, sys.argv[1:])
     workflow = json.loads(src.read_text())
     upgraded = upgrade(workflow)
-
     names = {n.get("name"): n for n in upgraded.get("nodes", [])}
-    for parser_name in ["Extract Generated Topic", "Parse Draft JSON", "Parse Editorial For Visual Director", "Validate Final Script"]:
+
+    for parser_name in ["Parse Topic Pool", "Extract Generated Topic", "Parse Draft JSON", "Parse Editorial For Visual Director", "Validate Final Script"]:
         code = names[parser_name]["parameters"]["jsCode"]
         if MARKER not in code or JSON_RECOVERY_MARKER not in code:
-            raise RuntimeError(f"Anthropic parser hardening did not land in {parser_name}")
+            raise RuntimeError(f"Anthropic JSON hardening did not land in {parser_name}")
         if "content?.[0]?.text" in code:
             raise RuntimeError(f"brittle content[0].text parser survived in {parser_name}")
-    topic_pool_code = names["Parse Topic Pool"]["parameters"]["jsCode"]
-    if MARKER not in topic_pool_code or "textBlocks.map(b=>b.text).join('')" not in topic_pool_code:
-        raise RuntimeError("topic-pool multi-text-block hardening did not land")
 
     validate_code = names["Validate Final Script"]["parameters"]["jsCode"]
-    if VISUAL_SCHEMA_MARKER not in validate_code:
-        raise RuntimeError("visual schema normalizer did not land in Validate Final Script")
     marker_pos = validate_code.index(VISUAL_SCHEMA_MARKER)
     errors_pos = validate_code.index("const errors = [];")
     stock_check_pos = validate_code.index("missing stock_search_query")
@@ -166,10 +191,19 @@ def main() -> None:
     if "rebuiltFullScript" not in validate_code:
         raise RuntimeError("full_script is no longer synchronized with final scene narration")
 
-    assert_alignment(upgraded)
+    visual = names["Claude: Visual Director"]
+    if visual.get("retryOnFail") is not False or visual.get("maxTries") != 1:
+        raise RuntimeError("Visual Director automatic retries are not bounded")
+    if visual["parameters"].get("options", {}).get("timeout") != 180000:
+        raise RuntimeError("Visual Director timeout drifted from 180s preprod guardrail")
+    if 'thinking: { type: "disabled" }' not in visual["parameters"]["jsonBody"]:
+        raise RuntimeError("Visual Director adaptive thinking still competes with full-script JSON output")
+    if names["Resolve B-roll"]["parameters"].get("options", {}).get("timeout") != 180000:
+        raise RuntimeError("Resolve B-roll timeout is too short for its configured vision budget")
 
+    assert_alignment(upgraded)
     dst.write_text(json.dumps(upgraded, indent=2) + "\n")
-    print(f"Anthropic parser workflow written to {dst}")
+    print(f"Anthropic/parser/runtime-hardened workflow written to {dst}")
 
 
 if __name__ == "__main__":
