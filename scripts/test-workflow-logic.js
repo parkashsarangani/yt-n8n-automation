@@ -223,6 +223,27 @@ function main() {
     const noTextBlock = { content: [{ type: 'thinking', thinking: '...' }], stop_reason: 'max_tokens' };
     throws(() => runNodeCode(nodes, 'Parse Topic Pool', noTextBlock), 'only thinking block, max_tokens -> clear diagnostic',
       (m) => m.includes('max_tokens') && m.includes('text block'));
+
+    // Regression test for a real production failure: Claude wrote a broken
+    // false-start object, caught itself mid-response ("Wait, I need to
+    // output proper JSON only."), then wrote the correct JSON right after -
+    // both landed in the same complete (non-truncated) response. The old
+    // naive indexOf('{')..lastIndexOf('}') extraction grabbed from the
+    // false start's opening brace to the real JSON's closing brace, mashing
+    // garbage and valid JSON together and crashing with a cryptic
+    // SyntaxError even though stop_reason was 'end_turn', not truncated.
+    const selfCorrected = {
+      content: [{
+        type: 'text',
+        text: '{"candidates":[[]][0] || null}\n\nWait, I need to output proper JSON only.\n\n'
+          + JSON.stringify({ candidates: [1, 2, 3, 4].map(mkCandidate) }),
+      }],
+      stop_reason: 'end_turn',
+    };
+    doesNotThrow(() => {
+      const r = runNodeCode(nodes, 'Parse Topic Pool', selfCorrected);
+      check('  -> recovers the real 4-candidate JSON after a self-correction false-start', r.json.pool.length === 4);
+    }, 'Claude self-correction false-start (real production failure) -> recovers correct JSON instead of crashing');
   }
 
   // -------------------------------------------------------------------
