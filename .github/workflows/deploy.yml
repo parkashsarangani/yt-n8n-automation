@@ -35,7 +35,7 @@ jobs:
           set -euo pipefail
 
           echo "=== Validating compose source transforms ==="
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py
+          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/video_multiframe_phase3.py
           python3 scripts/upgrade-compose-creative-system.py shorts-compose/compose.js
           python3 scripts/upgrade-compose-api-budget.py shorts-compose/compose.js shorts-compose/brollResolver.js
           python3 scripts/upgrade-compose-runtime-hardening.py shorts-compose/brollResolver.js
@@ -46,6 +46,9 @@ jobs:
           grep -q 'RETRIEVAL_RECALL_PHASE2' shorts-compose/brollResolver.js
           grep -q 'SOURCE_QUERY_COMPILER_V1' shorts-compose/brollResolver.js
           grep -q 'fromPixabayVideos' shorts-compose/brollResolver.js
+          grep -q 'MULTIFRAME_VIDEO_RERANK_V1' shorts-compose/brollResolver.js
+          grep -q 'sampleVideoContactSheet' shorts-compose/brollResolver.js
+          grep -q 'frame_similarity' shorts-compose/brollResolver.js
           grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
           grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/brollResolver.js
           grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
@@ -102,7 +105,7 @@ jobs:
           python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
 
           echo "=== Applying quality alignment + Anthropic parser/runtime hardening ==="
-          python3 -m py_compile scripts/upgrade-anthropic-parser.py
+          python3 -m py_compile scripts/upgrade-anthropic-parser.py scripts/workflow_multiframe_phase3.py
           python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_quality.json
           python3 -m json.tool /tmp/workflow_quality.json >/dev/null
 
@@ -155,6 +158,8 @@ jobs:
           assert 'pixabay_video' in validate and 'pixabay' in validate
           tag = names['Tag B-roll']['parameters']['jsCode']
           assert 'compiled_query_plan' in tag
+          assert 'MULTIFRAME_TELEMETRY_V1' in tag
+          assert 'frame_similarity' in tag and 'frame_sampling_status' in tag
           print('Generated workflow contract OK')
           PY
 
