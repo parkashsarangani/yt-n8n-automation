@@ -125,38 +125,6 @@ def patch_writer_prompt(node: dict) -> None:
     node["parameters"]["jsonBody"] = body
 
 
-def patch_editor_prompt(node: dict) -> None:
-    body = node["parameters"]["jsonBody"]
-    intro = "You are the editor for a viral, story-driven YouTube Shorts channel with a broad general audience. You will be given a draft script as JSON. Your job is to make it MORE gripping, more dramatic, and harder to swipe away from - NOT to sand it down. Fix what is vague, unverifiable, or would require the AI video generator to render readable text, and tighten limp writing - but wherever the hook or story reads tame, crank it UP rather than calming it down. Then output the corrected JSON in the exact same schema."
-    new_intro = "You are the final commissioning editor for a YouTube Shorts channel. QUALITY_GATE. You will be given a draft script as JSON below - your job is to edit and strengthen THIS SPECIFIC SCRIPT, never to discard it and write about a different topic. You may rewrite every sentence, restructure scenes, sharpen the hook, or deepen the angle, but the core topic/subject/fact given in the draft must stay exactly the same - never substitute a different topic or fact, even one you believe would score higher. If the given topic is fundamentally too weak to produce a strong Short, that is what the quality object and the retry loop exist to catch - grade it honestly and let the automation discard it, do not silently route around a weak topic by writing about something else. Your job is not to rescue a weak EXECUTION by only lightly polishing it - produce the strongest truthful version of THIS topic you can, then grade it harshly. A clean but forgettable Short must fail. Optimize for: an idea people instantly understand, a first second that stops the thumb visually and verbally, dense new information, a satisfying payoff, and a specific reason to share. Do not add melodrama to compensate for a weak idea. Output the corrected JSON plus a quality object used by an automated publish gate."
-    body = replace_once(body, intro, new_intro, "editor role")
-
-    old_flow = "13. FLOW CHECK: every scene transition must carry BUT or THEREFORE tension, never and-then listing - rewrite any flat sequential transition."
-    new_flow = "13. FLOW/RHYTHM CHECK: require causal or emotional progression, but DO NOT force every scene into BUT/THEREFORE or a micro-cliffhanger. Vary beat function across tension, minimum context, concrete payoff, and a brief breath/reaction. Penalize scripts where the retention machinery is audible: repeated rhetorical questions, repeated fake-outs, or every sentence teasing the next."
-    body = replace_once(body, old_flow, new_flow, "editor flow")
-
-    old_ret = "16. RETENTION CURVE (critical no matter how long the final script runs): the video lives or dies on its middle. Verify every scene re-hooks - each must end on a micro-cliffhanger, a raised stake, or a question the next scene answers, so the viewer never reaches a point where nothing new is coming. Any middle scene that is just another fact with no forward pull must be rewritten to escalate or cut. There must be no flat stretch anywhere."
-    new_ret = "16. RETENTION CURVE - QUALITY_GATE: the middle must keep delivering, not merely keep withholding. Each scene must contribute at least one of: genuinely new information, a visual pattern interrupt, a partial payoff, escalation, humor/reaction, or a sharper question. Prefer one or two real open loops over a chain of synthetic micro-cliffhangers. If a beat only says 'keep watching', explicitly or structurally, cut it. Reward early mini-payoffs that create trust and rewatch value."
-    body = replace_once(body, old_ret, new_ret, "editor retention")
-
-    output_anchor = "Output ONLY the corrected JSON, same schema as input, no markdown fences, no preamble, no commentary about what you changed."
-    quality = "17. COMMISSIONING GATE - REQUIRED: add a top-level quality object with integer 0-100 fields: concept_strength, hook_strength, evidence_strength, payoff_strength, information_density, first_frame_strength, visual_progression, shareability, naturalness, overall. Grade against the best Shorts a broad viewer could see today, not against average AI output. 80 means good but not exceptional. 90 means unusually strong. Overall may not exceed the lowest of concept_strength, evidence_strength, first_frame_strength, payoff_strength, and shareability by more than 5 points. If the underlying idea is mediocre, do not hide that with a rewrite; score it honestly so the automation can discard it.\\n\\n18. FIRST-FRAME/SCENE VISUAL GATE: scene 1 must be understandable and arresting with audio muted. Generic landscape, generic object close-up, or an interchangeable stock establishing shot fails. Across scenes, require visual progression (hero motion/image -> evidence/detail -> comparison/reveal -> payoff) rather than literal sentence-by-sentence stock illustration.\\n\\n19. FACT CHECK: compare factual claims against the external research leads supplied below. Remove or soften unsupported precision. A viral hook is not permission to turn a plausible anecdote into a fact.\\n\\n" + output_anchor.replace("same schema as input", "same schema as input plus the required quality object")
-    body = replace_once(body, output_anchor, quality, "editor quality gate")
-
-    draft_anchor = "Draft to edit:\\n\" + JSON.stringify($json.draft) + \""
-    draft_new = (
-        "External research leads: \\\" + JSON.stringify($('Normalize Research Evidence').item.json.research_evidence || []) + \\\""
-        "\\nTopic-selection first-frame concept: \\\" + ($('Normalize Research Evidence').item.json.first_frame_concept || '') + \\\""
-        "\\n\\nFINAL REMINDER before you read the draft below: the topic/subject/fact in it is fixed and non-negotiable. "
-        "You are editing THIS ONE script - rewrite its wording, structure, hook, anything - but never replace it with a "
-        "different topic or fact, no matter how strong an alternative idea seems. A weak topic fails the quality gate below; "
-        "it does not get silently swapped out."
-        "\\n\\nDraft to edit:\\n\\\" + JSON.stringify($json.draft) + \\\""
-    )
-    body = replace_once(body, draft_anchor, draft_new, "editor research input")
-    node["parameters"]["jsonBody"] = body
-
-
 def patch_validator(node: dict) -> None:
     code = node["parameters"]["jsCode"]
     if "QUALITY_GATE commissioning gate" in code:
@@ -213,7 +181,13 @@ def upgrade(workflow: dict) -> dict:
     patch_topic_parser(node_by_name(workflow, "Extract Generated Topic"))
     add_research_nodes(workflow)
     patch_writer_prompt(node_by_name(workflow, "Claude: Draft Script (Stage 1)"))
-    patch_editor_prompt(node_by_name(workflow, "Claude: Editorial Rewrite (Stage 2)"))
+    # EDITORIAL_STAGE_REMOVED: Claude: Editorial Rewrite (Stage 2) was removed
+    # from the pipeline (see upgrade-creative-system.py) after repeatedly
+    # discarding the given draft's topic and substituting an unrelated one in
+    # production, even after two rounds of explicit prompt instructions plus
+    # a deterministic validation backstop. Draft Script -> Visual Director
+    # directly now; Visual Director already performs its own independent
+    # quality critique and grading pass.
     patch_validator(node_by_name(workflow, "Validate Final Script"))
     return workflow
 

@@ -213,8 +213,7 @@ def audit() -> None:
             "Claude: Commission Topic Shortlist": "Extract Generated Topic",
             "Wikipedia: Research Topic": "Normalize Research Evidence",
             "Normalize Research Evidence": "Claude: Draft Script (Stage 1)",
-            "Claude: Editorial Rewrite (Stage 2)": "Parse Editorial For Visual Director",
-            "Parse Editorial For Visual Director": "Claude: Visual Director",
+            "Parse Draft JSON": "Claude: Visual Director",
             "Claude: Visual Director": "Validate Final Script",
         }
         for src, dst in expected_edges.items():
@@ -225,7 +224,6 @@ def audit() -> None:
             "Claude: Generate Topic": 120000,
             "Claude: Commission Topic Shortlist": 120000,
             "Claude: Draft Script (Stage 1)": 120000,
-            "Claude: Editorial Rewrite (Stage 2)": 120000,
             "Claude: Visual Director": 180000,
             "ElevenLabs: TTS+Timestamps": 60000,
             "Resolve B-roll": 180000,
@@ -247,7 +245,7 @@ def audit() -> None:
         if 'thinking: { type: "disabled" }' not in visual_body:
             die("Visual Director adaptive thinking still competes with complete JSON output")
 
-        parser_names = ["Parse Topic Pool", "Extract Generated Topic", "Parse Draft JSON", "Parse Editorial For Visual Director", "Validate Final Script"]
+        parser_names = ["Parse Topic Pool", "Extract Generated Topic", "Parse Draft JSON", "Validate Final Script"]
         for name in parser_names:
             code = names[name]["parameters"]["jsCode"]
             for marker in ["ANTHROPIC_TEXT_BLOCK_GUARD", "LAST_VALID_JSON_OBJECT"]:
@@ -284,19 +282,19 @@ def audit() -> None:
         if draft.get("json", {}).get("draft", {}).get("hook") != "A complete hook":
             die("draft parser did not reassemble split text blocks")
 
-        editorial_good = {"hook": "Corrected editorial hook", "scenes": [{"scene_index": 0, "point": "p", "narration": "enough narration"}]}
-        editorial_text = '{"hook":"broken",]\nWait, corrected JSON follows.\n' + json.dumps(editorial_good)
-        editorial = assert_ok(run_code_node(names["Parse Editorial For Visual Director"]["parameters"]["jsCode"], {
-            "content": [{"type": "text", "text": editorial_text}], "stop_reason": "end_turn"
-        }), "editorial self-correction")
-        if editorial.get("json", {}).get("script", {}).get("hook") != "Corrected editorial hook":
-            die("editorial parser did not choose the corrected JSON object")
+        draft_good = {"hook": "Corrected draft hook", "scenes": [{"scene_index": 0, "point": "p", "narration": "enough narration"}]}
+        draft_text = '{"hook":"broken",]\nWait, corrected JSON follows.\n' + json.dumps(draft_good)
+        draft_corrected = assert_ok(run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], {
+            "content": [{"type": "text", "text": draft_text}], "stop_reason": "end_turn"
+        }), "draft self-correction")
+        if draft_corrected.get("json", {}).get("draft", {}).get("hook") != "Corrected draft hook":
+            die("draft parser did not choose the corrected JSON object")
 
-        truncated = run_code_node(names["Parse Editorial For Visual Director"]["parameters"]["jsCode"], {
+        truncated = run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], {
             "content": [{"type": "text", "text": '{"hook":"cut off"'}], "stop_reason": "max_tokens"
         })
         if truncated.get("ok") or "max_tokens" not in truncated.get("error", ""):
-            die("editorial max_tokens truncation is not diagnosed explicitly")
+            die("draft max_tokens truncation is not diagnosed explicitly")
 
         final_script = good_script(sparse_queries=True)
         final_text = '{"hook":"bad",]\nSelf-correcting.\n' + json.dumps(final_script)
