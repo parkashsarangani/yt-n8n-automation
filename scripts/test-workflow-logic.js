@@ -546,6 +546,30 @@ function main() {
   check('Visual Director prompt requires its own fields (first_frame_type, search_queries) as REQUIRED',
     nodes['Claude: Visual Director'].parameters.jsonBody.includes('first_frame_type is required'));
 
+  // Consistency audit findings: Draft Script and Editorial Rewrite both used
+  // to describe a "visual_type: ai" option (AI image generation) that Visual
+  // Director's own prompt explicitly says does not exist ("The renderer has
+  // NO AI image/video generator"). A downstream normalizer silently forced
+  // 'ai' back to 'real', but the stale guidance still steered Draft/Editorial
+  // toward beats/wording judged "impossible to photograph" on the (false)
+  // assumption AI would render them - those then get force-converted to a
+  // real-stock search that, by construction, has nothing good to find.
+  check('Draft Script no longer describes a non-existent AI-image-generation option',
+    !nodes['Claude: Draft Script (Stage 1)'].parameters.jsonBody.includes("Reserve 'ai' ONLY") &&
+    nodes['Claude: Draft Script (Stage 1)'].parameters.jsonBody.includes('there is NO AI image or video generator'));
+  check('Editorial Rewrite no longer references a non-existent "AI fallback" render path',
+    !nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('visual_prompt as the AI fallback') &&
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('there is no AI image or video generator'));
+  // Draft Script's SELF-REVIEW checklist used to assert a fixed "60-90 words
+  // across 3-4 scenes" target that directly contradicted the explicit
+  // "LENGTH IS YOUR CALL, NOT A FIXED TARGET" policy earlier in the same
+  // prompt (which allows 40-190 words / 3+ scenes based on what the topic
+  // earns) - the self-review checklist, read last, could silently override
+  // the flexible-length design intent.
+  check('Draft Script self-review checklist no longer contradicts the flexible-length policy',
+    !nodes['Claude: Draft Script (Stage 1)'].parameters.jsonBody.includes('Total narration 60-90 words across 3-4 scenes') &&
+    nodes['Claude: Draft Script (Stage 1)'].parameters.jsonBody.includes('not a fixed 60-90/3-4 target'));
+
   // -------------------------------------------------------------------
   console.log('\n' + '='.repeat(70));
   console.log(`${pass} passed, ${fail} failed`);
