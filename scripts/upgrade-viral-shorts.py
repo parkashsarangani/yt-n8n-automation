@@ -147,6 +147,10 @@ def patch_editor_prompt(node: dict) -> None:
     draft_new = (
         "External research leads: \\\" + JSON.stringify($('Normalize Research Evidence').item.json.research_evidence || []) + \\\""
         "\\nTopic-selection first-frame concept: \\\" + ($('Normalize Research Evidence').item.json.first_frame_concept || '') + \\\""
+        "\\n\\nFINAL REMINDER before you read the draft below: the topic/subject/fact in it is fixed and non-negotiable. "
+        "You are editing THIS ONE script - rewrite its wording, structure, hook, anything - but never replace it with a "
+        "different topic or fact, no matter how strong an alternative idea seems. A weak topic fails the quality gate below; "
+        "it does not get silently swapped out."
         "\\n\\nDraft to edit:\\n\\\" + JSON.stringify($json.draft) + \\\""
     )
     body = replace_once(body, draft_anchor, draft_new, "editor research input")

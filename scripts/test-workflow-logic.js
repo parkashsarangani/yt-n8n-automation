@@ -352,9 +352,14 @@ function main() {
         quality,
       };
     }
+    // These scenes use generic placeholder text with no real topic, so mock
+    // Extract Generated Topic with an empty topic - the topic-substitution
+    // backstop below intentionally skips its check when there is nothing to
+    // compare against, keeping these unrelated-rule tests unaffected.
+    const noTopicDollar = (name) => (name === 'Extract Generated Topic' ? { item: { json: { topic: '' } } } : { item: { json: {} } });
     function validate(quality) {
       const response = { content: [{ type: 'text', text: JSON.stringify(buildScript(quality)) }], stop_reason: 'end_turn' };
-      return runNodeCode(nodes, 'Validate Final Script', response);
+      return runNodeCode(nodes, 'Validate Final Script', response, { $: noTopicDollar });
     }
 
     const passing = validate(goodQuality());
@@ -388,9 +393,49 @@ function main() {
     const scriptWithStrayTemplatePrompt = buildScript(goodQuality());
     scriptWithStrayTemplatePrompt.scenes = [scene, templateSceneWithStrayPrompt, { ...scene, scene_index: 2 }];
     const strayResponse = { content: [{ type: 'text', text: JSON.stringify(scriptWithStrayTemplatePrompt) }], stop_reason: 'end_turn' };
-    const strayResult = runNodeCode(nodes, 'Validate Final Script', strayResponse);
+    const strayResult = runNodeCode(nodes, 'Validate Final Script', strayResponse, { $: noTopicDollar });
     check('a template scene with a stray visual_prompt is not flagged by the readable-text guard (templates never hit AI image generation)',
       strayResult.json._scriptValid === true, JSON.stringify(strayResult.json._validationErrors));
+
+    // Regression test: production incident (execution 644) where Editorial
+    // Rewrite discarded the selected topic (brain surgery / no pain
+    // receptors in the brain) and substituted an unrelated, structurally
+    // valid script ("The Ocean Floor Has a Layer of Solid Gold Nobody Can
+    // Mine") that would otherwise pass every other check here silently.
+    const substitutedTopicScript = buildScript(goodQuality());
+    Object.assign(substitutedTopicScript, {
+      hook: 'There is enough gold dissolved in the ocean to give every person on Earth nine pounds of it',
+      title: 'The Ocean Floor Has a Layer of Solid Gold Nobody Can Mine',
+    });
+    const seedTopicDollar = (name) => (name === 'Extract Generated Topic'
+      ? { item: { json: { topic: 'Your tongue can taste and your hands can feel, but you have zero pain receptors inside your brain, so surgeons can operate on a fully conscious brain and the patient feels nothing.' } } }
+      : { item: { json: {} } });
+    const substitutedResponse = { content: [{ type: 'text', text: JSON.stringify(substitutedTopicScript) }], stop_reason: 'end_turn' };
+    const substitutedResult = runNodeCode(nodes, 'Validate Final Script', substitutedResponse, { $: seedTopicDollar });
+    check('a script substituting a completely different topic than the one selected is rejected',
+      substitutedResult.json._scriptValid === false &&
+      substitutedResult.json._validationErrors.some((e) => e.includes('different topic than the one selected')),
+      JSON.stringify(substitutedResult.json._validationErrors));
+
+    // Same seed topic, legitimately heavily rewritten (different vocabulary,
+    // same subject) must NOT be flagged - the backstop should not punish
+    // aggressive rewrites that stay on-topic.
+    const sameTopicRewrite = buildScript(goodQuality());
+    Object.assign(sameTopicRewrite, {
+      hook: 'A single underwater mountain chain circles the planet and dwarfs every range standing on dry land',
+      title: 'The Hidden Ridge Bigger Than Everest Combined',
+    });
+    const oceanTopicDollar = (name) => (name === 'Extract Generated Topic'
+      ? { item: { json: { topic: 'There is a mountain range on Earth longer than the Andes, Rockies, and Himalayas combined, and it is hiding under the ocean.' } } }
+      : { item: { json: {} } });
+    const sameTopicResponse = { content: [{ type: 'text', text: JSON.stringify(sameTopicRewrite) }], stop_reason: 'end_turn' };
+    const sameTopicResult = runNodeCode(nodes, 'Validate Final Script', sameTopicResponse, { $: oceanTopicDollar });
+    check('a heavily reworded script that stays on the same topic is not flagged as a substitution',
+      !(sameTopicResult.json._validationErrors || []).some((e) => e.includes('different topic than the one selected')),
+      JSON.stringify(sameTopicResult.json._validationErrors));
+
+    check('Editorial Rewrite prompt reinforces the no-substitution rule immediately next to the actual draft, not only at the top',
+      nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('FINAL REMINDER before you read the draft below'));
   }
 
   // -------------------------------------------------------------------
