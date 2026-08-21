@@ -196,6 +196,12 @@ def add_visual_director(w: dict) -> None:
     # Director already performs its own independent quality critique and
     # grading pass, so nothing load-bearing is lost.
     w["nodes"] = [n for n in w["nodes"] if n.get("name") not in ("Claude: Editorial Rewrite (Stage 2)", EDITOR_PARSE_NODE)]
+    # n8n's API rejects the whole workflow (400 unknown_connection_source) if
+    # the connections dict still has a key naming a deleted node, even though
+    # nothing points at it - deleting the node is not enough, the dangling
+    # source entry inherited from the base workflow must go too.
+    w.get("connections", {}).pop("Claude: Editorial Rewrite (Stage 2)", None)
+    w.get("connections", {}).pop(EDITOR_PARSE_NODE, None)
     names = {n.get("name") for n in w.get("nodes", [])}
     writer = node_by_name(w, "Claude: Draft Script (Stage 1)")
     if VISUAL_NODE not in names:

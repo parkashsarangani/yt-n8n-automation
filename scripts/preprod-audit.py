@@ -207,6 +207,24 @@ def audit() -> None:
         workflow = build_workflow(tmp)
         names = {n["name"]: n for n in workflow["nodes"]}
 
+        # n8n's deploy API rejects the whole workflow (400
+        # unknown_connection_source) if the connections dict has a key or a
+        # target naming a node that isn't in the nodes array - e.g. a node
+        # deletion that cleaned up the node itself but left a dangling
+        # connections entry inherited from an earlier patch stage. Neither
+        # this script's other checks nor the local JS test suite talk to a
+        # real n8n instance, so this is the only local check that catches it
+        # before a deploy actually fails against the live API.
+        node_names = set(names.keys())
+        for src in workflow.get("connections", {}):
+            if src not in node_names:
+                die(f"dangling connection source: {src!r} does not reference an existing node")
+        for src, out in workflow.get("connections", {}).items():
+            for branch in out.get("main", []):
+                for edge in branch or []:
+                    if edge.get("node") not in node_names:
+                        die(f"dangling connection target: {src!r} -> {edge.get('node')!r} does not reference an existing node")
+
         expected_edges = {
             "Claude: Generate Topic": "Parse Topic Pool",
             "Parse Topic Pool": "Claude: Commission Topic Shortlist",
