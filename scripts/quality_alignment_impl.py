@@ -108,7 +108,12 @@ def patch_visual_director(workflow: dict) -> None:
         "gate on the exact checks below. Fix precisely these issues while "
         "preserving everything else that already worked, especially every "
         "scene's scene_index/point and full_script consistency. Do not "
-        'start over or change the topic.\\n\\nFAILED CHECKS: " + '
+        "start over or change the topic. For every field named in a failed "
+        "check below (most commonly a scene's narration), the input SCRIPT "
+        "already has that field missing, empty, or too short - preserving "
+        "it unchanged would just fail the same check again. You MUST write "
+        "real, complete content for that exact field; a still-missing field "
+        "is a repair failure, not a preserved one.\\n\\nFAILED CHECKS: " + '" + '
         "JSON.stringify($('Validate Final Script').item.json._validationErrors || []) + \""
         "\\n\\n" + phase1_anchor
     )

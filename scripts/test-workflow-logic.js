@@ -409,6 +409,23 @@ function main() {
     check('Repair Script prompt embeds the actual failure reason', content.includes('quality.hook_strength=65'));
     check('Repair Script node is bounded to a single attempt (no silent 3x retry cost)',
       nodes['Claude: Repair Script'].retryOnFail === false && nodes['Claude: Repair Script'].maxTries === 1);
+
+    // Regression test: production incident where the repair pass received
+    // "scene 0 narration too short/missing" but returned scenes with the
+    // narration field omitted entirely, twice in a row. The prompt must
+    // explicitly instruct Claude to write real content for a field a failed
+    // check names, not just "preserve everything unchanged".
+    const narrationFailedScript = { hook: 'h', scenes: [{ scene_index: 0, point: 'p' }] };
+    const narrationErrors = ['scene 0 narration too short/missing', 'total narration word count (0) is under the 30 word floor - too thin to be a real story.'];
+    function fakeDollarNarration(name) {
+      if (name === 'Validate Final Script') return { item: { json: { _failedScript: narrationFailedScript, _validationErrors: narrationErrors } } };
+      return { item: { json: {} } };
+    }
+    const rawNarration = new Function('$', '$json', 'return ' + expr)(fakeDollarNarration, {});
+    const contentNarration = JSON.parse(rawNarration).messages[0].content;
+    check('Repair Script prompt embeds a missing-narration failure reason', contentNarration.includes('scene 0 narration too short/missing'));
+    check('Repair Script prompt explicitly instructs writing real content for a flagged-missing field, not just preserving fields unchanged',
+      contentNarration.includes('You MUST write real, complete content'));
   }
 
   // -------------------------------------------------------------------
