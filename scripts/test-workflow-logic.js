@@ -375,6 +375,22 @@ function main() {
     const hasOverallError = consistent.json._validationErrors && consistent.json._validationErrors.some((e) => e.includes('overall'));
     check('consistent overall (within 5 of weakest dimension) is not flagged by the overall-consistency check', !hasOverallError,
       JSON.stringify(consistent.json._validationErrors));
+
+    // Regression test: production incident where the repair pass added a
+    // visual_prompt to a template scene that never needed one (templates
+    // render as deterministic graphics, never through AI image generation),
+    // and its wording happened to match the readable-text guard - failing
+    // the run over a check that should never apply to template scenes.
+    const templateSceneWithStrayPrompt = {
+      ...scene, scene_index: 1, visual_source: 'template', template_name: 'kinetic_text', template_data: { line: 'x' },
+      visual_prompt: 'Kinetic text template: a small teaspoon icon showing a readable comparison label',
+    };
+    const scriptWithStrayTemplatePrompt = buildScript(goodQuality());
+    scriptWithStrayTemplatePrompt.scenes = [scene, templateSceneWithStrayPrompt, { ...scene, scene_index: 2 }];
+    const strayResponse = { content: [{ type: 'text', text: JSON.stringify(scriptWithStrayTemplatePrompt) }], stop_reason: 'end_turn' };
+    const strayResult = runNodeCode(nodes, 'Validate Final Script', strayResponse);
+    check('a template scene with a stray visual_prompt is not flagged by the readable-text guard (templates never hit AI image generation)',
+      strayResult.json._scriptValid === true, JSON.stringify(strayResult.json._validationErrors));
   }
 
   // -------------------------------------------------------------------
