@@ -530,6 +530,15 @@ function main() {
     nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('EVERY SINGLE SCENE, no exceptions, must keep BOTH a scene_index'));
   check('Editorial Rewrite prompt requires payoff.claim and title bounds',
     nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('payoff must be an object with a real claim string'));
+  // Regression test: production incident where Editorial Rewrite discarded
+  // the given draft's topic entirely and substituted a different one - traced
+  // across ~20 real executions and found happening on effectively every run,
+  // all converging on a small set of "safe" extreme-science facts (ocean
+  // depths/mountain ranges, "hotter than the sun" comparisons) regardless of
+  // the actual topic it was given. The prompt must explicitly forbid this.
+  check('Editorial Rewrite prompt explicitly forbids discarding the draft and substituting a different topic',
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('never to discard it and write about a different topic') &&
+    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('never substitute a different topic or fact'));
   check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
     nodes['Claude: Visual Director'].parameters.jsonBody.includes('Preserve/rebuild hook_candidates, caption_style, trigger, payoff, quality'));
   check('Visual Director prompt explicitly protects per-scene scene_index/point from being dropped',
