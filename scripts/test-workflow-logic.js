@@ -164,6 +164,28 @@ function main() {
   check('Claude: Editorial Rewrite (Stage 2) no longer exists in the graph', !nodes['Claude: Editorial Rewrite (Stage 2)']);
   check('Parse Editorial For Visual Director no longer exists in the graph', !nodes['Parse Editorial For Visual Director']);
 
+  // n8n's deploy API rejects the whole workflow (400 unknown_connection_source)
+  // if the connections dict has a key or a target naming a node that isn't in
+  // the nodes array - production incident: a node deletion cleaned up the
+  // node itself but left a dangling connections entry inherited from an
+  // earlier patch stage, and the deploy failed against the real n8n API even
+  // though every other local check (including preprod-audit.py at the time)
+  // passed, since none of them talk to a real n8n instance.
+  {
+    const nodeNameSet = new Set(Object.keys(nodes));
+    const danglingSources = Object.keys(c).filter((src) => !nodeNameSet.has(src));
+    check('no connection source references a deleted node', danglingSources.length === 0, JSON.stringify(danglingSources));
+    const danglingTargets = [];
+    for (const [src, out] of Object.entries(c)) {
+      for (const branch of out.main || []) {
+        for (const edge of branch || []) {
+          if (!nodeNameSet.has(edge.node)) danglingTargets.push(`${src} -> ${edge.node}`);
+        }
+      }
+    }
+    check('no connection target references a deleted node', danglingTargets.length === 0, JSON.stringify(danglingTargets));
+  }
+
   // -------------------------------------------------------------------
   section('2. Request timeouts (the hung-execution bug)');
   // -------------------------------------------------------------------
