@@ -77,11 +77,6 @@ def patch_draft_parser(workflow: dict) -> None:
     node["parameters"]["jsCode"] = replace_required(code, old_invalid, new_invalid, "draft complete-script guard")
 
 
-def patch_editor_parser(workflow: dict) -> None:
-    node = node_by_name(workflow, "Parse Editorial For Visual Director")
-    node["parameters"]["jsCode"] = f"""const response=$input.first().json;\nif(response.error)throw new Error('Editorial API error: '+JSON.stringify(response.error));\n{robust_text_extract('Editorial API response')}\nif(response.stop_reason==='max_tokens')throw new Error('Editorial API hit max_tokens with partial text - the JSON response was truncated before completion');\nraw=raw.replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'').trim();\n{last_valid_json_js()}\nconst parsed=parseLastValidJsonObject(raw);\nif(!parsed||typeof parsed.hook!=='string'||!Array.isArray(parsed.scenes))throw new Error('Editorial pass returned no valid complete script JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');\nreturn {{json:{{script:parsed}}}};"""
-
-
 def patch_final_parser(workflow: dict) -> None:
     node = node_by_name(workflow, "Validate Final Script")
     code = node["parameters"]["jsCode"]
@@ -165,7 +160,6 @@ def upgrade(workflow: dict) -> dict:
     patch_topic_pool_parser(workflow)
     patch_commission_parser(workflow)
     patch_draft_parser(workflow)
-    patch_editor_parser(workflow)
     patch_final_parser(workflow)
     patch_visual_schema_normalizer(workflow)
     patch_runtime_guardrails(workflow)
@@ -180,7 +174,7 @@ def main() -> None:
     upgraded = upgrade(workflow)
     names = {n.get("name"): n for n in upgraded.get("nodes", [])}
 
-    for parser_name in ["Parse Topic Pool", "Extract Generated Topic", "Parse Draft JSON", "Parse Editorial For Visual Director", "Validate Final Script"]:
+    for parser_name in ["Parse Topic Pool", "Extract Generated Topic", "Parse Draft JSON", "Validate Final Script"]:
         code = names[parser_name]["parameters"]["jsCode"]
         if MARKER not in code or JSON_RECOVERY_MARKER not in code:
             raise RuntimeError(f"Anthropic JSON hardening did not land in {parser_name}")

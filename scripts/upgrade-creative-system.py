@@ -163,7 +163,7 @@ return {json:{pool,shortlist:pool.slice(0,4)}};"""},
     ex["parameters"]["jsCode"] = replace_once(code, old_ret, new_ret, "topic commission return")
 
 
-def patch_writer_editor(w: dict) -> None:
+def patch_writer(w: dict) -> None:
     voice = voice_bible().replace('"', '\\"')
     writer = node_by_name(w, "Claude: Draft Script (Stage 1)")
     body = writer["parameters"]["jsonBody"]
@@ -179,44 +179,31 @@ def patch_writer_editor(w: dict) -> None:
     if topic_anchor in body:
         body = body.replace(topic_anchor, 'Topic: \" + $json.topic + \"\\nConcept archetype: \" + ($json.archetype || \'looks_fake_but_real\') + \"\\nFirst-frame concept from selection:', 1)
     writer["parameters"]["jsonBody"] = body
-
-    editor = node_by_name(w, "Claude: Editorial Rewrite (Stage 2)")
-    body = editor["parameters"]["jsonBody"]
-    if "ENGAGEMENT OPTIONAL - CREATIVE_SYSTEM" not in body:
-        # The quality-gate stage has already prefixed the draft with its research-evidence block.
-        anchor = "External research leads:"
-        rules = (
-            "20. ENGAGEMENT OPTIONAL - CREATIVE_SYSTEM: keep a comment question or share outro only when it improves the Short. If removing one improves the ending/middle, remove its spoken line and set comment_hook/outro_line to null.\\n\\n"
-            "21. CHANNEL VOICE - CREATIVE_SYSTEM: judge the rewrite against this voice bible: " + voice + "\\n\\n"
-            "22. STRUCTURAL FIELD INTEGRITY - CREATIVE_SYSTEM (this is the single most common reason a Short gets discarded - do this check LAST, after every other rewrite, as a literal top-to-bottom pass over your own output, not an afterthought):\\n"
-            "- caption_style must be EXACTLY one of upbeat, serious, funny, neutral - no other word.\\n"
-            "- trigger must be EXACTLY one of curiosity_gap, disbelief, fear_stakes, scale_shock, taboo_secret - no other word.\\n"
-            "- hook must be 5-200 characters. title must be 5-60 characters.\\n"
-            "- hook_candidates, if present, must stay an array of 3-6 strings - never fewer, never more.\\n"
-            "- payoff must be an object with a real claim string (the specific promise the hook makes, at least 5 characters - never omit this, it is not optional) and a resolved_in_scene number matching an actual scene_index.\\n"
-            "- EVERY SINGLE SCENE, no exceptions, must keep BOTH a scene_index (integer, starting at 0, renumbered sequentially and contiguously if you cut or added scenes - never skip, repeat, or drop a number) AND a point (a short phrase, at least 3 characters, stating what that scene establishes). These two fields are the most frequently dropped in the entire pipeline - if you rewrote, reordered, cut, or added any scene, re-verify scene_index and point are still present on literally every scene before returning.\\n"
-            "If any of the above is missing or wrong, fix it to the closest correct value - do not leave it missing, blank, or slightly off.\\n\\n" + anchor
-        )
-        body = replace_once(body, anchor, rules, "editor archetype rules")
-    body = body.replace("naturalness, overall. Grade against the best Shorts", "naturalness, distinctiveness, voice_specificity, overall. Grade against the best Shorts")
-    editor["parameters"]["jsonBody"] = body
+    # EDITORIAL_STAGE_REMOVED: the editor-specific patching (archetype rules,
+    # voice-bible re-check, structural field integrity) used to live here.
+    # That stage no longer exists (see add_visual_director) - Visual Director
+    # now owns structural field integrity and voice/quality grading directly
+    # against Draft Script's own output.
 
 
 def add_visual_director(w: dict) -> None:
+    # EDITORIAL_STAGE_REMOVED: Claude: Editorial Rewrite (Stage 2) and its
+    # parser node are deleted entirely. Editorial repeatedly discarded the
+    # given draft's topic and substituted an unrelated one in production -
+    # confirmed on multiple executions, still recurring even after two
+    # rounds of explicit prompt instructions plus a deterministic validation
+    # backstop. Draft Script -> Visual Director directly now; Visual
+    # Director already performs its own independent quality critique and
+    # grading pass, so nothing load-bearing is lost.
+    w["nodes"] = [n for n in w["nodes"] if n.get("name") not in ("Claude: Editorial Rewrite (Stage 2)", EDITOR_PARSE_NODE)]
     names = {n.get("name") for n in w.get("nodes", [])}
-    editor = node_by_name(w, "Claude: Editorial Rewrite (Stage 2)")
-    if EDITOR_PARSE_NODE not in names:
-        w["nodes"].append({
-            "id": "02939380-89c9-4580-ad8b-280d2402f6f8", "name": EDITOR_PARSE_NODE,
-            "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [4800, 300],
-            "parameters": {"jsCode": """const response=$input.first().json;if(response.error)throw new Error('Editorial API error: '+JSON.stringify(response.error));let raw=String(response.content?.[0]?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');function x(s){const a=s.indexOf('{');if(a<0)return null;let d=0,q=false,e=false;for(let i=a;i<s.length;i++){const c=s[i];if(q){if(e)e=false;else if(c==='\\\\')e=true;else if(c==='\"')q=false;}else if(c==='\"')q=true;else if(c==='{')d++;else if(c==='}'&&--d===0)return s.slice(a,i+1);}return null;}let p;for(const c of [raw,'{'+raw,x(raw),x('{'+raw)]){if(!c)continue;try{p=JSON.parse(c);break;}catch{}}if(!p)throw new Error('Editorial pass returned invalid JSON');return {json:{script:p}};"""},
-        })
+    writer = node_by_name(w, "Claude: Draft Script (Stage 1)")
     if VISUAL_NODE not in names:
-        v = copy.deepcopy(editor)
+        v = copy.deepcopy(writer)
         v["id"] = "f5bc27a1-e53c-4a35-88e4-b89898f9eb5b"
         v["name"] = VISUAL_NODE
         v["position"] = [5100, 300]
-        v["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, output_config: { effort: "medium" }, messages: [{ role: "user", content: "You are the VISUAL DIRECTOR for a high-end YouTube Shorts channel. Editorial is locked. Do NOT change hook, hook_candidates, hook_type, title, seo_description, tags, comment_hook, outro_line, full_script, narration text, payoff, caption_style, trigger, quality, scene order, or scene count - copy every one of these fields through byte-for-byte exactly as given in SCRIPT, even the ones you are not directly working with. This includes EVERY scene's scene_index and point fields specifically - these two are the most frequently dropped fields in the whole pipeline when scenes get rebuilt to add visual fields, so copy them through explicitly, unchanged, on every single scene.\n\nSCRIPT: " + JSON.stringify($json.script) + "\n\nChoose one creative_format: documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Scene 0 must work muted; set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat - this is REQUIRED, never leave it unset. Assign each content scene visual_role = hero/evidence/detail/comparison/breath/payoff. For each stock scene, REQUIRED: add 3-4 DISTINCT concrete search_queries (2-5 words, at least 2 required) and set stock_search_query to the strongest - never leave a stock scene without both. Preserve named_subject for exact real entities. Use templates only when the beat is fundamentally a number/comparison/punchy line. Choose caption_mode = karaoke/key_phrases/minimal. Set transition_style=hard_cut. Carry the editor CTA decision through and set engagement_mode=none/comment_only/share_only/comment_and_share; do not invent a CTA. Set open_loop_count honestly (usually 0-2). Set visual_plan_quality 0-100; generic scene 0 or repetitive roles must score below 78. Before returning, verify as a final pass: every scene still has its original scene_index and point; every stock scene has stock_search_query and at least 2 search_queries; first_frame_type is set. Return ONLY the COMPLETE script JSON: every field from the input SCRIPT copied through exactly (hook_candidates, caption_style, trigger, quality, and every scene's scene_index/point are the fields most often accidentally dropped while focusing on the new visual fields below - double check they are all still present and unchanged) plus these new visual fields added." }] }) }}'''
+        v["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, output_config: { effort: "medium" }, messages: [{ role: "user", content: "You are the VISUAL DIRECTOR for a high-end YouTube Shorts channel. Do NOT change hook, hook_candidates, hook_type, title, seo_description, tags, comment_hook, outro_line, full_script, narration text, payoff, caption_style, trigger, quality, scene order, or scene count - copy every one of these fields through byte-for-byte exactly as given in SCRIPT, even the ones you are not directly working with. This includes EVERY scene's scene_index and point fields specifically - these two are the most frequently dropped fields in the whole pipeline when scenes get rebuilt to add visual fields, so copy them through explicitly, unchanged, on every single scene.\n\nSCRIPT: " + JSON.stringify($json.draft) + "\n\nChoose one creative_format: documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Scene 0 must work muted; set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat - this is REQUIRED, never leave it unset. Assign each content scene visual_role = hero/evidence/detail/comparison/breath/payoff. For each stock scene, REQUIRED: add 3-4 DISTINCT concrete search_queries (2-5 words, at least 2 required) and set stock_search_query to the strongest - never leave a stock scene without both. Preserve named_subject for exact real entities. Use templates only when the beat is fundamentally a number/comparison/punchy line. Choose caption_mode = karaoke/key_phrases/minimal. Set transition_style=hard_cut. Carry the CTA decision through and set engagement_mode=none/comment_only/share_only/comment_and_share; do not invent a CTA. Set open_loop_count honestly (usually 0-2). Set visual_plan_quality 0-100; generic scene 0 or repetitive roles must score below 78. Before returning, verify as a final pass: every scene still has its original scene_index and point; every stock scene has stock_search_query and at least 2 search_queries; first_frame_type is set. Return ONLY the COMPLETE script JSON: every field from the input SCRIPT copied through exactly (hook_candidates, caption_style, trigger, quality, and every scene's scene_index/point are the fields most often accidentally dropped while focusing on the new visual fields below - double check they are all still present and unchanged) plus these new visual fields added." }] }) }}'''
         v["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(v)
     if REPAIR_NODE not in names:
@@ -225,7 +212,7 @@ def add_visual_director(w: dict) -> None:
         # discarding the topic and starting a brand-new generation from scratch.
         # jsonBody gets its real content from quality_alignment_impl.patch_visual_director,
         # which builds it from the same template as Visual Director's prompt.
-        r = copy.deepcopy(editor)
+        r = copy.deepcopy(writer)
         r["id"] = "9b7b6a2b-7a7f-4b3f-9a4a-2f8b6e1c9a3d"
         r["name"] = REPAIR_NODE
         r["position"] = [5100, 500]
@@ -233,8 +220,7 @@ def add_visual_director(w: dict) -> None:
         r["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(r)
     c = w.setdefault("connections", {})
-    c["Claude: Editorial Rewrite (Stage 2)"] = {"main": [[{"node": EDITOR_PARSE_NODE, "type": "main", "index": 0}]]}
-    c[EDITOR_PARSE_NODE] = {"main": [[{"node": VISUAL_NODE, "type": "main", "index": 0}]]}
+    c["Parse Draft JSON"] = {"main": [[{"node": VISUAL_NODE, "type": "main", "index": 0}]]}
     c[VISUAL_NODE] = {"main": [[{"node": "Validate Final Script", "type": "main", "index": 0}]]}
     c[REPAIR_NODE] = {"main": [[{"node": "Validate Final Script", "type": "main", "index": 0}]]}
     # REPAIR_LOOP_V1: a failed quality gate now revises the same script instead
@@ -325,7 +311,7 @@ def patch_performance_log(w: dict) -> None:
 def upgrade(w: dict) -> dict:
     patch_topic_search(w)
     add_topic_commissioning(w)
-    patch_writer_editor(w)
+    patch_writer(w)
     add_visual_director(w)
     patch_validator(w)
     patch_broll_and_payload(w)

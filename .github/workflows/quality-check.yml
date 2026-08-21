@@ -74,11 +74,13 @@ jobs:
           assert any(e['node'] == 'Wikipedia: Research Topic' for e in c['Extract Generated Topic']['main'][0])
           assert first('Wikipedia: Research Topic') == 'Normalize Research Evidence'
           assert first('Normalize Research Evidence') == 'Claude: Draft Script (Stage 1)'
-          assert first('Claude: Editorial Rewrite (Stage 2)') == 'Parse Editorial For Visual Director'
-          assert first('Parse Editorial For Visual Director') == 'Claude: Visual Director'
+          assert first('Claude: Draft Script (Stage 1)') == 'Parse Draft JSON'
+          assert first('Parse Draft JSON') == 'Claude: Visual Director'
           assert first('Claude: Visual Director') == 'Validate Final Script'
 
           names = {n['name']: n for n in w['nodes']}
+          assert 'Claude: Editorial Rewrite (Stage 2)' not in names, 'Editorial Rewrite stage should have been removed'
+          assert 'Parse Editorial For Visual Director' not in names, 'Editorial parser node should have been removed'
           topic = names['Claude: Generate Topic']
           topic_body = topic['parameters']['jsonBody']
           assert 'TOPIC_LATENCY' in topic_body
@@ -98,7 +100,7 @@ jobs:
           assert 'thinking: { type: "disabled" }' in visual['parameters']['jsonBody']
           assert names['Resolve B-roll']['parameters']['options']['timeout'] == 180000
 
-          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
+          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
               assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
               assert 'LAST_VALID_JSON_OBJECT' in code, node_name
@@ -147,16 +149,14 @@ jobs:
           assertItem(run('Parse Topic Pool', { content: [{ type: 'text', text: JSON.stringify({ candidates }) }], stop_reason: 'end_turn' }), 'Parse Topic Pool happy path');
 
           const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
-          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
+          const draft = run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
+          assertItem(draft, 'Parse Draft JSON happy path');
+          if (!draft || !draft.json || !draft.json.draft) throw new Error('Parse Draft JSON did not return {json:{draft}}');
 
-          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
-          assertItem(editorial, 'Parse Editorial For Visual Director happy path');
-          if (!editorial || !editorial.json || !editorial.json.script) throw new Error('Parse Editorial For Visual Director did not return {json:{script}}');
-
-          const corrected = run('Parse Editorial For Visual Director', {
+          const draftCorrected = run('Parse Draft JSON', {
             content: [{ type: 'text', text: '{"hook":"bad",]\nWait\n' + JSON.stringify(script) }], stop_reason: 'end_turn'
           });
-          if (corrected.json.script.hook !== script.hook) throw new Error('Editorial parser did not choose final corrected JSON');
+          if (draftCorrected.json.draft.hook !== script.hook) throw new Error('Draft parser did not choose final corrected JSON');
 
           console.log('Executable parser smoke tests OK');
           JS

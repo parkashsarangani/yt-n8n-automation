@@ -46,11 +46,6 @@ EXPECTED_NODE_CONTRACTS = {
         "single_attempt": True,
         "body_markers": ("QUALITY_ALIGNMENT WRITER",),
     },
-    "Claude: Editorial Rewrite (Stage 2)": {
-        "timeout": 120000,
-        "single_attempt": True,
-        "body_markers": ("QUALITY_ALIGNMENT EDITOR",),
-    },
     "Claude: Visual Director": {
         "timeout": 180000,
         "single_attempt": True,

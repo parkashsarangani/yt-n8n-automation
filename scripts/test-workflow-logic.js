@@ -158,9 +158,11 @@ function main() {
   check('topic chain: Generate Topic -> Parse Topic Pool', first('Claude: Generate Topic') === 'Parse Topic Pool');
   check('topic chain: Parse Topic Pool -> Commission Shortlist', first('Parse Topic Pool') === 'Claude: Commission Topic Shortlist');
   check('topic chain: Commission Shortlist -> Extract Generated Topic', first('Claude: Commission Topic Shortlist') === 'Extract Generated Topic');
-  check('script chain: Editorial Rewrite -> Parse Editorial', first('Claude: Editorial Rewrite (Stage 2)') === 'Parse Editorial For Visual Director');
-  check('script chain: Parse Editorial -> Visual Director', first('Parse Editorial For Visual Director') === 'Claude: Visual Director');
+  check('script chain: Draft Script -> Parse Draft JSON', first('Claude: Draft Script (Stage 1)') === 'Parse Draft JSON');
+  check('script chain: Parse Draft JSON -> Visual Director (Editorial Rewrite removed)', first('Parse Draft JSON') === 'Claude: Visual Director');
   check('script chain: Visual Director -> Validate Final Script', first('Claude: Visual Director') === 'Validate Final Script');
+  check('Claude: Editorial Rewrite (Stage 2) no longer exists in the graph', !nodes['Claude: Editorial Rewrite (Stage 2)']);
+  check('Parse Editorial For Visual Director no longer exists in the graph', !nodes['Parse Editorial For Visual Director']);
 
   // -------------------------------------------------------------------
   section('2. Request timeouts (the hung-execution bug)');
@@ -171,7 +173,6 @@ function main() {
     'Claude: Visual Director': 180000,
     'Claude: Repair Script': 180000,
     'Claude: Draft Script (Stage 1)': 120000,
-    'Claude: Editorial Rewrite (Stage 2)': 120000,
     'ElevenLabs: TTS+Timestamps': 60000,
   };
   for (const [name, expected] of Object.entries(timeoutExpectations)) {
@@ -296,19 +297,15 @@ function main() {
   }
 
   // -------------------------------------------------------------------
-  section('5. Parse Draft JSON / Parse Editorial For Visual Director (undefined-return bug)');
+  section('5. Parse Draft JSON (undefined-return bug)');
   // -------------------------------------------------------------------
   {
     const draftOk = { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' };
     const r1 = runNodeCode(nodes, 'Parse Draft JSON', draftOk);
     check('Parse Draft JSON returns a real item, not undefined', r1 !== undefined && r1.json && r1.json.draft.hook === 'h');
 
-    const editOk = { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' };
-    const r2 = runNodeCode(nodes, 'Parse Editorial For Visual Director', editOk);
-    check('Parse Editorial returns a real item, not undefined (regression test for the swallowed-comment bug)', r2 !== undefined && r2.json && r2.json.script.hook === 'h');
-
-    const editTruncated = { content: [{ type: 'thinking', thinking: 'x' }], stop_reason: 'max_tokens' };
-    throws(() => runNodeCode(nodes, 'Parse Editorial For Visual Director', editTruncated), 'Parse Editorial max_tokens truncation -> clear diagnostic',
+    const draftTruncated = { content: [{ type: 'thinking', thinking: 'x' }], stop_reason: 'max_tokens' };
+    throws(() => runNodeCode(nodes, 'Parse Draft JSON', draftTruncated), 'Parse Draft JSON max_tokens truncation -> clear diagnostic',
       (m) => m.includes('max_tokens'));
   }
 
@@ -434,8 +431,16 @@ function main() {
       !(sameTopicResult.json._validationErrors || []).some((e) => e.includes('different topic than the one selected')),
       JSON.stringify(sameTopicResult.json._validationErrors));
 
-    check('Editorial Rewrite prompt reinforces the no-substitution rule immediately next to the actual draft, not only at the top',
-      nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('FINAL REMINDER before you read the draft below'));
+    // Editorial Rewrite (Stage 2) was removed entirely after repeatedly
+    // substituting the selected topic in production, even after two rounds
+    // of explicit prompt instructions - Visual Director now consumes Draft
+    // Script's raw output directly, so it inherits the same risk and needs
+    // the same explicit protection proactively, not just the deterministic
+    // backstop above catching it after the fact.
+    check('Visual Director prompt explicitly forbids substituting a different topic (inherited the risk when Editorial Rewrite was removed)',
+      nodes['Claude: Visual Director'].parameters.jsonBody.includes('topic/subject/fact in the script below is fixed'));
+    check('Claude: Repair Script prompt also forbids substituting a different topic (derived from the same Visual Director template)',
+      nodes['Claude: Repair Script'].parameters.jsonBody.includes('topic/subject/fact in the script below is fixed'));
   }
 
   // -------------------------------------------------------------------
@@ -569,21 +574,14 @@ function main() {
       }, `${n.name}: jsonBody expression evaluates and produces valid JSON`);
     }
   }
-  check('Editorial Rewrite prompt reinforces caption_style/trigger/hook_candidates validity',
-    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('STRUCTURAL FIELD INTEGRITY'));
-  check('Editorial Rewrite prompt requires scene_index/point on every scene',
-    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('EVERY SINGLE SCENE, no exceptions, must keep BOTH a scene_index'));
-  check('Editorial Rewrite prompt requires payoff.claim and title bounds',
-    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('payoff must be an object with a real claim string'));
-  // Regression test: production incident where Editorial Rewrite discarded
-  // the given draft's topic entirely and substituted a different one - traced
-  // across ~20 real executions and found happening on effectively every run,
-  // all converging on a small set of "safe" extreme-science facts (ocean
-  // depths/mountain ranges, "hotter than the sun" comparisons) regardless of
-  // the actual topic it was given. The prompt must explicitly forbid this.
-  check('Editorial Rewrite prompt explicitly forbids discarding the draft and substituting a different topic',
-    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('never to discard it and write about a different topic') &&
-    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('never substitute a different topic or fact'));
+  // Claude: Editorial Rewrite (Stage 2) was removed entirely (see section 1 -
+  // it repeatedly discarded the given draft's topic and substituted a
+  // different one in production, traced across ~20 real executions,
+  // happening on effectively every run, still recurring even after two
+  // rounds of explicit prompt instructions). Its structural-integrity and
+  // topic-preservation responsibilities now belong to Visual Director, which
+  // consumes Draft Script's raw output directly - see the checks below and
+  // in section 6b for its equivalent coverage.
   check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
     nodes['Claude: Visual Director'].parameters.jsonBody.includes('Preserve/rebuild hook_candidates, caption_style, trigger, payoff, quality'));
   check('Visual Director prompt explicitly protects per-scene scene_index/point from being dropped',
@@ -591,20 +589,17 @@ function main() {
   check('Visual Director prompt requires its own fields (first_frame_type, search_queries) as REQUIRED',
     nodes['Claude: Visual Director'].parameters.jsonBody.includes('first_frame_type is required'));
 
-  // Consistency audit findings: Draft Script and Editorial Rewrite both used
-  // to describe a "visual_type: ai" option (AI image generation) that Visual
-  // Director's own prompt explicitly says does not exist ("The renderer has
-  // NO AI image/video generator"). A downstream normalizer silently forced
-  // 'ai' back to 'real', but the stale guidance still steered Draft/Editorial
-  // toward beats/wording judged "impossible to photograph" on the (false)
-  // assumption AI would render them - those then get force-converted to a
-  // real-stock search that, by construction, has nothing good to find.
+  // Consistency audit finding: Draft Script used to describe a "visual_type:
+  // ai" option (AI image generation) that Visual Director's own prompt
+  // explicitly says does not exist ("The renderer has NO AI image/video
+  // generator"). A downstream normalizer silently forced 'ai' back to
+  // 'real', but the stale guidance still steered Draft Script toward beats/
+  // wording judged "impossible to photograph" on the (false) assumption AI
+  // would render them - those then get force-converted to a real-stock
+  // search that, by construction, has nothing good to find.
   check('Draft Script no longer describes a non-existent AI-image-generation option',
     !nodes['Claude: Draft Script (Stage 1)'].parameters.jsonBody.includes("Reserve 'ai' ONLY") &&
     nodes['Claude: Draft Script (Stage 1)'].parameters.jsonBody.includes('there is NO AI image or video generator'));
-  check('Editorial Rewrite no longer references a non-existent "AI fallback" render path',
-    !nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('visual_prompt as the AI fallback') &&
-    nodes['Claude: Editorial Rewrite (Stage 2)'].parameters.jsonBody.includes('there is no AI image or video generator'));
   // Draft Script's SELF-REVIEW checklist used to assert a fixed "60-90 words
   // across 3-4 scenes" target that directly contradicted the explicit
   // "LENGTH IS YOUR CALL, NOT A FIXED TARGET" policy earlier in the same

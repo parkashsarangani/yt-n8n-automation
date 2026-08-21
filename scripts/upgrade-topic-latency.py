@@ -101,7 +101,6 @@ def upgrade(workflow: dict) -> dict:
     params["jsonBody"] = body
     patch_single_attempt_model(node, TIMEOUT_MS)
     patch_single_attempt_model(node_by_name(workflow, "Claude: Draft Script (Stage 1)"), 120000)
-    patch_single_attempt_model(node_by_name(workflow, "Claude: Editorial Rewrite (Stage 2)"), 120000)
     patch_script_retry_state(workflow)
     patch_compose_polling(workflow)
     return workflow
@@ -144,7 +143,7 @@ def assert_cross_node_state_model() -> None:
 
 
 def assert_guardrails(workflow: dict) -> None:
-    for name in [TOPIC_NODE, "Claude: Draft Script (Stage 1)", "Claude: Editorial Rewrite (Stage 2)"]:
+    for name in [TOPIC_NODE, "Claude: Draft Script (Stage 1)"]:
         node = node_by_name(workflow, name)
         if node.get("retryOnFail") is not False or node.get("maxTries") != 1:
             raise RuntimeError(f"automatic retry survived on {name}")

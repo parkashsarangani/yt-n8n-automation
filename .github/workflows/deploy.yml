@@ -142,7 +142,7 @@ jobs:
           assert 'search_queries' in resolver_body and 'first_frame' in resolver_body
           assert 'run_id' in resolver_body and '$execution.id' in resolver_body
 
-          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Parse Editorial For Visual Director', 'Validate Final Script']:
+          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
               assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
               assert 'LAST_VALID_JSON_OBJECT' in code, node_name
@@ -193,16 +193,14 @@ jobs:
           assertItem(run('Parse Topic Pool', { content: [{ type: 'text', text: JSON.stringify({ candidates }) }], stop_reason: 'end_turn' }), 'Parse Topic Pool happy path');
 
           const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
-          assertItem(run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' }), 'Parse Draft JSON happy path');
+          const draft = run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
+          assertItem(draft, 'Parse Draft JSON happy path');
+          if (!draft || !draft.json || !draft.json.draft) throw new Error('Parse Draft JSON did not return {json:{draft}}');
 
-          const editorial = run('Parse Editorial For Visual Director', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
-          assertItem(editorial, 'Parse Editorial For Visual Director happy path');
-          if (!editorial || !editorial.json || !editorial.json.script) throw new Error('Parse Editorial For Visual Director did not return {json:{script}}');
-
-          const corrected = run('Parse Editorial For Visual Director', {
+          const draftCorrected = run('Parse Draft JSON', {
             content: [{ type: 'text', text: '{"hook":"bad",]\nWait\n' + JSON.stringify(script) }], stop_reason: 'end_turn'
           });
-          if (corrected.json.script.hook !== script.hook) throw new Error('Editorial parser did not recover corrected JSON');
+          if (draftCorrected.json.draft.hook !== script.hook) throw new Error('Draft parser did not recover corrected JSON');
 
           console.log('Executable parser smoke tests OK');
           JS
