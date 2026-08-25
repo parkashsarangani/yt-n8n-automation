@@ -140,7 +140,7 @@ if(Array.isArray(parsed.scenes))parsed.scenes.forEach((s)=>{
   if(mode==='template_explainer'||s.visual_source==='template'){
     const chosen=_vrValidTemplate({template_name:s.template_name,template_data:s.template_data},s);
     s.visual_mode='template_explainer';s.visual_source='template';s.template_name=chosen.template_name;s.template_data=chosen.template_data;s.visual_type='template';
-  }else{if(s.visual_type==='ai'||!s.visual_type)s.visual_type='real';s.template_fallback=_vrValidTemplate(s.template_fallback,s);}
+  }else{s.visual_source='stock';if(s.visual_type==='ai'||!s.visual_type)s.visual_type='real';s.template_fallback=_vrValidTemplate(s.template_fallback,s);}
 });
 
 """
