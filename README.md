@@ -11,8 +11,8 @@ captions, and a spoken engagement beat.
 ```
 n8n (workflow orchestration, Europe/Berlin, 3× daily: 14:00 / 19:00 / 22:00)
   │
-  ├─ Claude API — topic selection (single curiosity facts), 2-stage script
-  │    (draft → editorial rewrite), validation with auto-retry
+  ├─ OpenAI API — topic selection (single curiosity facts), 2-stage script
+  │    (draft → visual director), validation with auto-retry
   ├─ ElevenLabs — text-to-speech with word-level timestamps (per scene)
   ├─ Pexels API — stock VIDEO clips and PHOTOS for scenes that need real footage
   │    └─ Video search first, automatic photo fallback if no video found
@@ -94,7 +94,7 @@ docker-compose.yml             - deploys n8n + shorts-compose
 
 ### 1. Credentials (configure directly in n8n, not in this repo)
 
-- Anthropic (Claude) API key
+- OpenAI (GPT) API key
 - ElevenLabs API key + voice ID
 - Pexels API key (HTTP Header Auth in n8n)
 - YouTube Data API v3 (OAuth2 for upload)
@@ -192,7 +192,7 @@ USA). Change the cron expressions in the workflow's Schedule Trigger to adjust.
 
 ## External paid APIs
 
-Anthropic (Claude), ElevenLabs (TTS), and Pexels (stock media) are the external
+OpenAI (GPT), ElevenLabs (TTS), and Pexels (stock media) are the external
 APIs. Pexels is free for most use cases. YouTube Data API is free within quota.
 
 ## Licensing notes for bundled assets

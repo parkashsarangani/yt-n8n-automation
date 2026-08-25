@@ -260,8 +260,8 @@ def audit() -> None:
         for marker in ["QUALITY_ALIGNMENT", "REPAIRABLE_NEAR_MISS", "HARD_REJECT", "literal query", "broad fallback"]:
             if marker not in visual_body:
                 die(f"Visual Director lost prompt contract: {marker}")
-        if 'thinking: { type: "disabled" }' not in visual_body:
-            die("Visual Director adaptive thinking still competes with complete JSON output")
+        if 'reasoning_effort: "none"' not in visual_body:
+            die("Visual Director reasoning effort still competes with complete JSON output")
 
         parser_names = ["Parse Topic Pool", "Extract Generated Topic", "Parse Draft JSON", "Validate Final Script"]
         for name in parser_names:
@@ -272,12 +272,12 @@ def audit() -> None:
             if "content?.[0]?.text" in code:
                 die(f"{name} still assumes content[0].text")
 
+        def openai_response(text: str, finish_reason: str = "stop") -> dict:
+            return {"choices": [{"message": {"content": text}, "finish_reason": finish_reason}]}
+
         pool_obj = {"candidates": [candidate(i) for i in range(4)]}
         pool_text = '{"candidates":[} this false start never closes\nWait\n' + json.dumps(pool_obj)
-        pool = assert_ok(run_code_node(names["Parse Topic Pool"]["parameters"]["jsCode"], {
-            "content": [{"type": "thinking", "thinking": "x"}, {"type": "text", "text": pool_text[:40]}, {"type": "text", "text": pool_text[40:]}],
-            "stop_reason": "end_turn",
-        }), "topic pool self-correction")
+        pool = assert_ok(run_code_node(names["Parse Topic Pool"]["parameters"]["jsCode"], openai_response(pool_text)), "topic pool self-correction")
         if len(pool.get("json", {}).get("pool", [])) != 4:
             die("topic pool did not recover all four candidates")
 
@@ -285,40 +285,30 @@ def audit() -> None:
         commissioned_text = '{"candidates":[[]][0] || null}\nCorrecting.\n' + json.dumps(commissioned_obj)
         picked = assert_ok(run_code_node(
             names["Extract Generated Topic"]["parameters"]["jsCode"],
-            {"content": [{"type": "text", "text": commissioned_text}], "stop_reason": "end_turn"},
+            openai_response(commissioned_text),
             {"Ensure Topics Array": {"topics": []}, "Parse Topic Pool": pool.get("json", {})},
         ), "commissioner self-correction")
         if not picked.get("json", {}).get("stock_query_seed"):
             die("commissioner parser dropped stock_query_seed")
 
         minimal_script = {"hook": "A complete hook", "scenes": [{"scene_index": 0, "point": "p", "narration": "enough narration"}]}
-        split_json = json.dumps(minimal_script)
-        draft = assert_ok(run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], {
-            "content": [{"type": "text", "text": split_json[:17]}, {"type": "thinking", "thinking": "x"}, {"type": "text", "text": split_json[17:]}],
-            "stop_reason": "end_turn",
-        }), "draft split text blocks")
+        draft = assert_ok(run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], openai_response(json.dumps(minimal_script))), "draft happy path")
         if draft.get("json", {}).get("draft", {}).get("hook") != "A complete hook":
-            die("draft parser did not reassemble split text blocks")
+            die("draft parser did not parse a well-formed response")
 
         draft_good = {"hook": "Corrected draft hook", "scenes": [{"scene_index": 0, "point": "p", "narration": "enough narration"}]}
         draft_text = '{"hook":"broken",]\nWait, corrected JSON follows.\n' + json.dumps(draft_good)
-        draft_corrected = assert_ok(run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], {
-            "content": [{"type": "text", "text": draft_text}], "stop_reason": "end_turn"
-        }), "draft self-correction")
+        draft_corrected = assert_ok(run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], openai_response(draft_text)), "draft self-correction")
         if draft_corrected.get("json", {}).get("draft", {}).get("hook") != "Corrected draft hook":
             die("draft parser did not choose the corrected JSON object")
 
-        truncated = run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], {
-            "content": [{"type": "text", "text": '{"hook":"cut off"'}], "stop_reason": "max_tokens"
-        })
-        if truncated.get("ok") or "max_tokens" not in truncated.get("error", ""):
-            die("draft max_tokens truncation is not diagnosed explicitly")
+        truncated = run_code_node(names["Parse Draft JSON"]["parameters"]["jsCode"], openai_response('{"hook":"cut off"', "length"))
+        if truncated.get("ok") or "max_completion_tokens" not in truncated.get("error", ""):
+            die("draft max_completion_tokens truncation is not diagnosed explicitly")
 
         final_script = good_script(sparse_queries=True)
         final_text = '{"hook":"bad",]\nSelf-correcting.\n' + json.dumps(final_script)
-        validated = assert_ok(run_code_node(names["Validate Final Script"]["parameters"]["jsCode"], {
-            "content": [{"type": "text", "text": final_text}], "stop_reason": "end_turn"
-        }), "final validator self-correction")
+        validated = assert_ok(run_code_node(names["Validate Final Script"]["parameters"]["jsCode"], openai_response(final_text)), "final validator self-correction")
         out = validated.get("json", {})
         if out.get("_scriptValid") is not True:
             die("publishable synthetic script failed validation: " + " | ".join(out.get("_validationErrors", [])))
@@ -330,9 +320,7 @@ def audit() -> None:
 
         below = good_script()
         below["quality"]["shareability"] = 70
-        rejected = assert_ok(run_code_node(names["Validate Final Script"]["parameters"]["jsCode"], {
-            "content": [{"type": "text", "text": json.dumps(below)}], "stop_reason": "end_turn"
-        }), "quality gate fail-closed")
+        rejected = assert_ok(run_code_node(names["Validate Final Script"]["parameters"]["jsCode"], openai_response(json.dumps(below))), "quality gate fail-closed")
         if rejected.get("json", {}).get("_scriptValid") is not False:
             die("quality gate no longer fails closed for a real below-threshold score")
 

@@ -28,7 +28,7 @@ jobs:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
           PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
-          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          OPENAI_KEY: ${{ secrets.OPEN_AI_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           COMPETITOR_CHANNELS: ${{ secrets.COMPETITOR_CHANNELS }}
         run: |
@@ -119,7 +119,7 @@ jobs:
           body = topic['parameters']['jsonBody']
           assert 'TOPIC_LATENCY' in body
           assert 'GENERATE 4 DISTINCT candidate topics' in body
-          assert 'max_tokens: 6000' in body
+          assert 'max_completion_tokens: 6000' in body
           assert topic['parameters']['options']['timeout'] == 120000
           assert topic.get('retryOnFail') is False and topic.get('maxTries') == 1
 
@@ -134,7 +134,7 @@ jobs:
           assert 'pixabay_video' in visual_body and 'pixabay' in visual_body
           assert visual['parameters']['options']['timeout'] == 180000
           assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
-          assert 'thinking: { type: "disabled" }' in visual_body
+          assert 'reasoning_effort: "none"' in visual_body
 
           resolver_node = names['Resolve B-roll']
           assert resolver_node['parameters']['options']['timeout'] == 180000
@@ -147,7 +147,7 @@ jobs:
               assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
               assert 'LAST_VALID_JSON_OBJECT' in code, node_name
               assert 'content?.[0]?.text' not in code, node_name
-              assert 'stop_reason' in code, node_name
+              assert 'finish_reason' in code, node_name
 
           writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
           assert 'Concept archetype' in writer_body
@@ -163,7 +163,7 @@ jobs:
           print('Generated workflow contract OK')
           PY
 
-      - name: Execute parser nodes against synthetic Claude responses
+      - name: Execute parser nodes against synthetic OpenAI responses
         run: |
           set -euo pipefail
           node - <<'JS'
@@ -190,16 +190,17 @@ jobs:
             topic: 'recognizable topic ' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
             share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
           }));
-          assertItem(run('Parse Topic Pool', { content: [{ type: 'text', text: JSON.stringify({ candidates }) }], stop_reason: 'end_turn' }), 'Parse Topic Pool happy path');
+          function openaiResponse(text, finishReason = 'stop') {
+            return { choices: [{ message: { content: text }, finish_reason: finishReason }] };
+          }
+          assertItem(run('Parse Topic Pool', openaiResponse(JSON.stringify({ candidates }))), 'Parse Topic Pool happy path');
 
           const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
-          const draft = run('Parse Draft JSON', { content: [{ type: 'text', text: JSON.stringify(script) }], stop_reason: 'end_turn' });
+          const draft = run('Parse Draft JSON', openaiResponse(JSON.stringify(script)));
           assertItem(draft, 'Parse Draft JSON happy path');
           if (!draft || !draft.json || !draft.json.draft) throw new Error('Parse Draft JSON did not return {json:{draft}}');
 
-          const draftCorrected = run('Parse Draft JSON', {
-            content: [{ type: 'text', text: '{"hook":"bad",]\nWait\n' + JSON.stringify(script) }], stop_reason: 'end_turn'
-          });
+          const draftCorrected = run('Parse Draft JSON', openaiResponse('{"hook":"bad",]\nWait\n' + JSON.stringify(script)));
           if (draftCorrected.json.draft.hook !== script.hook) throw new Error('Draft parser did not recover corrected JSON');
 
           console.log('Executable parser smoke tests OK');

@@ -12,10 +12,10 @@ const axios = require("axios");
 
 const PEXELS_KEY = process.env.PEXELS_KEY || "";
 const UNSPLASH_KEY = process.env.UNSPLASH_KEY || "";
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
+const OPENAI_KEY = process.env.OPENAI_KEY || "";
 const SCORE_THRESHOLD = Number(process.env.BROLL_SCORE_THRESHOLD || 82);
 const FIRST_FRAME_THRESHOLD = Number(process.env.BROLL_FIRST_FRAME_THRESHOLD || 88);
-const VISION_MODEL = process.env.BROLL_VISION_MODEL || "claude-haiku-4-5-20251001";
+const VISION_MODEL = process.env.BROLL_VISION_MODEL || "gpt-5.6-luna";
 const VISION_TOP_N = Number(process.env.BROLL_VISION_TOP_N || 8);
 const SOURCE_PER_QUERY = Number(process.env.BROLL_SOURCE_PER_QUERY || 12);
 const MAX_SEARCH_QUERIES = Number(process.env.BROLL_MAX_SEARCH_QUERIES || 4);
@@ -209,7 +209,7 @@ function clampScore(v) {
 }
 
 async function scoreVisualCandidate(candidate, target, { firstFrame = false, creativeFormat = "" } = {}) {
-  if (!ANTHROPIC_KEY || !candidate?.thumb && !candidate?.url) {
+  if (!OPENAI_KEY || !candidate?.thumb && !candidate?.url) {
     return {
       relevance: 0,
       scroll_stop: 0,
@@ -222,18 +222,20 @@ async function scoreVisualCandidate(candidate, target, { firstFrame = false, cre
   }
 
   const encoded = await fetchImageAsBase64(candidate.thumb || candidate.url);
-  const imageSource = encoded
-    ? { type: "base64", media_type: encoded.mime, data: encoded.data }
-    : { type: "url", url: candidate.thumb || candidate.url };
+  const imageUrl = encoded
+    ? `data:${encoded.mime};base64,${encoded.data}`
+    : candidate.thumb || candidate.url;
 
   const body = {
     model: VISION_MODEL,
-    max_tokens: 180,
+    max_completion_tokens: 180,
+    reasoning_effort: "none",
+    response_format: { type: "json_object" },
     messages: [
       {
         role: "user",
         content: [
-          { type: "image", source: imageSource },
+          { type: "image_url", image_url: { url: imageUrl } },
           {
             type: "text",
             text:
@@ -250,11 +252,11 @@ async function scoreVisualCandidate(candidate, target, { firstFrame = false, cre
   };
 
   try {
-    const r = await axios.post("https://api.anthropic.com/v1/messages", body, {
+    const r = await axios.post("https://api.openai.com/v1/chat/completions", body, {
       timeout: 25000,
-      headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      headers: { Authorization: `Bearer ${OPENAI_KEY}`, "content-type": "application/json" },
     });
-    const txt = (r.data?.content || []).map((b) => (b && b.text) || "").join(" ");
+    const txt = r.data?.choices?.[0]?.message?.content || "";
     const parsed = parseScoreJson(txt);
     const result = {
       relevance: clampScore(parsed.relevance),

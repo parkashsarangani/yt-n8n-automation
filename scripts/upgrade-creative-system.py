@@ -80,13 +80,11 @@ def add_topic_commissioning(w: dict) -> None:
             "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [2400, 300],
             "parameters": {"jsCode": """const response=$input.first().json;
 if(response.error) throw new Error('Topic pool API error: '+JSON.stringify(response.error));
-const contentBlocks=Array.isArray(response.content)?response.content:[];
-const tb=contentBlocks.find(b=>b&&b.type==='text');
-let raw=String(tb?.text||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');
+const choice=(response.choices||[])[0];
+let raw=String((choice&&choice.message&&choice.message.content)||'').trim().replace(/^```(?:json)?\\s*/i,'').replace(/```\\s*$/,'');
 if(!raw){
-  const blockTypes=contentBlocks.map(b=>b?.type||'unknown').join(', ')||'none';
-  if(response.stop_reason==='max_tokens') throw new Error('Topic pool hit max_tokens before producing a text block (content types: '+blockTypes+')');
-  throw new Error('Topic pool returned no text block (stop_reason: '+(response.stop_reason||'unknown')+', content types: '+blockTypes+')');
+  if(choice&&choice.finish_reason==='length') throw new Error('Topic pool hit max_completion_tokens before producing any text (finish_reason: length)');
+  throw new Error('Topic pool returned no text (finish_reason: '+(choice&&choice.finish_reason||'unknown')+')');
 }
 function extractBalancedObjects(s){
   const out=[];
@@ -108,10 +106,10 @@ function extractBalancedObjects(s){
   }
   return out;
 }
-// Claude occasionally second-guesses itself mid-response (a broken false
+// The model occasionally second-guesses itself mid-response (a broken false
 // start, then "Wait, I need to output proper JSON only." followed by the
 // real, correct JSON) - both land in the same response even though it
-// completes normally (stop_reason:'end_turn', not truncated). A naive
+// completes normally (finish_reason:'stop', not truncated). A naive
 // indexOf('{')..lastIndexOf('}') slice grabs from the broken false start's
 // opening brace to the real JSON's closing brace, mashing garbage and valid
 // JSON together. Instead, find every balanced top-level {...} block and try
@@ -119,8 +117,8 @@ function extractBalancedObjects(s){
 // one), keeping the first one that both parses and has a candidates array.
 const candidateBlocks=extractBalancedObjects(raw);
 if(!candidateBlocks.length){
-  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (no balanced JSON object found) - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
-  throw new Error('Topic pool returned no JSON object (stop_reason: '+(response.stop_reason||'unknown')+')');
+  if(choice&&choice.finish_reason==='length') throw new Error('Topic pool JSON was truncated by max_completion_tokens (no balanced JSON object found) - reduce the candidate pool size or raise max_completion_tokens on "Claude: Generate Topic"');
+  throw new Error('Topic pool returned no JSON object (finish_reason: '+(choice&&choice.finish_reason||'unknown')+')');
 }
 let obj,lastErr;
 for(let k=candidateBlocks.length-1;k>=0;k--){
@@ -131,8 +129,8 @@ for(let k=candidateBlocks.length-1;k>=0;k--){
 }
 if(!obj){
   const reason=lastErr?lastErr.message:'no balanced JSON block contained a candidates array';
-  if(response.stop_reason==='max_tokens') throw new Error('Topic pool JSON was truncated by max_tokens (parse error: '+reason+') - reduce the candidate pool size or raise max_tokens on "Claude: Generate Topic"');
-  throw new Error('Topic pool JSON failed to parse (stop_reason: '+(response.stop_reason||'unknown')+', parse error: '+reason+')');
+  if(choice&&choice.finish_reason==='length') throw new Error('Topic pool JSON was truncated by max_completion_tokens (parse error: '+reason+') - reduce the candidate pool size or raise max_completion_tokens on "Claude: Generate Topic"');
+  throw new Error('Topic pool JSON failed to parse (finish_reason: '+(choice&&choice.finish_reason||'unknown')+', parse error: '+reason+')');
 }
 let pool=Array.isArray(obj.candidates)?obj.candidates:[];
 pool=pool.filter(c=>c?.topic).map(c=>({topic:String(c.topic).trim(),archetype:String(c.archetype||'looks_fake_but_real').trim(),research_query:String(c.research_query||c.topic).trim(),first_frame_concept:String(c.first_frame_concept||'').trim(),share_reason:String(c.share_reason||'').trim(),evidence_score:Number(c.evidence_score)||0,visual_score:Number(c.visual_score)||0,share_score:Number(c.share_score)||0,reason:String(c.reason||''),score:Number(c.score)||0})).sort((x,y)=>y.score-x.score);
@@ -144,7 +142,7 @@ return {json:{pool,shortlist:pool.slice(0,4)}};"""},
         c["id"] = "44b8a598-b27f-4fe1-a760-dd6eb781ccda"
         c["name"] = COMMISSION_NODE
         c["position"] = [2700, 300]
-        c["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 6000, thinking: { type: "adaptive" }, output_config: { effort: "high" }, messages: [{ role: "user", content: "You are commissioning ONE production-worthy YouTube Short from an already harsh shortlist. Judge the underlying viewing experience, not clever wording.\n\nSHORTLIST: " + JSON.stringify($json.shortlist) + "\n\nDeep-score each 0-100 on concept_strength, evidence_strength, first_frame_strength, payoff_strength, shareability, novelty, production_feasibility, naturalness. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 5. 80 is merely good; 90 is rare. Prefer intrinsically visual, defensible concepts and protect archetype variety. Reject interchangeable trivia.\n\nReturn ONLY JSON with candidates sorted best-first. Preserve topic, archetype, research_query, first_frame_concept, share_reason. Add evidence_score, visual_score, share_score, concept_score, payoff_score, novelty_score, execution_score, reason, score." }] }) }}'''
+        c["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "gpt-5.6-luna", max_completion_tokens: 6000, reasoning_effort: "medium", response_format: { type: "json_object" }, messages: [{ role: "user", content: "You are commissioning ONE production-worthy YouTube Short from an already harsh shortlist. Judge the underlying viewing experience, not clever wording.\n\nSHORTLIST: " + JSON.stringify($json.shortlist) + "\n\nDeep-score each 0-100 on concept_strength, evidence_strength, first_frame_strength, payoff_strength, shareability, novelty, production_feasibility, naturalness. Overall may not exceed the weakest of concept/evidence/first-frame/payoff/shareability by more than 5. 80 is merely good; 90 is rare. Prefer intrinsically visual, defensible concepts and protect archetype variety. Reject interchangeable trivia.\n\nReturn ONLY JSON with candidates sorted best-first. Preserve topic, archetype, research_query, first_frame_concept, share_reason. Add evidence_score, visual_score, share_score, concept_score, payoff_score, novelty_score, execution_score, reason, score." }] }) }}'''
         c["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(c)
 
@@ -209,7 +207,7 @@ def add_visual_director(w: dict) -> None:
         v["id"] = "f5bc27a1-e53c-4a35-88e4-b89898f9eb5b"
         v["name"] = VISUAL_NODE
         v["position"] = [5100, 300]
-        v["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, output_config: { effort: "medium" }, messages: [{ role: "user", content: "You are the VISUAL DIRECTOR for a high-end YouTube Shorts channel. Do NOT change hook, hook_candidates, hook_type, title, seo_description, tags, comment_hook, outro_line, full_script, narration text, payoff, caption_style, trigger, quality, scene order, or scene count - copy every one of these fields through byte-for-byte exactly as given in SCRIPT, even the ones you are not directly working with. This includes EVERY scene's scene_index and point fields specifically - these two are the most frequently dropped fields in the whole pipeline when scenes get rebuilt to add visual fields, so copy them through explicitly, unchanged, on every single scene.\n\nSCRIPT: " + JSON.stringify($json.draft) + "\n\nChoose one creative_format: documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Scene 0 must work muted; set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat - this is REQUIRED, never leave it unset. Assign each content scene visual_role = hero/evidence/detail/comparison/breath/payoff. For each stock scene, REQUIRED: add 3-4 DISTINCT concrete search_queries (2-5 words, at least 2 required) and set stock_search_query to the strongest - never leave a stock scene without both. Preserve named_subject for exact real entities. Use templates only when the beat is fundamentally a number/comparison/punchy line. Choose caption_mode = karaoke/key_phrases/minimal. Set transition_style=hard_cut. Carry the CTA decision through and set engagement_mode=none/comment_only/share_only/comment_and_share; do not invent a CTA. Set open_loop_count honestly (usually 0-2). Set visual_plan_quality 0-100; generic scene 0 or repetitive roles must score below 78. Before returning, verify as a final pass: every scene still has its original scene_index and point; every stock scene has stock_search_query and at least 2 search_queries; first_frame_type is set. Return ONLY the COMPLETE script JSON: every field from the input SCRIPT copied through exactly (hook_candidates, caption_style, trigger, quality, and every scene's scene_index/point are the fields most often accidentally dropped while focusing on the new visual fields below - double check they are all still present and unchanged) plus these new visual fields added." }] }) }}'''
+        v["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "gpt-5.6-luna", max_completion_tokens: 8192, reasoning_effort: "medium", response_format: { type: "json_object" }, messages: [{ role: "user", content: "You are the VISUAL DIRECTOR for a high-end YouTube Shorts channel. Do NOT change hook, hook_candidates, hook_type, title, seo_description, tags, comment_hook, outro_line, full_script, narration text, payoff, caption_style, trigger, quality, scene order, or scene count - copy every one of these fields through byte-for-byte exactly as given in SCRIPT, even the ones you are not directly working with. This includes EVERY scene's scene_index and point fields specifically - these two are the most frequently dropped fields in the whole pipeline when scenes get rebuilt to add visual fields, so copy them through explicitly, unchanged, on every single scene.\n\nSCRIPT: " + JSON.stringify($json.draft) + "\n\nChoose one creative_format: documentary_cinematic, comparison_reveal, minimal_proof, archival_history, macro_detail, kinetic_data. Set visual_grammar to that family. Scene 0 must work muted; set first_frame_type to hero_motion, macro_anomaly, face_reaction, scale_comparison, result_first, archive_proof, or kinetic_stat - this is REQUIRED, never leave it unset. Assign each content scene visual_role = hero/evidence/detail/comparison/breath/payoff. For each stock scene, REQUIRED: add 3-4 DISTINCT concrete search_queries (2-5 words, at least 2 required) and set stock_search_query to the strongest - never leave a stock scene without both. Preserve named_subject for exact real entities. Use templates only when the beat is fundamentally a number/comparison/punchy line. Choose caption_mode = karaoke/key_phrases/minimal. Set transition_style=hard_cut. Carry the CTA decision through and set engagement_mode=none/comment_only/share_only/comment_and_share; do not invent a CTA. Set open_loop_count honestly (usually 0-2). Set visual_plan_quality 0-100; generic scene 0 or repetitive roles must score below 78. Before returning, verify as a final pass: every scene still has its original scene_index and point; every stock scene has stock_search_query and at least 2 search_queries; first_frame_type is set. Return ONLY the COMPLETE script JSON: every field from the input SCRIPT copied through exactly (hook_candidates, caption_style, trigger, quality, and every scene's scene_index/point are the fields most often accidentally dropped while focusing on the new visual fields below - double check they are all still present and unchanged) plus these new visual fields added." }] }) }}'''
         v["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(v)
     if REPAIR_NODE not in names:
@@ -222,7 +220,7 @@ def add_visual_director(w: dict) -> None:
         r["id"] = "9b7b6a2b-7a7f-4b3f-9a4a-2f8b6e1c9a3d"
         r["name"] = REPAIR_NODE
         r["position"] = [5100, 500]
-        r["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "claude-sonnet-5", max_tokens: 8192, thinking: { type: "adaptive" }, messages: [{ role: "user", content: "placeholder - overwritten by quality_alignment_impl.patch_visual_director" }] }) }}'''
+        r["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ model: "gpt-5.6-luna", max_completion_tokens: 8192, reasoning_effort: "medium", response_format: { type: "json_object" }, messages: [{ role: "user", content: "placeholder - overwritten by quality_alignment_impl.patch_visual_director" }] }) }}'''
         r["parameters"].setdefault("options", {})["timeout"] = 90000
         w["nodes"].append(r)
     c = w.setdefault("connections", {})

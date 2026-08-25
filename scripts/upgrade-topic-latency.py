@@ -89,11 +89,11 @@ def upgrade(workflow: dict) -> dict:
         else:
             raise ValueError("could not patch topic pool size: creative-system generation anchor not found")
 
-    token_anchors = ("max_tokens: 9000", "max_tokens: 8192")
-    if f"max_tokens: {MAX_TOKENS}" not in body:
+    token_anchors = ("max_completion_tokens: 9000", "max_completion_tokens: 8192")
+    if f"max_completion_tokens: {MAX_TOKENS}" not in body:
         for anchor in token_anchors:
             if anchor in body:
-                body = body.replace(anchor, f"max_tokens: {MAX_TOKENS}", 1)
+                body = body.replace(anchor, f"max_completion_tokens: {MAX_TOKENS}", 1)
                 break
         else:
             raise ValueError("could not patch topic max_tokens: known token anchors not found")

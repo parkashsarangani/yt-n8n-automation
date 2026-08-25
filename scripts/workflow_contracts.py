@@ -34,12 +34,12 @@ EXPECTED_NODE_CONTRACTS = {
     "Claude: Generate Topic": {
         "timeout": 120000,
         "single_attempt": True,
-        "body_markers": ("TOPIC_LATENCY", "max_tokens: 6000"),
+        "body_markers": ("TOPIC_LATENCY", "max_completion_tokens: 6000"),
     },
     "Claude: Commission Topic Shortlist": {
         "timeout": 120000,
         "single_attempt": True,
-        "body_markers": ("RELIABILITY_FIRST_VIDEO", "max_tokens: 8192"),
+        "body_markers": ("RELIABILITY_FIRST_VIDEO", "max_completion_tokens: 8192"),
     },
     "Claude: Draft Script (Stage 1)": {
         "timeout": 120000,

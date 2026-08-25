@@ -127,6 +127,10 @@ function runNodeCode(nodes, nodeName, input, extraGlobals) {
   return fn(...vals);
 }
 
+function openaiResponse(text, finishReason) {
+  return { choices: [{ message: { content: text }, finish_reason: finishReason || 'stop' }] };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -277,41 +281,37 @@ function main() {
       topic: `topic ${i}`, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
       share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
     });
-    const ok4 = { content: [{ type: 'text', text: JSON.stringify({ candidates: [1, 2, 3, 4].map(mkCandidate) }) }], stop_reason: 'end_turn' };
+    const ok4 = openaiResponse(JSON.stringify({ candidates: [1, 2, 3, 4].map(mkCandidate) }));
     doesNotThrow(() => {
       const r = runNodeCode(nodes, 'Parse Topic Pool', ok4);
       check('  -> pool has 4 entries', r.json.pool.length === 4);
       check('  -> shortlist has 4 entries', r.json.shortlist.length === 4);
     }, '4 valid candidates -> succeeds');
 
-    const tooFew = { content: [{ type: 'text', text: JSON.stringify({ candidates: [mkCandidate(1)] }) }], stop_reason: 'end_turn' };
+    const tooFew = openaiResponse(JSON.stringify({ candidates: [mkCandidate(1)] }));
     throws(() => runNodeCode(nodes, 'Parse Topic Pool', tooFew), 'only 1 candidate -> throws floor error',
       (m) => m.includes('fewer than 3 usable candidates'));
 
-    const truncated = { content: [{ type: 'text', text: '{"candidates":[' + JSON.stringify(mkCandidate(1)) + ',{"topic":"cut off mid' }], stop_reason: 'max_tokens' };
-    throws(() => runNodeCode(nodes, 'Parse Topic Pool', truncated), 'max_tokens truncation -> clear diagnostic, not raw SyntaxError',
-      (m) => m.includes('truncated by max_tokens'));
+    const truncated = openaiResponse('{"candidates":[' + JSON.stringify(mkCandidate(1)) + ',{"topic":"cut off mid', 'length');
+    throws(() => runNodeCode(nodes, 'Parse Topic Pool', truncated), 'max_completion_tokens truncation -> clear diagnostic, not raw SyntaxError',
+      (m) => m.includes('cut off by max_completion_tokens'));
 
-    const noTextBlock = { content: [{ type: 'thinking', thinking: '...' }], stop_reason: 'max_tokens' };
-    throws(() => runNodeCode(nodes, 'Parse Topic Pool', noTextBlock), 'only thinking block, max_tokens -> clear diagnostic',
-      (m) => m.includes('max_tokens') && m.includes('text block'));
+    const noTextBlock = openaiResponse('', 'length');
+    throws(() => runNodeCode(nodes, 'Parse Topic Pool', noTextBlock), 'no text, finish_reason length -> clear diagnostic',
+      (m) => m.includes('max_completion_tokens') && m.includes('before producing'));
 
-    // Regression test for a real production failure: Claude wrote a broken
+    // Regression test for a real production failure: the model wrote a broken
     // false-start object, caught itself mid-response ("Wait, I need to
     // output proper JSON only."), then wrote the correct JSON right after -
     // both landed in the same complete (non-truncated) response. The old
     // naive indexOf('{')..lastIndexOf('}') extraction grabbed from the
     // false start's opening brace to the real JSON's closing brace, mashing
     // garbage and valid JSON together and crashing with a cryptic
-    // SyntaxError even though stop_reason was 'end_turn', not truncated.
-    const selfCorrected = {
-      content: [{
-        type: 'text',
-        text: '{"candidates":[[]][0] || null}\n\nWait, I need to output proper JSON only.\n\n'
-          + JSON.stringify({ candidates: [1, 2, 3, 4].map(mkCandidate) }),
-      }],
-      stop_reason: 'end_turn',
-    };
+    // SyntaxError even though finish_reason was 'stop', not truncated.
+    const selfCorrected = openaiResponse(
+      '{"candidates":[[]][0] || null}\n\nWait, I need to output proper JSON only.\n\n'
+        + JSON.stringify({ candidates: [1, 2, 3, 4].map(mkCandidate) }),
+    );
     doesNotThrow(() => {
       const r = runNodeCode(nodes, 'Parse Topic Pool', selfCorrected);
       check('  -> recovers the real 4-candidate JSON after a self-correction false-start', r.json.pool.length === 4);
@@ -322,13 +322,13 @@ function main() {
   section('5. Parse Draft JSON (undefined-return bug)');
   // -------------------------------------------------------------------
   {
-    const draftOk = { content: [{ type: 'text', text: '{"hook":"h","scenes":[]}' }], stop_reason: 'end_turn' };
+    const draftOk = openaiResponse('{"hook":"h","scenes":[]}');
     const r1 = runNodeCode(nodes, 'Parse Draft JSON', draftOk);
     check('Parse Draft JSON returns a real item, not undefined', r1 !== undefined && r1.json && r1.json.draft.hook === 'h');
 
-    const draftTruncated = { content: [{ type: 'thinking', thinking: 'x' }], stop_reason: 'max_tokens' };
-    throws(() => runNodeCode(nodes, 'Parse Draft JSON', draftTruncated), 'Parse Draft JSON max_tokens truncation -> clear diagnostic',
-      (m) => m.includes('max_tokens'));
+    const draftTruncated = openaiResponse('', 'length');
+    throws(() => runNodeCode(nodes, 'Parse Draft JSON', draftTruncated), 'Parse Draft JSON max_completion_tokens truncation -> clear diagnostic',
+      (m) => m.includes('max_completion_tokens'));
   }
 
   // -------------------------------------------------------------------
@@ -377,7 +377,7 @@ function main() {
     // compare against, keeping these unrelated-rule tests unaffected.
     const noTopicDollar = (name) => (name === 'Extract Generated Topic' ? { item: { json: { topic: '' } } } : { item: { json: {} } });
     function validate(quality) {
-      const response = { content: [{ type: 'text', text: JSON.stringify(buildScript(quality)) }], stop_reason: 'end_turn' };
+      const response = openaiResponse(JSON.stringify(buildScript(quality)));
       return runNodeCode(nodes, 'Validate Final Script', response, { $: noTopicDollar });
     }
 
@@ -411,7 +411,7 @@ function main() {
     };
     const scriptWithStrayTemplatePrompt = buildScript(goodQuality());
     scriptWithStrayTemplatePrompt.scenes = [scene, templateSceneWithStrayPrompt, { ...scene, scene_index: 2 }];
-    const strayResponse = { content: [{ type: 'text', text: JSON.stringify(scriptWithStrayTemplatePrompt) }], stop_reason: 'end_turn' };
+    const strayResponse = openaiResponse(JSON.stringify(scriptWithStrayTemplatePrompt));
     const strayResult = runNodeCode(nodes, 'Validate Final Script', strayResponse, { $: noTopicDollar });
     check('a template scene with a stray visual_prompt is not flagged by the readable-text guard (templates never hit AI image generation)',
       strayResult.json._scriptValid === true, JSON.stringify(strayResult.json._validationErrors));
@@ -429,7 +429,7 @@ function main() {
     const seedTopicDollar = (name) => (name === 'Extract Generated Topic'
       ? { item: { json: { topic: 'Your tongue can taste and your hands can feel, but you have zero pain receptors inside your brain, so surgeons can operate on a fully conscious brain and the patient feels nothing.' } } }
       : { item: { json: {} } });
-    const substitutedResponse = { content: [{ type: 'text', text: JSON.stringify(substitutedTopicScript) }], stop_reason: 'end_turn' };
+    const substitutedResponse = openaiResponse(JSON.stringify(substitutedTopicScript));
     const substitutedResult = runNodeCode(nodes, 'Validate Final Script', substitutedResponse, { $: seedTopicDollar });
     check('a script substituting a completely different topic than the one selected is rejected',
       substitutedResult.json._scriptValid === false &&
@@ -447,7 +447,7 @@ function main() {
     const oceanTopicDollar = (name) => (name === 'Extract Generated Topic'
       ? { item: { json: { topic: 'There is a mountain range on Earth longer than the Andes, Rockies, and Himalayas combined, and it is hiding under the ocean.' } } }
       : { item: { json: {} } });
-    const sameTopicResponse = { content: [{ type: 'text', text: JSON.stringify(sameTopicRewrite) }], stop_reason: 'end_turn' };
+    const sameTopicResponse = openaiResponse(JSON.stringify(sameTopicRewrite));
     const sameTopicResult = runNodeCode(nodes, 'Validate Final Script', sameTopicResponse, { $: oceanTopicDollar });
     check('a heavily reworded script that stays on the same topic is not flagged as a substitution',
       !(sameTopicResult.json._validationErrors || []).some((e) => e.includes('different topic than the one selected')),
