@@ -21,12 +21,12 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-BROLL_CONSTANTS_OLD = '''const VISION_MODEL = process.env.BROLL_VISION_MODEL || "claude-haiku-4-5-20251001";
+BROLL_CONSTANTS_OLD = '''const VISION_MODEL = process.env.BROLL_VISION_MODEL || "gpt-5.6-luna";
 const VISION_TOP_N = Number(process.env.BROLL_VISION_TOP_N || 8);
 const SOURCE_PER_QUERY = Number(process.env.BROLL_SOURCE_PER_QUERY || 12);
 const MAX_SEARCH_QUERIES = Number(process.env.BROLL_MAX_SEARCH_QUERIES || 4);'''
 
-BROLL_CONSTANTS_NEW = '''const VISION_MODEL = process.env.BROLL_VISION_MODEL || "claude-haiku-4-5-20251001";
+BROLL_CONSTANTS_NEW = '''const VISION_MODEL = process.env.BROLL_VISION_MODEL || "gpt-5.6-luna";
 const SOURCE_PER_QUERY = Number(process.env.BROLL_SOURCE_PER_QUERY || 12);
 // API_BUDGET: progressive search + hard paid-vision ceilings.
 const INITIAL_SEARCH_QUERIES = Math.max(1, Number(process.env.BROLL_INITIAL_SEARCH_QUERIES || 2));
@@ -148,9 +148,9 @@ async function evaluateCandidate(candidate, target, opts, state) {
     return { candidate, skipped: true, reason: "scene_vision_budget_exhausted" };
   }
 
-  // With no Anthropic key the underlying scorer performs no paid call; do not
+  // With no OpenAI key the underlying scorer performs no paid call; do not
   // consume budget merely to return its zero-score fallback.
-  if (!ANTHROPIC_KEY) {
+  if (!OPENAI_KEY) {
     const dimensions = await scoreVisualCandidate(candidate, target, opts);
     return { candidate, dimensions, cache_hit: false, api_call: false };
   }

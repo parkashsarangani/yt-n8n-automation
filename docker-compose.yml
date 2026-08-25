@@ -26,15 +26,15 @@ services:
       - NODE_OPTIONS=--max-old-space-size=4096
       # Multi-source b-roll resolver (/resolve-broll): real-media sources are
       # routed by scene intent, locally reranked for semantic match, then judged
-      # by bounded Claude vision. There is NO AI image/video generation.
+      # by bounded OpenAI vision. There is NO AI image/video generation.
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - PIXABAY_KEY=${PIXABAY_KEY:-}
-      - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
+      - OPENAI_KEY=${OPENAI_KEY:-}
       # Phase-2 retrieval recall: compile source-specific queries, widen the
       # cheap candidate pool, but keep a hard total scene-retrieval deadline.
       # Pixabay search responses are cached for 24h on the persistent data
-      # volume; paid Claude vision ceilings below are unchanged.
+      # volume; paid OpenAI vision ceilings below are unchanged.
       - BROLL_SOURCE_PER_QUERY=${BROLL_SOURCE_PER_QUERY:-20}
       - BROLL_SOURCE_QUERY_LIMIT=${BROLL_SOURCE_QUERY_LIMIT:-2}
       - BROLL_CANDIDATE_POOL_MAX=${BROLL_CANDIDATE_POOL_MAX:-120}

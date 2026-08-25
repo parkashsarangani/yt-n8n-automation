@@ -17,9 +17,9 @@ const SIGNALS_PATH = path.join(DATA_DIR, "competitor_signals.json");
 const WATCHLIST_PATH = path.join(__dirname, "competitors.json");
 
 const YT_KEY = process.env.YOUTUBE_API_KEY || "";
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
-const DISTILL_MODEL = process.env.COMPETITOR_DISTILL_MODEL || process.env.STRATEGIST_MODEL || "claude-sonnet-5";
-const VISION_MODEL = process.env.COMPETITOR_VISION_MODEL || "claude-haiku-4-5-20251001";
+const OPENAI_KEY = process.env.OPENAI_KEY || "";
+const DISTILL_MODEL = process.env.COMPETITOR_DISTILL_MODEL || process.env.STRATEGIST_MODEL || "gpt-5.6-luna";
+const VISION_MODEL = process.env.COMPETITOR_VISION_MODEL || "gpt-5.6-luna";
 
 const WINDOW_DAYS = Number(process.env.COMPETITOR_WINDOW_DAYS || 45);
 const SHORT_MAX_SEC = Number(process.env.COMPETITOR_SHORT_MAX_SEC || 90);
@@ -252,7 +252,7 @@ async function fetchImageAsBase64(url) {
 }
 
 async function analyzeExecution(outlier) {
-  if (!ANTHROPIC_KEY) return null;
+  if (!OPENAI_KEY) return null;
   const encoded = await fetchImageAsBase64(outlier.thumbnail_url);
   if (!encoded) return null;
 
@@ -266,14 +266,16 @@ async function analyzeExecution(outlier) {
 
   try {
     const r = await axios.post(
-      "https://api.anthropic.com/v1/messages",
+      "https://api.openai.com/v1/chat/completions",
       {
         model: VISION_MODEL,
-        max_tokens: 350,
+        max_completion_tokens: 350,
+        reasoning_effort: "none",
+        response_format: { type: "json_object" },
         messages: [{
           role: "user",
           content: [
-            { type: "image", source: { type: "base64", media_type: encoded.mime, data: encoded.data } },
+            { type: "image_url", image_url: { url: `data:${encoded.mime};base64,${encoded.data}` } },
             { type: "text", text: prompt },
           ],
         }],
@@ -281,13 +283,12 @@ async function analyzeExecution(outlier) {
       {
         timeout: 30000,
         headers: {
-          "x-api-key": ANTHROPIC_KEY,
-          "anthropic-version": "2023-06-01",
+          Authorization: `Bearer ${OPENAI_KEY}`,
           "content-type": "application/json",
         },
       }
     );
-    const text = (r.data?.content || []).map((b) => b?.text || "").join("");
+    const text = r.data?.choices?.[0]?.message?.content || "";
     return parseJsonObject(text);
   } catch {
     return null;
@@ -359,7 +360,7 @@ async function distillSignals(outliers, executionProfiles) {
   if (!outliers.length) {
     return { summary: "No breakout Shorts found in the window.", signals: [], avoid: [] };
   }
-  if (!ANTHROPIC_KEY) throw new Error("distillSignals: ANTHROPIC_KEY is not set");
+  if (!OPENAI_KEY) throw new Error("distillSignals: OPENAI_KEY is not set");
 
   const compact = outliers.map((o) => ({
     title: o.title,
@@ -370,10 +371,12 @@ async function distillSignals(outliers, executionProfiles) {
   }));
 
   const res = await axios.post(
-    "https://api.anthropic.com/v1/messages",
+    "https://api.openai.com/v1/chat/completions",
     {
       model: DISTILL_MODEL,
-      max_tokens: Number(process.env.COMPETITOR_DISTILL_MAX_TOKENS || 4500),
+      max_completion_tokens: Number(process.env.COMPETITOR_DISTILL_MAX_TOKENS || 4500),
+      reasoning_effort: "medium",
+      response_format: { type: "json_object" },
       messages: [{
         role: "user",
         content: DISTILL_PROMPT(JSON.stringify(compact, null, 2), JSON.stringify(executionProfiles, null, 2)),
@@ -382,17 +385,17 @@ async function distillSignals(outliers, executionProfiles) {
     {
       timeout: 90000,
       headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
+        Authorization: `Bearer ${OPENAI_KEY}`,
         "content-type": "application/json",
       },
     }
   );
 
-  if (res.data?.stop_reason === "max_tokens") {
-    throw new Error("distiller reply hit max_tokens - raise COMPETITOR_DISTILL_MAX_TOKENS");
+  const choice = res.data?.choices?.[0];
+  if (choice?.finish_reason === "length") {
+    throw new Error("distiller reply hit max_completion_tokens - raise COMPETITOR_DISTILL_MAX_TOKENS");
   }
-  const text = (res.data.content || []).map((b) => b?.text || "").join("");
+  const text = choice?.message?.content || "";
   return parseJsonObject(text);
 }
 

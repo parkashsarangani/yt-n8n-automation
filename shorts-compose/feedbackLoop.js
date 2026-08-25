@@ -16,8 +16,8 @@ const PERF_PATH = path.join(DATA_DIR, "performance_history.json");
 const INSIGHTS_PATH = path.join(DATA_DIR, "channel_insights.json");
 const PERF_MAX = Number(process.env.PERF_HISTORY_MAX || 500);
 
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
-const STRATEGIST_MODEL = process.env.STRATEGIST_MODEL || "claude-sonnet-5";
+const OPENAI_KEY = process.env.OPENAI_KEY || "";
+const STRATEGIST_MODEL = process.env.STRATEGIST_MODEL || "gpt-5.6-luna";
 
 async function readJson(p, fallback) {
   try {
@@ -181,26 +181,27 @@ async function runStrategist(history) {
     metrics: h.metrics,
   }));
 
-  if (!ANTHROPIC_KEY) throw new Error("runStrategist: ANTHROPIC_KEY is not set");
+  if (!OPENAI_KEY) throw new Error("runStrategist: OPENAI_KEY is not set");
 
   const res = await axios.post(
-    "https://api.anthropic.com/v1/messages",
+    "https://api.openai.com/v1/chat/completions",
     {
       model: STRATEGIST_MODEL,
-      max_tokens: 2200,
+      max_completion_tokens: 2200,
+      reasoning_effort: "medium",
+      response_format: { type: "json_object" },
       messages: [{ role: "user", content: STRATEGIST_PROMPT(JSON.stringify(payload, null, 2)) }],
     },
     {
       timeout: 60000,
       headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
+        Authorization: `Bearer ${OPENAI_KEY}`,
         "content-type": "application/json",
       },
     }
   );
 
-  const text = (res.data.content || []).map((b) => (b && b.text) || "").join("");
+  const text = res.data?.choices?.[0]?.message?.content || "";
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < 0) throw new Error("strategist returned no JSON: " + text.slice(0, 200));
