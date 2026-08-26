@@ -605,7 +605,9 @@ function main() {
   // consumes Draft Script's raw output directly - see the checks below and
   // in section 6b for its equivalent coverage.
   check('Visual Director prompt explicitly protects caption_style/trigger/quality from being dropped',
-    nodes['Claude: Visual Director'].parameters.jsonBody.includes('Preserve/rebuild hook_candidates, caption_style, trigger, payoff, quality'));
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('Preserve/rebuild hook_candidates, caption_style, trigger, quality'));
+  check('Visual Director prompt explicitly requires payoff as a nested {claim, resolved_in_scene} object',
+    nodes['Claude: Visual Director'].parameters.jsonBody.includes('payoff must be a nested object with exactly {claim: string, resolved_in_scene: number}'));
   check('Visual Director prompt explicitly protects per-scene scene_index/point from being dropped',
     nodes['Claude: Visual Director'].parameters.jsonBody.includes('Every scene needs sequential scene_index and non-empty point'));
   check('Visual Director prompt requires its own fields (first_frame_type, search_queries) as REQUIRED',
