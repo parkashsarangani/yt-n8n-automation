@@ -761,7 +761,7 @@
           "conditions": [
             {
               "leftValue": "={{ $json.pollAttempt }}",
-              "rightValue": 40,
+              "rightValue": 75,
               "operator": {
                 "type": "number",
                 "operation": "lt"
@@ -783,7 +783,7 @@
     },
     {
       "parameters": {
-        "jsCode": "throw new Error('Compose job did not finish within 40 poll attempts (~320s) - job_id: ' + $json.jobId + '. The render may be stuck; check shorts-compose logs directly.');"
+        "jsCode": "throw new Error('Compose job did not finish within 75 poll attempts (~600s) - job_id: ' + $json.jobId + '. The render may be stuck; check shorts-compose logs directly.');"
       },
       "id": "f113c1ee-e1c2-4c52-82ef-981e5338a240",
       "name": "Fail: Compose Polling Timeout",

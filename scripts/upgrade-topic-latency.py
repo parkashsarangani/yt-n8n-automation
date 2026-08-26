@@ -65,7 +65,7 @@ def patch_compose_polling(workflow: dict) -> None:
         validate["parameters"]["jsCode"] = cleanup + validate["parameters"]["jsCode"]
 
     fail = node_by_name(workflow, "Fail: Compose Polling Timeout")
-    fail["parameters"]["jsCode"] = cleanup + "throw new Error('Compose job did not finish within 40 poll attempts (~320s) - job_id: '+$input.first().json.jobId+'. The render may be stuck; check shorts-compose logs directly.');"
+    fail["parameters"]["jsCode"] = cleanup + "throw new Error('Compose job did not finish within 75 poll attempts (~600s) - job_id: '+$input.first().json.jobId+'. The render may be stuck; check shorts-compose logs directly.');"
 
 
 def upgrade(workflow: dict) -> dict:
