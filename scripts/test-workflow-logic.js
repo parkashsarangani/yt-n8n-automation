@@ -364,7 +364,7 @@ function main() {
     function buildScript(quality) {
       return {
         hook: 'a real hook that is long enough', title: 'a real title', caption_style: 'neutral', trigger: 'disbelief',
-        caption_mode: 'karaoke', creative_format: 'documentary_cinematic', engagement_mode: 'none', first_frame_type: 'hero_motion',
+        caption_mode: 'karaoke', creative_format: 'documentary_cinematic', engagement_mode: 'none', first_frame_type: 'hero_motion', visual_plan_quality: 84,
         tags: ['a', 'b', 'c', 'd', 'e'], seo_description: 'a description that is long enough to satisfy the minimum length check',
         comment_hook: null, payoff: { claim: 'a specific promise the hook makes', resolved_in_scene: 0 },
         scenes: [scene, { ...scene, scene_index: 1 }, { ...scene, scene_index: 2 }],

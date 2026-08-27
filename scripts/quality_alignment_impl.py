@@ -259,7 +259,7 @@ def patch_reliability(workflow: dict) -> None:
         _prioritize_complete_json(node_by_name(workflow, name), tokens)
     validator=node_by_name(workflow,"Validate Final Script");code=validator["parameters"]["jsCode"]
     for metric,minimum in PUBLISH_MINIMUMS.items(): code=re.sub(rf"({re.escape(metric)}:\s*)\d+",rf"\g<1>{minimum}",code,count=1)
-    code=code.replace("if(Number(parsed.visual_plan_quality)<78)errors.push(`visual_plan_quality=${parsed.visual_plan_quality} below publish threshold 78`);",f"if(Number(parsed.visual_plan_quality)<{VISUAL_PLAN_MINIMUM})errors.push(`visual_plan_quality=${{parsed.visual_plan_quality}} below publish threshold {VISUAL_PLAN_MINIMUM}`);")
+    code=code.replace("if(!Number.isFinite(Number(parsed.visual_plan_quality))||Number(parsed.visual_plan_quality)<78)errors.push(`visual_plan_quality=${parsed.visual_plan_quality} below publish threshold 78`);",f"if(!Number.isFinite(Number(parsed.visual_plan_quality))||Number(parsed.visual_plan_quality)<{VISUAL_PLAN_MINIMUM})errors.push(`visual_plan_quality=${{parsed.visual_plan_quality}} below publish threshold {VISUAL_PLAN_MINIMUM}`);")
     code=code.replace("overall > weakest + 5","overall > weakest + 8").replace("by more than 5 points","by more than 8 points")
     validator["parameters"]["jsCode"]=code;validator["notes"]=RELIABILITY_MARKER+": competent-video floors; evidence remains fail-closed"
 

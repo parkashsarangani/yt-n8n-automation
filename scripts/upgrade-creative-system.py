@@ -276,7 +276,7 @@ const validEngagementModes=['none','comment_only','share_only','comment_and_shar
 if(!validFormats.includes(parsed.creative_format))errors.push('creative_format missing/invalid');
 if(!validCaptionModes.includes(parsed.caption_mode))errors.push('caption_mode missing/invalid');
 if(!validEngagementModes.includes(parsed.engagement_mode))errors.push('engagement_mode missing/invalid');
-if(Number(parsed.visual_plan_quality)<78)errors.push(`visual_plan_quality=${parsed.visual_plan_quality} below publish threshold 78`);
+if(!Number.isFinite(Number(parsed.visual_plan_quality))||Number(parsed.visual_plan_quality)<78)errors.push(`visual_plan_quality=${parsed.visual_plan_quality} below publish threshold 78`);
 if(!parsed.first_frame_type)errors.push('first_frame_type missing');
 if(parsed.engagement_mode==='none'&&(parsed.comment_hook||parsed.outro_line))errors.push('engagement_mode=none but CTA fields populated');
 if(parsed.engagement_mode==='comment_only'&&parsed.outro_line)errors.push('comment_only cannot carry a share outro');
