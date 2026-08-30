@@ -18,6 +18,45 @@ from runtime_hardening_impl import upgrade as _upgrade
 from video_multiframe_phase3 import patch_file as patch_video_multiframe_phase3
 
 V4_MARKER = "VISUAL_MATCHING_V4"
+BT709_RANGE_MARKER = "PRODUCTION_BT709_RANGE_NORMALIZATION"
+
+
+def _patch_compose_bt709_range(compose_path: Path) -> None:
+    if not compose_path.exists():
+        return
+    text = compose_path.read_text()
+    if BT709_RANGE_MARKER in text:
+        return
+
+    fade_anchor = "`[${vLabel}]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`"
+    fade_replacement = (
+        "`[${vLabel}]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5,"
+        "scale=in_range=auto:out_range=tv,format=yuv420p,"
+        "setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[final_v]`"
+    )
+    if fade_anchor not in text:
+        raise RuntimeError("compose BT.709 normalization anchor missing")
+    text = text.replace(fade_anchor, fade_replacement, 1)
+
+    option_anchor = '      "-colorspace", "bt709",\n      "-pix_fmt", "yuv420p",'
+    option_replacement = (
+        '      "-colorspace", "bt709",\n'
+        '      "-color_range", "tv",\n'
+        '      "-pix_fmt", "yuv420p",'
+    )
+    if option_anchor not in text:
+        raise RuntimeError("compose color-range output option anchor missing")
+    text = text.replace(option_anchor, option_replacement, 1)
+
+    marker_anchor = "    // Studio-grade final encoding:\n"
+    if marker_anchor not in text:
+        raise RuntimeError("compose final-encoding marker anchor missing")
+    text = text.replace(
+        marker_anchor,
+        f"    // {BT709_RANGE_MARKER}: normalize full-range Remotion frames to limited-range BT.709.\n" + marker_anchor,
+        1,
+    )
+    compose_path.write_text(text)
 
 
 def _validate_v4(path: Path) -> None:
@@ -49,13 +88,15 @@ def _validate_v4(path: Path) -> None:
 
 def upgrade(path: Path) -> None:
     text = path.read_text()
+    compose_path = path.with_name("compose.js")
+    _patch_compose_bt709_range(compose_path)
+
     if V4_MARKER in text:
         _validate_v4(path)
         # Compose telemetry is independent of the old resolver internals; apply
         # it when its anchors remain compatible, otherwise V4's own telemetry is
         # authoritative and deployment must not fail just to preserve an old
         # instrumentation transform.
-        compose_path = path.with_name("compose.js")
         if compose_path.exists():
             try:
                 patch_compose_retrieval_telemetry(compose_path)
@@ -67,7 +108,6 @@ def upgrade(path: Path) -> None:
     patch_retrieval_observability(path)
     patch_retrieval_recall_phase2(path)
     patch_video_multiframe_phase3(path)
-    compose_path = path.with_name("compose.js")
     if compose_path.exists():
         patch_compose_retrieval_telemetry(compose_path)
 

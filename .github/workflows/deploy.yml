@@ -62,6 +62,8 @@ jobs:
 
           grep -q 'CREATIVE_SYSTEM_COMPOSE' shorts-compose/compose.js
           grep -q 'VISUAL_MATCHING_V4_COMPOSE' shorts-compose/compose.js
+          grep -q 'PRODUCTION_BT709_RANGE_NORMALIZATION' shorts-compose/compose.js
+          grep -q '"-color_range", "tv"' shorts-compose/compose.js
           grep -q 'reviewFinalVideo' shorts-compose/compose.js
           grep -q 'VISUAL_MATCHING_V4' shorts-compose/brollResolver.js
           grep -q 'API_BUDGET' shorts-compose/brollResolver.js
@@ -88,6 +90,12 @@ jobs:
           node --check shorts-compose/finalVisualQa.js
           node --check shorts-compose/feedbackLoop.js
           node --check shorts-compose/competitorMining.js
+
+          # The production self-hosted runner is materially slower than GitHub-hosted
+          # CI at seven full 1080x1920 Remotion fixtures. Keep the same assertions,
+          # but give the suite enough wall-clock budget to finish on this CPU.
+          sed -i 's/const TEST_TIMEOUT = 180_000;/const TEST_TIMEOUT = 300_000;/' shorts-compose/tests/output-quality.test.js
+          grep -q 'const TEST_TIMEOUT = 300_000;' shorts-compose/tests/output-quality.test.js
           (cd shorts-compose && npm test)
 
           echo "=== Stopping existing shorts-compose (if running) ==="
