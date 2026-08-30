@@ -263,7 +263,7 @@ if (Array.isArray(parsed.scenes) && parsed.scenes.length) {
 const wantsShareOutro = ['share_only', 'comment_and_share'].includes(parsed.engagement_mode);
 if (outroLine && wantsShareOutro && Array.isArray(parsed.scenes) && parsed.scenes.length) {
   const maxIdx = parsed.scenes.reduce((m, s) => Math.max(m, Number(s.scene_index) || 0), -1);
-  parsed.scenes.push({scene_index:maxIdx+1,point:'outro',narration:outroLine,visual_source:'template',template_name:'kinetic_text',template_data:{line:'Share',is_outro:true}});
+  parsed.scenes.push({scene_index:maxIdx+1,point:'outro',narration:outroLine,visual_source:'template',template_name:'kinetic_text',template_data:{line:'Like, Share, Subscribe',is_outro:true}});
 }
 """
     code = replace_once(code, old, new, "optional outro")
