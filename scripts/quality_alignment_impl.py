@@ -97,7 +97,19 @@ def patch_visual_director(workflow: dict) -> None:
         "already has that field missing, empty, or too short - preserving "
         "it unchanged would just fail the same check again. You MUST write "
         "real, complete content for that exact field; a still-missing field "
-        "is a repair failure, not a preserved one.\\n\\nFAILED CHECKS: " + '" + '
+        "is a repair failure, not a preserved one. A failed check named "
+        "quality.<dimension> or quality.overall is DIFFERENT - nothing is "
+        "missing there, the writing or visual plan simply was not strong "
+        "enough by your own PHASE 1 grading. Re-read the named dimension's "
+        "definition above and materially rewrite the weak part it measures "
+        "(a flatter-than-it-should-be hook, thin evidence, a repetitive "
+        "visual plan, etc.) - identify the true weakest link even if only "
+        "quality.overall failed, since overall failing alone means your "
+        "holistic read was harsher than the passing component scores "
+        "justified. Re-score honestly after the real rewrite; raising the "
+        "reported number alone without a genuine content change is not a "
+        "repair, it is the same script re-failing on the next gate that "
+        "reads it.\\n\\nFAILED CHECKS: " + '" + '
         "JSON.stringify($('Validate Final Script').item.json._validationErrors || []) + \""
         "\\n\\n" + phase1_anchor
     )
