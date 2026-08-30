@@ -24,6 +24,24 @@ jobs:
           set -euo pipefail
           python3 scripts/preprod-audit.py
 
+      - name: Install deploy test dependencies
+        run: |
+          set -euo pipefail
+          cd shorts-compose
+          npm install --no-package-lock --no-audit --no-fund
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = require('ffmpeg-static');
+          const real = fs.realpathSync(p);
+          if (real !== '/usr/bin/ffmpeg') throw new Error(`ffmpeg-static path did not select system FFmpeg: ${real}`);
+          console.log(`FFmpeg runtime OK: ${p} -> ${real}`);
+          NODE
+          npm --prefix remotion install --no-package-lock --no-audit --no-fund
+          cd remotion
+          RSPACK_VER="$(node -p "require('@rspack/binding/package.json').version")"
+          npm install --no-package-lock --no-audit --no-fund --no-save "@rspack/binding-linux-x64-gnu@${RSPACK_VER}"
+          node -e "require('@rspack/binding'); console.log('rspack binding OK')"
+
       - name: Build creative-system compose service
         env:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
