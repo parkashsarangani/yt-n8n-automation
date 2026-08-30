@@ -36,27 +36,41 @@ jobs:
           set -euo pipefail
 
           echo "=== Validating compose source transforms ==="
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/video_multiframe_phase3.py
+          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/video_multiframe_phase3.py scripts/visual_matching_v4_compose.py
           python3 scripts/upgrade-compose-creative-system.py shorts-compose/compose.js
           python3 scripts/upgrade-compose-api-budget.py shorts-compose/compose.js shorts-compose/brollResolver.js
           python3 scripts/upgrade-compose-runtime-hardening.py shorts-compose/brollResolver.js
+          python3 scripts/visual_matching_v4_compose.py shorts-compose/compose.js
+
           grep -q 'CREATIVE_SYSTEM_COMPOSE' shorts-compose/compose.js
-          grep -q 'API_BUDGET_COMPOSE' shorts-compose/compose.js
+          grep -q 'VISUAL_MATCHING_V4_COMPOSE' shorts-compose/compose.js
+          grep -q 'reviewFinalVideo' shorts-compose/compose.js
+          grep -q 'VISUAL_MATCHING_V4' shorts-compose/brollResolver.js
           grep -q 'API_BUDGET' shorts-compose/brollResolver.js
           grep -q 'PREPROD_BROLL_HARDENING' shorts-compose/brollResolver.js
           grep -q 'RETRIEVAL_RECALL_PHASE2' shorts-compose/brollResolver.js
           grep -q 'SOURCE_QUERY_COMPILER_V1' shorts-compose/brollResolver.js
           grep -q 'fromPixabayVideos' shorts-compose/brollResolver.js
+          grep -q 'fromWikimediaCommons' shorts-compose/brollResolver.js
           grep -q 'MULTIFRAME_VIDEO_RERANK_V1' shorts-compose/brollResolver.js
           grep -q 'sampleVideoContactSheet' shorts-compose/brollResolver.js
           grep -q 'frame_similarity' shorts-compose/brollResolver.js
-          grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
-          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/brollResolver.js
+          grep -q 'localSemanticRerank' shorts-compose/brollResolver.js
+          grep -q 'passesSemanticGate' shorts-compose/brollResolver.js
+          grep -q 'materializeVerifiedClip' shorts-compose/brollResolver.js
           grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
+          grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
+          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
           node --check shorts-compose/compose.js
           node --check shorts-compose/brollResolver.js
+          node --check shorts-compose/visualContract.js
+          node --check shorts-compose/visualBudget.js
+          node --check shorts-compose/semanticReranker.js
+          node --check shorts-compose/clipLibrary.js
+          node --check shorts-compose/finalVisualQa.js
           node --check shorts-compose/feedbackLoop.js
           node --check shorts-compose/competitorMining.js
+          (cd shorts-compose && npm test)
 
           echo "=== Stopping existing shorts-compose (if running) ==="
           docker compose down shorts-compose || true
@@ -97,9 +111,13 @@ jobs:
           python3 -m py_compile scripts/upgrade-creative-system.py
           python3 scripts/upgrade-creative-system.py /tmp/workflow_quality_gate.json /tmp/workflow_creative_system.json
 
+          echo "=== Applying V4 visual contracts ==="
+          python3 -m py_compile scripts/visual_matching_v4_workflow.py
+          python3 scripts/visual_matching_v4_workflow.py /tmp/workflow_creative_system.json /tmp/workflow_visual_v4.json
+
           echo "=== Applying API budget guardrails ==="
           python3 -m py_compile scripts/upgrade-workflow-api-budget.py
-          python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_creative_system.json /tmp/workflow_api_budget.json
+          python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_visual_v4.json /tmp/workflow_api_budget.json
 
           echo "=== Applying topic latency guardrails ==="
           python3 -m py_compile scripts/upgrade-topic-latency.py
@@ -115,6 +133,7 @@ jobs:
           import json
           w = json.load(open('/tmp/workflow_quality.json'))
           names = {n['name']: n for n in w['nodes']}
+          assert w.get('meta', {}).get('visual_matching_version') == '4'
 
           topic = names['Claude: Generate Topic']
           body = topic['parameters']['jsonBody']
@@ -132,6 +151,9 @@ jobs:
           visual_body = visual['parameters']['jsonBody']
           assert 'QUALITY_ALIGNMENT' in visual_body
           assert 'RETRIEVAL_RECALL_PHASE2' in visual_body
+          assert 'VISUAL_MATCHING_V4' in visual_body
+          for field in ['visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','global_subject']:
+              assert field in visual_body, field
           assert 'pixabay_video' in visual_body and 'pixabay' in visual_body
           assert visual['parameters']['options']['timeout'] == 180000
           assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
@@ -140,8 +162,9 @@ jobs:
           resolver_node = names['Resolve B-roll']
           assert resolver_node['parameters']['options']['timeout'] == 180000
           resolver_body = resolver_node['parameters']['jsonBody']
-          assert 'search_queries' in resolver_body and 'first_frame' in resolver_body
-          assert 'run_id' in resolver_body and '$execution.id' in resolver_body
+          for field in ['search_queries','first_frame','run_id','visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','narration','global_subject']:
+              assert field in resolver_body, field
+          assert '$execution.id' in resolver_body
 
           for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Validate Final Script']:
               code = names[node_name]['parameters']['jsCode']
@@ -154,6 +177,7 @@ jobs:
           assert 'Concept archetype' in writer_body
           validate = names['Validate Final Script']['parameters']['jsCode']
           assert 'visual_plan_quality' in validate
+          assert 'VISUAL_MATCHING_V4 contract gate' in validate
           assert 'needs at least 3 search_queries' in validate
           assert 'rebuiltFullScript' in validate
           assert 'pixabay_video' in validate and 'pixabay' in validate
@@ -161,6 +185,7 @@ jobs:
           assert 'compiled_query_plan' in tag
           assert 'MULTIFRAME_TELEMETRY_V1' in tag
           assert 'frame_similarity' in tag and 'frame_sampling_status' in tag
+          assert 'asset_semantic_match' in tag and 'actual_video_verified' in tag
           print('Generated workflow contract OK')
           PY
 

@@ -28,8 +28,11 @@ ENV CHROMIUM_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
-# Install main service dependencies
-COPY package*.json ./
+# Install main service dependencies. runtime-postinstall.js makes the existing
+# ffmpeg-static API resolve to Debian's full FFmpeg binary when available, so
+# lavfi/audio fallbacks and V4 frame sampling use the production codec/filter
+# surface instead of the reduced npm static build.
+COPY package*.json runtime-postinstall.js ./
 RUN npm install --production
 
 # Install Remotion project dependencies.

@@ -4,42 +4,21 @@ on:
   pull_request:
     paths:
       - 'n8n/workflow.json'
-      - 'scripts/upgrade-viral-shorts.py'
-      - 'scripts/upgrade-creative-system.py'
-      - 'scripts/upgrade-compose-creative-system.py'
-      - 'scripts/upgrade-compose-api-budget.py'
-      - 'scripts/upgrade-compose-runtime-hardening.py'
-      - 'scripts/upgrade-workflow-api-budget.py'
-      - 'scripts/upgrade-topic-latency.py'
-      - 'scripts/upgrade_quality_alignment.py'
-      - 'scripts/upgrade-anthropic-parser.py'
-      - 'scripts/preprod-audit.py'
-      - 'shorts-compose/brollResolver.js'
-      - 'shorts-compose/feedbackLoop.js'
-      - 'shorts-compose/competitorMining.js'
-      - 'shorts-compose/channel-voice.json'
+      - 'scripts/**'
+      - 'scripts/visual_matching_v4_workflow.py'
+      - 'scripts/visual_matching_v4_compose.py'
+      - 'shorts-compose/**'
       - '.github/workflows/quality-check.yml'
       - '.github/workflows/deploy.yml'
       - 'docker-compose.yml'
   push:
-    branches:
-      - 'agent/**'
+    branches: ['agent/**']
     paths:
       - 'n8n/workflow.json'
-      - 'scripts/upgrade-viral-shorts.py'
-      - 'scripts/upgrade-creative-system.py'
-      - 'scripts/upgrade-compose-creative-system.py'
-      - 'scripts/upgrade-compose-api-budget.py'
-      - 'scripts/upgrade-compose-runtime-hardening.py'
-      - 'scripts/upgrade-workflow-api-budget.py'
-      - 'scripts/upgrade-topic-latency.py'
-      - 'scripts/upgrade_quality_alignment.py'
-      - 'scripts/upgrade-anthropic-parser.py'
-      - 'scripts/preprod-audit.py'
-      - 'shorts-compose/brollResolver.js'
-      - 'shorts-compose/feedbackLoop.js'
-      - 'shorts-compose/competitorMining.js'
-      - 'shorts-compose/channel-voice.json'
+      - 'scripts/**'
+      - 'scripts/visual_matching_v4_workflow.py'
+      - 'scripts/visual_matching_v4_compose.py'
+      - 'shorts-compose/**'
       - '.github/workflows/quality-check.yml'
       - '.github/workflows/deploy.yml'
       - 'docker-compose.yml'
@@ -50,157 +29,131 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply workflow upgrades
+      - name: Apply production workflow upgrades
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade_quality_alignment.py scripts/upgrade-anthropic-parser.py scripts/preprod-audit.py
-          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_quality_gate.json
-          python3 scripts/upgrade-creative-system.py /tmp/workflow_quality_gate.json /tmp/workflow_creative_system.json
-          python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_creative_system.json /tmp/workflow_api_budget.json
-          python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
-          python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_final.json
+          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/visual_matching_v4_workflow.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade_quality_alignment.py scripts/upgrade-anthropic-parser.py scripts/preprod-audit.py
+          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/w1.json
+          python3 scripts/upgrade-creative-system.py /tmp/w1.json /tmp/w2.json
+          python3 scripts/visual_matching_v4_workflow.py /tmp/w2.json /tmp/w2v4.json
+          python3 scripts/upgrade-workflow-api-budget.py /tmp/w2v4.json /tmp/w3.json
+          python3 scripts/upgrade-topic-latency.py /tmp/w3.json /tmp/w4.json
+          python3 scripts/upgrade-anthropic-parser.py /tmp/w4.json /tmp/workflow_final.json
           python3 -m json.tool /tmp/workflow_final.json >/dev/null
 
-      - name: Verify graph, latency, retries, and response parsing
+      - name: Verify V4 workflow contract
         run: |
           python3 - <<'PY'
           import json
-          w = json.load(open('/tmp/workflow_final.json'))
-          c = w['connections']
+          w=json.load(open('/tmp/workflow_final.json')); names={n['name']:n for n in w['nodes']}; c=w['connections']
+          assert w.get('meta',{}).get('visual_matching_version')=='4'
           def first(src): return c[src]['main'][0][0]['node']
-          assert first('Claude: Generate Topic') == 'Parse Topic Pool'
-          assert first('Parse Topic Pool') == 'Claude: Commission Topic Shortlist'
-          assert first('Claude: Commission Topic Shortlist') == 'Extract Generated Topic'
-          assert any(e['node'] == 'Wikipedia: Research Topic' for e in c['Extract Generated Topic']['main'][0])
-          assert first('Wikipedia: Research Topic') == 'Normalize Research Evidence'
-          assert first('Normalize Research Evidence') == 'Claude: Draft Script (Stage 1)'
-          assert first('Claude: Draft Script (Stage 1)') == 'Parse Draft JSON'
-          assert first('Parse Draft JSON') == 'Claude: Visual Director'
-          assert first('Claude: Visual Director') == 'Validate Final Script'
-
-          names = {n['name']: n for n in w['nodes']}
-          assert 'Claude: Editorial Rewrite (Stage 2)' not in names, 'Editorial Rewrite stage should have been removed'
-          assert 'Parse Editorial For Visual Director' not in names, 'Editorial parser node should have been removed'
-          topic = names['Claude: Generate Topic']
-          topic_body = topic['parameters']['jsonBody']
-          assert 'TOPIC_LATENCY' in topic_body
-          assert 'GENERATE 4 DISTINCT candidate topics' in topic_body
-          assert 'max_completion_tokens: 6000' in topic_body
-          assert topic['parameters']['options']['timeout'] == 120000
-          assert topic.get('retryOnFail') is False and topic.get('maxTries') == 1
-
-          commission = names['Claude: Commission Topic Shortlist']
-          assert commission['parameters']['options']['timeout'] == 120000
-          assert commission.get('retryOnFail') is False and commission.get('maxTries') == 1
-          assert 'shortlist:pool.slice(0,4)' in names['Parse Topic Pool']['parameters']['jsCode']
-
-          visual = names['Claude: Visual Director']
-          assert visual['parameters']['options']['timeout'] == 180000
-          assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
-          assert 'reasoning_effort: "none"' in visual['parameters']['jsonBody']
-          assert names['Resolve B-roll']['parameters']['options']['timeout'] == 180000
-
-          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Validate Final Script']:
-              code = names[node_name]['parameters']['jsCode']
-              assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
-              assert 'LAST_VALID_JSON_OBJECT' in code, node_name
-              assert 'content?.[0]?.text' not in code, node_name
-              assert 'finish_reason' in code, node_name
-
-          writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
-          assert 'Concept archetype' in writer_body
-          validate = names['Validate Final Script']['parameters']['jsCode']
-          assert 'visual_plan_quality' in validate
-          assert 'needs at least 3 search_queries' in validate
-          assert 'rebuiltFullScript' in validate
-          resolver = names['Resolve B-roll']['parameters']['jsonBody']
-          assert 'search_queries' in resolver and 'first_frame' in resolver
-          assert 'run_id' in resolver and '$execution.id' in resolver
-          print('Graph + runtime + Anthropic parser hardening OK')
+          assert first('Claude: Generate Topic')=='Parse Topic Pool'
+          assert first('Parse Draft JSON')=='Claude: Visual Director'
+          assert first('Claude: Visual Director')=='Validate Final Script'
+          visual=names['Claude: Visual Director']; vb=visual['parameters']['jsonBody']
+          assert visual['parameters']['options']['timeout']==180000 and visual.get('retryOnFail') is False and visual.get('maxTries')==1
+          assert 'reasoning_effort: "none"' in vb and 'VISUAL_MATCHING_V4' in vb
+          for f in ['visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','OVERALL SELECTED TOPIC','map=>template + map','timeline=>template + timeline','diagram=>template + diagram','annotated_real MUST remain a real-media retrieval scene']:
+              assert f in vb,f
+          resolver=names['Resolve B-roll']; rb=resolver['parameters']['jsonBody']
+          assert resolver['parameters']['options']['timeout']==180000
+          for f in ['search_queries','first_frame','run_id','$execution.id','visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','narration','global_subject']:
+              assert f in rb,f
+          validate=names['Validate Final Script']['parameters']['jsCode']
+          for f in ['VISUAL_MATCHING_V4 contract gate','needs at least 3 search_queries','rebuiltFullScript','deterministicModes','expectedTemplate','map requires template_data.locations','timeline requires at least two events','diagram requires at least two nodes']:
+              assert f in validate,f
+          tag=names['Tag B-roll']['parameters']['jsCode']
+          for f in ['asset_semantic_match','asset_entity_match','asset_action_match','asset_relationship_match','actual_video_verified','frame_similarity','verified_frame_indices','annotation_plan',"template_name='annotated_real'"]:
+              assert f in tag,f
+          for n in ['Parse Topic Pool','Extract Generated Topic','Parse Draft JSON','Validate Final Script']:
+              code=names[n]['parameters']['jsCode']; assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code and 'LAST_VALID_JSON_OBJECT' in code and 'content?.[0]?.text' not in code
+          print('V4 workflow contract OK')
           PY
 
-      - name: Execute parser nodes against synthetic OpenAI responses
+      - name: Validate compose and resolver production transforms
         run: |
           set -euo pipefail
-          node - <<'JS'
-          const fs = require('fs');
-          const wf = JSON.parse(fs.readFileSync('/tmp/workflow_final.json', 'utf8'));
-          const names = {};
-          for (const n of wf.nodes) names[n.name] = n;
-
-          function run(nodeName, input, prior = {}) {
-            const fn = new Function('$input', '$', '$execution', names[nodeName].parameters.jsCode);
-            const $ = (name) => ({ item: { json: prior[name] || {} } });
-            return fn({ first: () => ({ json: input }) }, $, { id: 'ci-exec' });
-          }
-          function assertItem(result, label) {
-            if (result === undefined || result === null) throw new Error(label + ': node returned ' + result);
-            if (Array.isArray(result)) {
-              if (!result.every((x) => x && typeof x === 'object')) throw new Error(label + ': array items must be objects');
-            } else if (typeof result !== 'object') {
-              throw new Error(label + ': must return an object or array of objects, got ' + typeof result);
-            }
-          }
-
-          function openaiResponse(text, finishReason = 'stop') {
-            return { choices: [{ message: { content: text }, finish_reason: finishReason }] };
-          }
-
-          const candidates = Array.from({ length: 4 }, (_, i) => ({
-            topic: 'recognizable topic ' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
-            share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
-          }));
-          assertItem(run('Parse Topic Pool', openaiResponse(JSON.stringify({ candidates }))), 'Parse Topic Pool happy path');
-
-          const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
-          const draft = run('Parse Draft JSON', openaiResponse(JSON.stringify(script)));
-          assertItem(draft, 'Parse Draft JSON happy path');
-          if (!draft || !draft.json || !draft.json.draft) throw new Error('Parse Draft JSON did not return {json:{draft}}');
-
-          const draftCorrected = run('Parse Draft JSON', openaiResponse('{"hook":"bad",]\nWait\n' + JSON.stringify(script)));
-          if (draftCorrected.json.draft.hook !== script.hook) throw new Error('Draft parser did not choose final corrected JSON');
-
-          console.log('Executable parser smoke tests OK');
-          JS
-
-      - name: Validate compose and b-roll runtime transforms
-        run: |
-          set -euo pipefail
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py
+          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/visual_matching_v4_compose.py
           cp shorts-compose/compose.js /tmp/compose_final.js
           cp shorts-compose/brollResolver.js /tmp/broll_final.js
           python3 scripts/upgrade-compose-creative-system.py /tmp/compose_final.js
           python3 scripts/upgrade-compose-api-budget.py /tmp/compose_final.js /tmp/broll_final.js
           python3 scripts/upgrade-compose-runtime-hardening.py /tmp/broll_final.js
-          grep -q 'CREATIVE_SYSTEM_COMPOSE' /tmp/compose_final.js
-          grep -q 'API_BUDGET_COMPOSE' /tmp/compose_final.js
-          grep -q 'run_id' /tmp/compose_final.js
-          grep -q 'API_BUDGET' /tmp/broll_final.js
-          grep -q 'PREPROD_BROLL_HARDENING' /tmp/broll_final.js
-          grep -q 'INITIAL_SEARCH_QUERIES' /tmp/broll_final.js
-          grep -q 'FIRST_FRAME_MAX_VISION_CALLS' /tmp/broll_final.js
-          grep -q 'SUPPORT_MAX_VISION_CALLS' /tmp/broll_final.js
-          grep -q 'RUN_MAX_VISION_CALLS' /tmp/broll_final.js
-          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' /tmp/broll_final.js
-          grep -q 'scoreCache' /tmp/broll_final.js
-          grep -q 'runBudgets' /tmp/broll_final.js
-          grep -q 'scoreOneBatch' /tmp/broll_final.js
-          grep -q 'scene_vision_budget_exhausted' /tmp/broll_final.js
-          grep -q 'run_vision_budget_exhausted' /tmp/broll_final.js
+          python3 scripts/visual_matching_v4_compose.py /tmp/compose_final.js
+          grep -q 'VISUAL_MATCHING_V4' /tmp/broll_final.js
+          grep -q 'passesSemanticGate' /tmp/broll_final.js
+          grep -q 'localSemanticRerank' /tmp/broll_final.js
+          grep -q 'sampleVideoContactSheet' /tmp/broll_final.js
+          grep -q 'best_frame_indices' /tmp/broll_final.js
+          grep -q 'verifiedRangeFromFrameIndices' /tmp/broll_final.js
+          grep -q 'materializeVerifiedClip' /tmp/broll_final.js
+          grep -q 'materializeVerifiedImage' /tmp/broll_final.js
+          grep -q 'contract.visual_claim' /tmp/broll_final.js
+          grep -q 'fromPixabayVideos' /tmp/broll_final.js
+          grep -q 'fromWikimediaCommons' /tmp/broll_final.js
+          ! grep -q 'best_start_sec' /tmp/broll_final.js
+          ! grep -q 'best_end_sec' /tmp/broll_final.js
+          grep -q 'VISUAL_MATCHING_V4_COMPOSE' /tmp/compose_final.js
+          grep -q 'reviewFinalVideo' /tmp/compose_final.js
+          grep -q 'Final visual QA rejected' /tmp/compose_final.js
+          for marker in 'MapVisual' 'TimelineVisual' 'DiagramVisual' 'AnnotatedReal' '"map", "timeline", "diagram", "annotated_real"'; do grep -q "$marker" /tmp/compose_final.js; done
+          grep -q '"-ar", "48000", "-ac", "2"' /tmp/compose_final.js
+          ! grep -q 'const target = subj ||' /tmp/broll_final.js
+          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
+          for f in shorts-compose/remotion/src/compositions/MapVisual.tsx shorts-compose/remotion/src/compositions/TimelineVisual.tsx shorts-compose/remotion/src/compositions/DiagramVisual.tsx shorts-compose/remotion/src/compositions/AnnotatedReal.tsx; do test -s "$f"; done
+          grep -q 'id="MapVisual"' shorts-compose/remotion/src/Root.tsx
+          grep -q 'id="TimelineVisual"' shorts-compose/remotion/src/Root.tsx
+          grep -q 'id="DiagramVisual"' shorts-compose/remotion/src/Root.tsx
+          grep -q 'id="AnnotatedReal"' shorts-compose/remotion/src/Root.tsx
           node --check /tmp/compose_final.js
           node --check /tmp/broll_final.js
-          node --check shorts-compose/feedbackLoop.js
-          node --check shorts-compose/competitorMining.js
-          python3 -m json.tool shorts-compose/channel-voice.json >/dev/null
+          node --check shorts-compose/visualContract.js
+          node --check shorts-compose/visualBudget.js
+          node --check shorts-compose/semanticReranker.js
+          node --check shorts-compose/clipLibrary.js
+          node --check shorts-compose/finalVisualQa.js
 
-      - name: Assert fail-closed quality behavior survives
+      - name: Provision production media runtime
         run: |
           set -euo pipefail
-          grep -q 'below_quality_threshold' /tmp/broll_final.js
-          grep -q 'BROLL_FIRST_FRAME_THRESHOLD' /tmp/broll_final.js
-          grep -q 'return { ok: false' /tmp/broll_final.js
-          grep -q 'visual_hook_proxy' shorts-compose/competitorMining.js
-          grep -q 'creative_dna' shorts-compose/feedbackLoop.js
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+
+      - name: Install production-equivalent Node and Remotion dependencies
+        run: |
+          set -euo pipefail
+          cd shorts-compose
+          npm install --no-package-lock --no-audit --no-fund
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = require('ffmpeg-static');
+          const real = fs.realpathSync(p);
+          if (real !== '/usr/bin/ffmpeg') throw new Error(`ffmpeg-static path did not select system FFmpeg: ${real}`);
+          console.log(`FFmpeg runtime OK: ${p} -> ${real}`);
+          NODE
+          npm --prefix remotion install --no-package-lock --no-audit --no-fund
+          cd remotion
+          RSPACK_VER="$(node -p "require('@rspack/binding/package.json').version")"
+          npm install --no-package-lock --no-audit --no-fund --no-save "@rspack/binding-linux-x64-gnu@${RSPACK_VER}"
+          node -e "require('@rspack/binding'); console.log('rspack binding OK')"
+
+      - name: Run resolver and render regression tests on deploy artifacts
+        env:
+          CREATIVE_SYSTEM_EXPECT_PREFLIGHT: 'true'
+        run: |
+          set -euo pipefail
+          # The deployment path transforms compose/resolver before Docker build.
+          # Run media regressions against those exact artifacts, not the readable
+          # canonical sources, or CI can be green while production differs.
+          cp /tmp/compose_final.js shorts-compose/compose.js
+          cp /tmp/broll_final.js shorts-compose/brollResolver.js
+          cd shorts-compose
+          node --check compose.js
+          node --check brollResolver.js
+          npm test
 
       - name: Run comprehensive pre-production audit
         run: |
