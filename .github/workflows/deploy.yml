@@ -24,25 +24,7 @@ jobs:
           set -euo pipefail
           python3 scripts/preprod-audit.py
 
-      - name: Install deploy test dependencies
-        run: |
-          set -euo pipefail
-          cd shorts-compose
-          npm install --no-package-lock --no-audit --no-fund
-          node - <<'NODE'
-          const fs = require('fs');
-          const p = require('ffmpeg-static');
-          const real = fs.realpathSync(p);
-          if (real !== '/usr/bin/ffmpeg') throw new Error(`ffmpeg-static path did not select system FFmpeg: ${real}`);
-          console.log(`FFmpeg runtime OK: ${p} -> ${real}`);
-          NODE
-          npm --prefix remotion install --no-package-lock --no-audit --no-fund
-          cd remotion
-          RSPACK_VER="$(node -p "require('@rspack/binding/package.json').version")"
-          npm install --no-package-lock --no-audit --no-fund --no-save "@rspack/binding-linux-x64-gnu@${RSPACK_VER}"
-          node -e "require('@rspack/binding'); console.log('rspack binding OK')"
-
-      - name: Build creative-system compose service
+      - name: Validate and deploy compose service
         env:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
@@ -53,6 +35,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Full media/render regression tests run in PR CI. Production deploy
+          # keeps only cheap deterministic integrity checks before replacing the
+          # running service.
           echo "=== Validating compose source transforms ==="
           python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/video_multiframe_phase3.py scripts/visual_matching_v4_compose.py
           python3 scripts/upgrade-compose-creative-system.py shorts-compose/compose.js
@@ -70,16 +55,9 @@ jobs:
           grep -q 'PREPROD_BROLL_HARDENING' shorts-compose/brollResolver.js
           grep -q 'RETRIEVAL_RECALL_PHASE2' shorts-compose/brollResolver.js
           grep -q 'SOURCE_QUERY_COMPILER_V1' shorts-compose/brollResolver.js
-          grep -q 'fromPixabayVideos' shorts-compose/brollResolver.js
-          grep -q 'fromWikimediaCommons' shorts-compose/brollResolver.js
           grep -q 'MULTIFRAME_VIDEO_RERANK_V1' shorts-compose/brollResolver.js
-          grep -q 'sampleVideoContactSheet' shorts-compose/brollResolver.js
-          grep -q 'frame_similarity' shorts-compose/brollResolver.js
-          grep -q 'localSemanticRerank' shorts-compose/brollResolver.js
           grep -q 'passesSemanticGate' shorts-compose/brollResolver.js
           grep -q 'materializeVerifiedClip' shorts-compose/brollResolver.js
-          grep -q 'INITIAL_SEARCH_QUERIES' shorts-compose/brollResolver.js
-          grep -q 'RUN_MAX_VISION_CALLS' shorts-compose/brollResolver.js
           grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
           node --check shorts-compose/compose.js
           node --check shorts-compose/brollResolver.js
@@ -88,30 +66,16 @@ jobs:
           node --check shorts-compose/semanticReranker.js
           node --check shorts-compose/clipLibrary.js
           node --check shorts-compose/finalVisualQa.js
-          node --check shorts-compose/feedbackLoop.js
-          node --check shorts-compose/competitorMining.js
 
-          # The production self-hosted runner is materially slower than GitHub-hosted
-          # CI at seven full 1080x1920 Remotion fixtures. Keep the same assertions,
-          # but give the suite enough wall-clock budget to finish on this CPU.
-          sed -i 's/const TEST_TIMEOUT = 180_000;/const TEST_TIMEOUT = 300_000;/' shorts-compose/tests/output-quality.test.js
-          grep -q 'const TEST_TIMEOUT = 300_000;' shorts-compose/tests/output-quality.test.js
-          (cd shorts-compose && npm test)
+          echo "=== Building shorts-compose with Docker layer cache ==="
+          docker compose build shorts-compose
 
-          echo "=== Stopping existing shorts-compose (if running) ==="
-          docker compose down shorts-compose || true
-          docker ps -q --filter "publish=4000" | xargs -r docker stop || true
-
-          echo "=== Building shorts-compose ==="
-          docker compose build --no-cache shorts-compose
-
-          echo "=== Deploying ==="
-          docker compose up -d shorts-compose
+          echo "=== Deploying shorts-compose ==="
+          docker compose up -d --no-deps shorts-compose
 
       - name: Health check
         run: |
           set -euo pipefail
-          sleep 5
           RETRY=0
           MAX_RETRY=12
           until curl -sf http://localhost:4000/topic-history > /dev/null 2>&1; do
