@@ -118,6 +118,7 @@ async function reviewFinalVideo(videoPath, scenes, durations) {
       acceptable_visuals: scene?.acceptable_visuals,
       visual_proof_mode: scene?.visual_proof_mode,
       template_name: scene?.template_name,
+      template_data: scene?.template_data,
     });
 
     const sheet = await sampleSceneContactSheet(videoPath, sceneStart, duration);
