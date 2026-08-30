@@ -147,6 +147,69 @@ def patch_runtime_guardrails(workflow: dict) -> None:
     resolver["notes"] = RUNTIME_MARKER + ": timeout covers bounded 7-call first-frame commissioning"
 
 
+BEST_EFFORT_MARKER = "QUALITY_GATE_BEST_EFFORT_FALLBACK"
+
+
+def patch_quality_gate_best_effort_fallback(workflow: dict) -> None:
+    """Never burn every repair attempt and skip the scheduled post over a
+    purely cosmetic quality-score miss.
+
+    Tracks the best-scoring attempt across the repair loop that failed ONLY on
+    quality.* thresholds - never one with a structural/factual/policy defect
+    (missing fields, medical content, topic substitution, template mismatches,
+    etc.), since ANY such error would not start with "quality." and therefore
+    disqualifies that attempt from ever being selected. On the last allowed
+    attempt, if a qualifying candidate exists, adopt it and fall through to the
+    unchanged success path below (optional-outro append, final return) instead
+    of failing - so every downstream node that reads $('Validate Final
+    Script') keeps working unmodified; nothing needs rewiring.
+    """
+    node = node_by_name(workflow, "Validate Final Script")
+    code = node["parameters"]["jsCode"]
+    if BEST_EFFORT_MARKER in code:
+        return
+
+    old_decl = "const parsed = parseLastValidJsonObject(raw);"
+    new_decl = "let parsed = parseLastValidJsonObject(raw);"
+    code = replace_required(code, old_decl, new_decl, "best-effort fallback: parsed declaration")
+
+    old_gate = "if (errors.length > 0) {\n  return { json: { _scriptValid: false, _validationErrors: errors, _failedScript: parsed } };\n}"
+    new_gate = f"""if (errors.length > 0) {{
+  // {BEST_EFFORT_MARKER}: see patch_quality_gate_best_effort_fallback for the full rationale.
+  const runId = String($execution.id || '').trim();
+  const qualityOnly = errors.every((e) => e.startsWith('quality.'));
+  const overallScore = Number(parsed && parsed.quality && parsed.quality.overall);
+  let bestEffortChosen = null;
+  let bestEffortScore = null;
+  if (runId) {{
+    const staticData = $getWorkflowStaticData('global');
+    staticData.scriptBestEffort = staticData.scriptBestEffort || {{}};
+    if (qualityOnly && Number.isFinite(overallScore)) {{
+      const existing = staticData.scriptBestEffort[runId];
+      if (!existing || overallScore > existing.overallScore) {{
+        staticData.scriptBestEffort[runId] = {{ script: parsed, overallScore, updatedAt: Date.now() }};
+      }}
+    }}
+    const attemptState = staticData.scriptAttempts && staticData.scriptAttempts[runId];
+    const isFinalAttempt = Boolean(attemptState) && Number(attemptState.attempt || 0) >= 2;
+    if (isFinalAttempt) {{
+      const best = staticData.scriptBestEffort[runId];
+      if (best) {{ bestEffortChosen = best.script; bestEffortScore = best.overallScore; }}
+      delete staticData.scriptBestEffort[runId];
+    }}
+  }}
+  if (!bestEffortChosen) {{
+    return {{ json: {{ _scriptValid: false, _validationErrors: errors, _failedScript: parsed }} }};
+  }}
+  console.log(`{BEST_EFFORT_MARKER}: publishing the best-scoring attempt (quality.overall=${{bestEffortScore}}) after exhausting repair attempts - last errors: ${{errors.join(' | ')}}`);
+  parsed = bestEffortChosen;
+  parsed._qualityGateBestEffort = true;
+  parsed._qualityGateBestEffortScore = bestEffortScore;
+}}"""
+    code = replace_required(code, old_gate, new_gate, "best-effort fallback: quality gate")
+    node["parameters"]["jsCode"] = code
+
+
 def upgrade(workflow: dict) -> dict:
     # Prompt/schema alignment must happen before final parser/runtime hardening.
     upgrade_quality_alignment(workflow)
@@ -155,6 +218,7 @@ def upgrade(workflow: dict) -> dict:
     patch_draft_parser(workflow)
     patch_final_parser(workflow)
     patch_visual_schema_normalizer(workflow)
+    patch_quality_gate_best_effort_fallback(workflow)
     patch_runtime_guardrails(workflow)
     return workflow
 

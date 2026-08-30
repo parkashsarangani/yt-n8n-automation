@@ -41,16 +41,20 @@ def first_edge(workflow: dict, name: str) -> str | None:
     except (KeyError, IndexError, TypeError): return None
 
 
-def run_code_node(js_code: str, payload: dict, prior: dict | None = None) -> dict:
+def run_code_node(js_code: str, payload: dict, prior: dict | None = None, static_data: dict | None = None, execution_id: str = "preprod-audit-execution") -> dict:
     harness = r'''
 const code=JSON.parse(process.env.AUDIT_CODE),payload=JSON.parse(process.env.AUDIT_INPUT),prior=JSON.parse(process.env.AUDIT_PRIOR||'{}');
+const __staticData=JSON.parse(process.env.AUDIT_STATIC||'{}');
 const $input={first:()=>({json:payload}),all:()=>[{json:payload}]};
 const $=(name)=>({item:{json:prior[name]||{}},first:()=>({json:prior[name]||{}}),all:()=>[{json:prior[name]||{}}]});
-const $execution={id:'preprod-audit-execution'};
-try{const fn=new Function('$input','$','$execution',code);console.log('__PREPROD__'+JSON.stringify({ok:true,result:fn($input,$,$execution)}));}
-catch(err){console.log('__PREPROD__'+JSON.stringify({ok:false,error:String(err&&err.message||err)}));}
+const $execution={id:process.env.AUDIT_EXECUTION_ID||'preprod-audit-execution'};
+const $getWorkflowStaticData=()=>__staticData;
+try{const fn=new Function('$input','$','$execution','$getWorkflowStaticData',code);const result=fn($input,$,$execution,$getWorkflowStaticData);console.log('__PREPROD__'+JSON.stringify({ok:true,result,staticData:__staticData}));}
+catch(err){console.log('__PREPROD__'+JSON.stringify({ok:false,error:String(err&&err.message||err),staticData:__staticData}));}
 '''
-    env = os.environ.copy(); env["AUDIT_CODE"] = json.dumps(js_code); env["AUDIT_INPUT"] = json.dumps(payload); env["AUDIT_PRIOR"] = json.dumps(prior or {})
+    env = os.environ.copy()
+    env["AUDIT_CODE"] = json.dumps(js_code); env["AUDIT_INPUT"] = json.dumps(payload); env["AUDIT_PRIOR"] = json.dumps(prior or {})
+    env["AUDIT_STATIC"] = json.dumps(static_data or {}); env["AUDIT_EXECUTION_ID"] = execution_id
     p = run(["node", "-e", harness], env=env)
     lines = [x for x in p.stdout.splitlines() if x.startswith("__PREPROD__")]
     if not lines: die("Code-node harness produced no result marker")
@@ -185,6 +189,75 @@ def audit() -> None:
         below = good_script(); below["quality"]["shareability"] = 70
         rejected = assert_ok(run_code_node(names["Validate Final Script"]["parameters"]["jsCode"], response(json.dumps(below))), "quality fail-closed")
         if rejected.get("json", {}).get("_scriptValid") is not False: die("quality gate no longer fails closed")
+
+        # QUALITY_GATE_BEST_EFFORT_FALLBACK: a run that never clears the quality
+        # bar but never has a structural defect either should publish its best
+        # attempt on the last allowed try, rather than exhausting the repair
+        # loop and skipping the scheduled post outright.
+        validate_code = names["Validate Final Script"]["parameters"]["jsCode"]
+        exec_id = "preprod-best-effort-execution"
+
+        # Attempt 1 (not the final attempt yet): quality-only miss, overall=74.
+        attempt1 = good_script(); attempt1["quality"]["overall"] = 74
+        r1 = run_code_node(validate_code, response(json.dumps(attempt1)), static_data={}, execution_id=exec_id)
+        if r1.get("result", {}).get("json", {}).get("_scriptValid") is not False:
+            die("best-effort fallback engaged before the final attempt")
+        static_after_1 = r1.get("staticData", {})
+        if static_after_1.get("scriptBestEffort", {}).get(exec_id, {}).get("overallScore") != 74:
+            die(f"best-effort tracker did not record attempt 1's score: {static_after_1}")
+
+        # Attempt 2 (still not final): a BETTER quality-only miss, overall=76 -
+        # the tracker must keep the higher score, not just the latest one. Also
+        # wants a share outro, so a later check can confirm the fallback truly
+        # falls through to the normal success-path tail (outro append) instead
+        # of returning a hand-picked subset of fields.
+        attempt2 = good_script(); attempt2["quality"]["overall"] = 76
+        attempt2["engagement_mode"] = "share_only"; attempt2["outro_line"] = "Send this to someone who needs it."
+        r2 = run_code_node(validate_code, response(json.dumps(attempt2)), static_data=static_after_1, execution_id=exec_id)
+        static_after_2 = r2.get("staticData", {})
+        if static_after_2.get("scriptBestEffort", {}).get(exec_id, {}).get("overallScore") != 76:
+            die(f"best-effort tracker did not keep the better of two quality-only misses: {static_after_2}")
+
+        # Attempt 3 is the LAST allowed attempt (scriptAttempts.attempt >= 2) and
+        # scores WORSE than attempt 2 (overall=72) - the fallback must publish
+        # attempt 2's script (the actual best seen), not attempt 3's.
+        static_after_2["scriptAttempts"] = {exec_id: {"attempt": 2}}
+        attempt3 = good_script(); attempt3["quality"]["overall"] = 72
+        r3 = assert_ok(run_code_node(validate_code, response(json.dumps(attempt3)), static_data=static_after_2, execution_id=exec_id), "best-effort fallback on final attempt")
+        out3 = r3.get("json", {})
+        if out3.get("_scriptValid") is not True: die(f"best-effort fallback did not engage on the final attempt: {out3}")
+        if not out3.get("_qualityGateBestEffort"): die("best-effort fallback did not flag _qualityGateBestEffort")
+        if out3.get("_qualityGateBestEffortScore") != 76: die(f"best-effort fallback did not pick the actual best-scoring attempt (expected 76): {out3.get('_qualityGateBestEffortScore')}")
+        if out3.get("hook") != attempt2["hook"]: die("best-effort fallback published a different script than the recorded best")
+        if "_validationErrors" in out3 or "_failedScript" in out3:
+            die("best-effort fallback did not actually fall through to the normal success-path shape")
+        if not any(s.get("template_data", {}).get("is_outro") for s in out3.get("scenes", [])):
+            die("best-effort fallback did not fall through to the normal success-path outro append")
+
+        # A final attempt with a STRUCTURAL defect (not quality-only) must still
+        # hard-fail even though it's the last attempt and even if a genuinely
+        # good earlier attempt was recorded - never publish a broken script.
+        # (sparse_queries alone isn't enough here - the schema normalizer
+        # auto-repairs missing search_queries before the gate runs, same as it
+        # would for a real production script - so force a hook too short to
+        # repair instead, a guaranteed unrecovered structural failure.)
+        broken_final = good_script(); broken_final["hook"] = "hi"
+        static_for_structural = {"scriptBestEffort": dict(static_after_2.get("scriptBestEffort", {})), "scriptAttempts": {exec_id: {"attempt": 2}}}
+        r4 = assert_ok(run_code_node(validate_code, response(json.dumps(broken_final)), static_data=static_for_structural, execution_id=exec_id), "best-effort fallback still hard-fails on structural defects")
+        # A structurally broken final attempt must never be silently accepted,
+        # even though a stored best-effort candidate exists from an earlier,
+        # genuinely sound attempt - that candidate is exactly what should be
+        # published instead of a broken one.
+        out4 = r4.get("json", {})
+        if out4.get("_scriptValid") is not True or not out4.get("_qualityGateBestEffort"):
+            die(f"best-effort fallback did not fall back to the stored good candidate over a structurally broken final attempt: {out4}")
+        if out4.get("hook") != attempt2["hook"]: die("best-effort fallback did not publish the stored good candidate over the broken final attempt")
+
+        # No stored best-effort candidate at all (every attempt had a structural
+        # defect) must still hard-fail on the final attempt.
+        r5 = run_code_node(validate_code, response(json.dumps(broken_final)), static_data={"scriptAttempts": {exec_id: {"attempt": 2}}}, execution_id=exec_id)
+        out5 = r5.get("result", {}).get("json", {})
+        if out5.get("_scriptValid") is not False: die(f"best-effort fallback published a script with no qualifying candidate ever recorded: {out5}")
 
         # Build the actual production compose/resolver transform chain.
         compose_js, broll_js = tmp / "compose.js", tmp / "brollResolver.js"
