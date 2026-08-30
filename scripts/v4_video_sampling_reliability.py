@@ -21,7 +21,7 @@ async function sampleVideoContactSheet(candidate) {
   const cols = 4, rows = Math.ceil(VIDEO_SAMPLE_FRAMES / cols), fps = Math.max(0.05, VIDEO_SAMPLE_FRAMES / duration);
   const tmp = path.join(os.tmpdir(), `broll-sheet-${crypto.randomUUID()}.jpg`);
   try {
-    await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", "-i", candidate.sample_url || candidate.url, "-vf", `fps=${fps.toFixed(6)},scale=320:-2:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:color=black,tile=${cols}x${rows}:nb_frames=${VIDEO_SAMPLE_FRAMES}:padding=3:margin=3`, "-frames:v", "1", "-q:v", "3", tmp]);
+    await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", "-i", candidate.sample_url || candidate.url, "-vf", `fps=${fps.toFixed(6)},scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:color=black,tile=${cols}x${rows}:nb_frames=${VIDEO_SAMPLE_FRAMES}:padding=3:margin=3`, "-frames:v", "1", "-q:v", "3", tmp]);
     const buf = await fsp.readFile(tmp);
     return { imageUrl: `data:image/jpeg;base64,${buf.toString("base64")}`, timestamps: Array.from({ length: VIDEO_SAMPLE_FRAMES }, (_, i) => Number(Math.min(duration, (i + 0.5) * duration / VIDEO_SAMPLE_FRAMES).toFixed(3))) };
   } catch { return null; } finally { fsp.unlink(tmp).catch(() => {}); }
@@ -107,7 +107,7 @@ async function sampleVideoContactSheet(candidate) {
   const cols = 4, rows = Math.ceil(VIDEO_SAMPLE_FRAMES / cols), fps = Math.max(0.05, VIDEO_SAMPLE_FRAMES / duration);
   const tmp = path.join(os.tmpdir(), `broll-sheet-${crypto.randomUUID()}.png`);
   try {
-    await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", "-i", staged.input, "-vf", `fps=${fps.toFixed(6)},scale=320:-2:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:color=black,tile=${cols}x${rows}:nb_frames=${VIDEO_SAMPLE_FRAMES}:padding=3:margin=3`, "-frames:v", "1", tmp]);
+    await runFfmpeg(["-hide_banner", "-loglevel", "error", "-y", "-i", staged.input, "-vf", `fps=${fps.toFixed(6)},scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:color=black,tile=${cols}x${rows}:nb_frames=${VIDEO_SAMPLE_FRAMES}:padding=3:margin=3`, "-frames:v", "1", tmp]);
     const buf = await fsp.readFile(tmp);
     if (buf.length < 1024) return { ok: false, reason: "video_contact_sheet_empty", detail: `bytes=${buf.length}`, sample_source: staged.sample_source };
     return {
