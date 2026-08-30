@@ -169,6 +169,7 @@ function buildVisualContract(input = {}) {
     acceptable_visuals: uniq(input.acceptable_visuals || input.acceptable_substitutes || []),
     creative_format: normalizeText(input.creative_format),
     template_name: normalizeText(input.template_name),
+    template_data: isDeterministicTemplate && input.template_data && typeof input.template_data === "object" ? input.template_data : null,
     is_deterministic_template: isDeterministicTemplate,
   };
   contract.visual_proof_mode = normalizeText(input.visual_proof_mode) || classifyProofMode(contract);
@@ -179,16 +180,51 @@ function shouldPreferTemplate(contract) {
   return DETERMINISTIC_TEMPLATE_PROOF_MODES.has(contract.visual_proof_mode);
 }
 
+// Summarize what a deterministic template will actually put on screen, so
+// the QA judge has something concrete to check legibility/accuracy against
+// instead of the free-text visual_claim (which is often written assuming a
+// photo - e.g. "must show a verified archival image of X" - even for a
+// scene the Visual Director deliberately planned as a text card, or for a
+// scene a resolver fallback silently demoted from real footage. That claim
+// text primes the judge to expect a photograph no card can produce).
+function summarizeTemplateData(templateName, templateData) {
+  if (!templateData || typeof templateData !== "object") return "";
+  const d = templateData;
+  switch (templateName) {
+    case "comparison":
+      return `On-screen text should read: "${d.leftLabel || ""}: ${d.leftValue || ""}" versus "${d.rightLabel || ""}: ${d.rightValue || ""}".`;
+    case "stat_reveal":
+      return `On-screen text should read: "${d.statValue || ""}" labeled "${d.label || ""}".`;
+    case "kinetic_text":
+      return `On-screen text should read: "${d.line || ""}".`;
+    case "timeline":
+      if (Array.isArray(d.events) && d.events.length) {
+        const events = d.events.map((e) => `${e?.date || ""}: ${e?.label || ""}${e?.detail ? ` (${e.detail})` : ""}`).join("; ");
+        return `On-screen text should read: title "${d.title || ""}", events - ${events}.`;
+      }
+      return d.title ? `On-screen text should read: title "${d.title}".` : "";
+    case "diagram":
+    case "map":
+      return d.title ? `On-screen text should read: title "${d.title}".` : "";
+    default:
+      return "";
+  }
+}
+
 function buildScoringTarget(contract) {
   if (contract.is_deterministic_template) {
     // A comparison/stat/kinetic-text/diagram/timeline/map card draws text,
     // numbers, and simple shapes - it never contains a literal photo of the
-    // subject. Judge it on legibility and topical fit instead of demanding
-    // entities/actions/relationships it structurally cannot show.
+    // subject. Judge it against the narration beat and the actual on-screen
+    // text, never against visual_claim - that field may still describe
+    // photographic proof this card cannot produce, and including it here
+    // has been observed to override the "do not penalize" instruction
+    // below and fail the scene anyway.
     return [
-      contract.visual_claim,
+      contract.narration ? `Narration for this beat: "${contract.narration}"` : "",
+      summarizeTemplateData(contract.template_name, contract.template_data),
       `This is a designed text/graphic card (${contract.template_name || contract.visual_proof_mode}), not a photo or video of the subject.`,
-      "Judge only whether the on-screen text/numbers are legible and topically consistent with the claim above - do not penalize the absence of a photographic subject, action, or scene.",
+      "Judge only whether the on-screen text/numbers are legible and topically consistent with the narration above - do not penalize the absence of a photographic subject, action, or scene, and do not require any name/date/detail beyond what the on-screen text above actually states.",
     ].filter(Boolean).join(" ");
   }
   const parts = [
