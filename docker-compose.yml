@@ -72,14 +72,20 @@ services:
       - BROLL_MULTIFRAME_TIMEOUT_MS=${BROLL_MULTIFRAME_TIMEOUT_MS:-12000}
       - BROLL_MULTIFRAME_MAX_BYTES=${BROLL_MULTIFRAME_MAX_BYTES:-12582912}
 
-      # Paid-vision budget guardrails. Scene 0 may use seven evaluations and
-      # each supporting scene three; with <=8 content scenes, 28 is the exact
-      # worst-case resolver ceiling. Final rendered QA is separately bounded by
-      # one multimodal call per content scene.
+      # Paid-vision budget guardrails. The global ceiling remains 28 calls.
+      # Scene 0 may use up to seven. Each support retrieval scene is guaranteed
+      # a three-call reserve, but may borrow unused run budget up to seven calls
+      # after reserving the same baseline for future retrieval scenes. The
+      # resolver stops as soon as a CLIP-ranked candidate passes every semantic
+      # gate and the scene threshold, so normal runs spend far less than 28.
       - BROLL_INITIAL_SEARCH_QUERIES=${BROLL_INITIAL_SEARCH_QUERIES:-2}
       - BROLL_MAX_SEARCH_QUERIES=${BROLL_MAX_SEARCH_QUERIES:-4}
       - BROLL_FIRST_FRAME_MAX_VISION_CALLS=${BROLL_FIRST_FRAME_MAX_VISION_CALLS:-7}
+      # Legacy alias retained for existing audits/deploy overrides. It is a
+      # guaranteed reserve, not the adaptive hard ceiling anymore.
       - BROLL_SUPPORT_MAX_VISION_CALLS=${BROLL_SUPPORT_MAX_VISION_CALLS:-3}
+      - BROLL_SUPPORT_BASE_VISION_CALLS=${BROLL_SUPPORT_BASE_VISION_CALLS:-3}
+      - BROLL_SUPPORT_BORROW_MAX_VISION_CALLS=${BROLL_SUPPORT_BORROW_MAX_VISION_CALLS:-7}
       - BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-28}
       - BROLL_SCORE_CACHE_TTL_MS=${BROLL_SCORE_CACHE_TTL_MS:-21600000}
 

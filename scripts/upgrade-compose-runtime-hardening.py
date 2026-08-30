@@ -19,6 +19,18 @@ from video_multiframe_phase3 import patch_file as patch_video_multiframe_phase3
 
 V4_MARKER = "VISUAL_MATCHING_V4"
 BT709_RANGE_MARKER = "PRODUCTION_BT709_RANGE_NORMALIZATION"
+V4_BUDGET_MARKER = "V4_ADAPTIVE_VISION_BUDGET"
+V4_EARLY_ACCEPT_MARKER = "V4_FIRST_PASS_EARLY_ACCEPT"
+V4_MEDIA_TYPE_MARKER = "V4_PROOF_MEDIA_TYPE_FILTER"
+V4_VIDEO_BUDGET_MARKER = "V4_VIDEO_VERIFY_USES_SCENE_BUDGET"
+
+
+def _replace_once(text: str, old: str, new: str, label: str) -> str:
+    if new in text:
+        return text
+    if old not in text:
+        raise RuntimeError(f"{label} anchor missing")
+    return text.replace(old, new, 1)
 
 
 def _patch_compose_bt709_range(compose_path: Path) -> None:
@@ -59,6 +71,66 @@ def _patch_compose_bt709_range(compose_path: Path) -> None:
     compose_path.write_text(text)
 
 
+def _patch_v4_budget_reliability(path: Path) -> None:
+    """Use real run topology and stop paying once a candidate genuinely passes.
+
+    Production used a fixed three-call support-scene ceiling because 7 + 7*3
+    exactly equals the 28-call worst case for eight scenes. That makes a normal
+    3-4 scene Short fail after only three verifier attempts while most of the
+    run budget is unreachable. V4 now supplies retrieval-scene topology; the
+    shared budget allocator preserves future-scene reserves and lets a hard
+    scene borrow genuinely spare calls without ever exceeding the run ceiling.
+
+    The old V4 resolver also kept scoring after it already had a candidate that
+    passed every semantic gate and the scene threshold. That needlessly consumed
+    the run budget and starved later scenes. Accept the first passing candidate
+    in CLIP-ranked order; the semantic/entity/action/relationship gates remain
+    unchanged and fail closed.
+    """
+    text = path.read_text()
+    if all(marker in text for marker in [V4_BUDGET_MARKER, V4_EARLY_ACCEPT_MARKER, V4_MEDIA_TYPE_MARKER, V4_VIDEO_BUDGET_MARKER]):
+        return
+
+    old_state = '  const state = { run_id: String(input.run_id || "").trim(), scene_budget: { used: 0, limit: getSceneLimit(isFirstFrame) }, cache_hits: 0, budget_exhausted: null };'
+    new_state = f'''  // {V4_BUDGET_MARKER}: allocate from the real retrieval-scene topology while preserving the 28-call run ceiling.\n  const runId = String(input.run_id || "").trim();\n  const sceneLimit = getSceneLimit(isFirstFrame, {{ runId, retrievalSceneCount: Number(input.retrieval_scene_count), retrievalScenePosition: Number(input.retrieval_scene_position) }});\n  const state = {{ run_id: runId, scene_budget: {{ used: 0, limit: sceneLimit }}, cache_hits: 0, budget_exhausted: null, early_accept: false }};'''
+    text = _replace_once(text, old_state, new_state, "V4 budget state")
+
+    old_type_filter = '  if (contract.visual_proof_mode === "annotated_real") candidates = candidates.filter((c) => c.type === "image");'
+    new_type_filter = f'''  if (contract.visual_proof_mode === "annotated_real") candidates = candidates.filter((c) => c.type === "image");\n  // {V4_MEDIA_TYPE_MARKER}: a literal action proof must spend vision budget on actual video, never still photos.\n  if (contract.visual_proof_mode === "literal_video") candidates = candidates.filter((c) => c.type === "video");'''
+    text = _replace_once(text, old_type_filter, new_type_filter, "literal-video candidate filter")
+
+    old_video_cap = '      if (videoCalls++ >= VIDEO_VERIFY_TOP_N) continue;'
+    new_video_cap = f'''      // {V4_VIDEO_BUDGET_MARKER}: when a hard scene borrows calls, video verification may use that allocation too.\n      if (videoCalls++ >= Math.max(VIDEO_VERIFY_TOP_N, state.scene_budget.limit)) continue;'''
+    text = _replace_once(text, old_video_cap, new_video_cap, "video verifier budget cap")
+
+    old_library = '    if (c.library_hit && Number(c.semantic_match || 0) >= 88 && reusableAnnotated) { scored.push({ ...c, score: Number(c.score || c.semantic_match), rejected: false }); continue; }'
+    new_library = f'''    if (c.library_hit && Number(c.semantic_match || 0) >= 88 && reusableAnnotated) {{\n      const accepted = {{ ...c, score: Number(c.score || c.semantic_match), rejected: false }}; scored.push(accepted);\n      // {V4_EARLY_ACCEPT_MARKER}: semantic gates were already proven when this clip entered the library.\n      if (accepted.score >= threshold) {{ state.early_accept = true; break; }}\n      continue;\n    }}'''
+    text = _replace_once(text, old_library, new_library, "library early accept")
+
+    old_video = '      scored.push({ ...c, ...verification, ...materialized, original_url: c.url, score: verification.overall }); continue;'
+    new_video = '''      const accepted = { ...c, ...verification, ...materialized, original_url: c.url, score: verification.overall, rejected: false }; scored.push(accepted);\n      if (accepted.score >= threshold) { state.early_accept = true; break; }\n      continue;'''
+    text = _replace_once(text, old_video, new_video, "video early accept")
+
+    old_annotated = '''      scored.push({ ...c, ...dimensions, ...materialized, score: dimensions.overall, rejected: false });
+      continue;'''
+    new_annotated = '''      const accepted = { ...c, ...dimensions, ...materialized, score: dimensions.overall, rejected: false }; scored.push(accepted);\n      if (accepted.score >= threshold) { state.early_accept = true; break; }\n      continue;'''
+    text = _replace_once(text, old_annotated, new_annotated, "annotated-real early accept")
+
+    old_image = '    scored.push({ ...c, ...dimensions, score: semanticOk && annotationOk ? dimensions.overall : 0, rejected: !(semanticOk && annotationOk), reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" });'
+    new_image = '''    const accepted = { ...c, ...dimensions, score: semanticOk && annotationOk ? dimensions.overall : 0, rejected: !(semanticOk && annotationOk), reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" };\n    scored.push(accepted);\n    if (!accepted.rejected && accepted.score >= threshold) { state.early_accept = true; break; }'''
+    text = _replace_once(text, old_image, new_image, "image early accept")
+
+    old_failure = '  if (!best) return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };'
+    new_failure = '''  if (!best) {\n    const failure_reasons = [...new Set(scored.filter((x) => x.rejected).map((x) => String(x.reason || "semantic_gate_failed").slice(0, 120)))].slice(0, 6);\n    return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, vision_call_limit: state.scene_budget.limit, early_accept: state.early_accept, failure_reasons, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };\n  }'''
+    text = _replace_once(text, old_failure, new_failure, "budget failure telemetry")
+
+    old_success = '    actual_video_verified: best.type === "video", library_hit: best.library_hit === true, recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget,'
+    new_success = '    actual_video_verified: best.type === "video", library_hit: best.library_hit === true, vision_call_limit: state.scene_budget.limit, early_accept: state.early_accept, recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget,'
+    text = _replace_once(text, old_success, new_success, "budget success telemetry")
+
+    path.write_text(text)
+
+
 def _validate_v4(path: Path) -> None:
     text = path.read_text()
     required = [
@@ -75,6 +147,14 @@ def _validate_v4(path: Path) -> None:
         "passesSemanticGate",
         "fromPixabayVideos",
         "fromWikimediaCommons",
+        V4_BUDGET_MARKER,
+        V4_EARLY_ACCEPT_MARKER,
+        V4_MEDIA_TYPE_MARKER,
+        V4_VIDEO_BUDGET_MARKER,
+        "retrieval_scene_count",
+        "vision_call_limit",
+        "failure_reasons",
+        'contract.visual_proof_mode === "literal_video"',
     ]
     missing = [x for x in required if x not in text]
     if missing:
@@ -92,6 +172,7 @@ def upgrade(path: Path) -> None:
     _patch_compose_bt709_range(compose_path)
 
     if V4_MARKER in text:
+        _patch_v4_budget_reliability(path)
         _validate_v4(path)
         # Compose telemetry is independent of the old resolver internals; apply
         # it when its anchors remain compatible, otherwise V4's own telemetry is
