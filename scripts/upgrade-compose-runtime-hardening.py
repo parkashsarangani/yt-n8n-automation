@@ -25,6 +25,7 @@ V4_EARLY_ACCEPT_MARKER = "V4_FIRST_PASS_EARLY_ACCEPT"
 V4_MEDIA_TYPE_MARKER = "V4_PROOF_MEDIA_TYPE_FILTER"
 V4_VIDEO_BUDGET_MARKER = "V4_VIDEO_VERIFY_USES_SCENE_BUDGET"
 V4_VIDEO_SAMPLE_MARKER = "V4_VIDEO_SAMPLE_STAGING"
+V4_TEMPLATE_FALLBACK_MARKER = "V4_TEMPLATE_FALLBACK_ON_NO_MATCH"
 
 
 def _replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -133,6 +134,71 @@ def _patch_v4_budget_reliability(path: Path) -> None:
     path.write_text(text)
 
 
+def _patch_v4_template_fallback(path: Path) -> None:
+    """Use the model's own designed template before giving up on a scene.
+
+    The legacy (V2) resolver had a soft fallback: when nothing cleared the
+    quality bar, it degraded to the best real-media candidate rather than
+    failing the whole run. V4's rewrite dropped that safety net entirely (its
+    own budget-reliability patch above only changed the failure *telemetry*,
+    not the failure *behavior*) - a scene with no real photo that satisfies
+    the semantic gate (a specific animal's internal anatomy, e.g.) now just
+    hard-fails the run, exhausting the retry loop for a topic the writer
+    could genuinely tell.
+
+    A degraded real photo is the wrong fallback here anyway - the Visual
+    Director prompt already asks for a template_fallback on every real/archive
+    scene specifically for this situation, and a designed graphic
+    (stat_reveal/comparison/kinetic_text/diagram/timeline/map) can never be
+    factually misleading the way a mismatched stock photo would be. Use it
+    when the model supplied one and its own data actually satisfies that
+    template's fields; only then fall through to a hard failure.
+    """
+    text = path.read_text()
+    if V4_TEMPLATE_FALLBACK_MARKER in text:
+        return
+
+    old_failure = '''  if (!best) {
+    const failure_reasons = [...new Set(scored.filter((x) => x.rejected).map((x) => String(x.reason || "semantic_gate_failed").slice(0, 120)))].slice(0, 6);
+    return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, vision_call_limit: state.scene_budget.limit, early_accept: state.early_accept, failure_reasons, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };
+  }'''
+    new_failure = f'''  if (!best) {{
+    const failure_reasons = [...new Set(scored.filter((x) => x.rejected).map((x) => String(x.reason || "semantic_gate_failed").slice(0, 120)))].slice(0, 6);
+    const reason = state.budget_exhausted || "below_quality_threshold";
+    // {V4_TEMPLATE_FALLBACK_MARKER}: try the model's own designed fallback before failing the scene.
+    const tf = templateFallbackResult(input.template_fallback, reason);
+    if (tf) return tf;
+    return {{ ok: false, reason, threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, vision_call_limit: state.scene_budget.limit, early_accept: state.early_accept, failure_reasons, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget }};
+  }}'''
+    text = _replace_once(text, old_failure, new_failure, "V4 template fallback on no match")
+
+    helper = f'''// {V4_TEMPLATE_FALLBACK_MARKER}: validate the model-supplied template_fallback
+// against the exact fields its own template_name requires before trusting it -
+// an unfixed name/data mismatch here would reach the renderer, not just a gate.
+const TEMPLATE_FALLBACK_SPECS = {{
+  stat_reveal: (d) => d && String(d.statValue || "").trim() && String(d.label || "").trim(),
+  comparison: (d) => d && String(d.leftLabel || "").trim() && String(d.leftValue || "").trim() && String(d.rightLabel || "").trim() && String(d.rightValue || "").trim(),
+  kinetic_text: (d) => d && String(d.line || "").trim(),
+  diagram: (d) => d && Array.isArray(d.nodes) && d.nodes.length >= 2 && Array.isArray(d.edges),
+  timeline: (d) => d && Array.isArray(d.events) && d.events.length >= 2,
+  map: (d) => d && Array.isArray(d.locations) && d.locations.length >= 1,
+}};
+function templateFallbackResult(tf, reason) {{
+  if (!tf || typeof tf !== "object") return null;
+  const name = String(tf.template_name || "");
+  const spec = TEMPLATE_FALLBACK_SPECS[name];
+  if (!spec || !spec(tf.template_data || {{}})) return null;
+  return {{ ok: true, type: "template", visual_source: "template", template_name: name, template_data: tf.template_data, degraded: true, quality_gate_passed: false, fallback_reason: reason }};
+}}
+'''
+    anchor = "async function resolveBroll("
+    if anchor not in text:
+        raise RuntimeError("V4 template fallback: resolveBroll anchor missing")
+    text = text.replace(anchor, helper + "\n" + anchor, 1)
+
+    path.write_text(text)
+
+
 def _validate_v4(path: Path) -> None:
     text = path.read_text()
     required = [
@@ -154,6 +220,8 @@ def _validate_v4(path: Path) -> None:
         V4_MEDIA_TYPE_MARKER,
         V4_VIDEO_BUDGET_MARKER,
         V4_VIDEO_SAMPLE_MARKER,
+        V4_TEMPLATE_FALLBACK_MARKER,
+        "templateFallbackResult",
         "downloadVideoSample",
         "video_contact_sheet_ffmpeg_failed",
         "retrieval_scene_count",
@@ -179,6 +247,7 @@ def upgrade(path: Path) -> None:
     if V4_MARKER in text:
         _patch_v4_budget_reliability(path)
         patch_v4_video_sampling_reliability(path)
+        _patch_v4_template_fallback(path)
         _validate_v4(path)
         # Compose telemetry is independent of the old resolver internals; apply
         # it when its anchors remain compatible, otherwise V4's own telemetry is
