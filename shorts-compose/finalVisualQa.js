@@ -32,7 +32,7 @@ async function sampleSceneContactSheet(videoPath, sceneStartSec, sceneDurationSe
   try {
     for (let i = 0; i < times.length; i++) {
       const framePath = `${out}.${i}.jpg`;
-      await run(["-hide_banner", "-loglevel", "error", "-y", "-ss", String(times[i]), "-i", videoPath, "-frames:v", "1", "-vf", "scale=420:-2:force_original_aspect_ratio=decrease,pad=420:360:(ow-iw)/2:(oh-ih)/2:color=black", "-q:v", "3", framePath]);
+      await run(["-hide_banner", "-loglevel", "error", "-y", "-ss", String(times[i]), "-i", videoPath, "-frames:v", "1", "-vf", "scale=420:360:force_original_aspect_ratio=decrease,pad=420:360:(ow-iw)/2:(oh-ih)/2:color=black", "-q:v", "3", framePath]);
       frames.push(framePath);
     }
     if (!frames.length) return null;
