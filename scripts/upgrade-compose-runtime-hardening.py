@@ -15,6 +15,7 @@ from compose_retrieval_telemetry import patch_file as patch_compose_retrieval_te
 from retrieval_observability import patch_file as patch_retrieval_observability
 from retrieval_recall_phase2 import patch_file as patch_retrieval_recall_phase2
 from runtime_hardening_impl import upgrade as _upgrade
+from v4_video_sampling_reliability import patch_file as patch_v4_video_sampling_reliability
 from video_multiframe_phase3 import patch_file as patch_video_multiframe_phase3
 
 V4_MARKER = "VISUAL_MATCHING_V4"
@@ -23,6 +24,7 @@ V4_BUDGET_MARKER = "V4_ADAPTIVE_VISION_BUDGET"
 V4_EARLY_ACCEPT_MARKER = "V4_FIRST_PASS_EARLY_ACCEPT"
 V4_MEDIA_TYPE_MARKER = "V4_PROOF_MEDIA_TYPE_FILTER"
 V4_VIDEO_BUDGET_MARKER = "V4_VIDEO_VERIFY_USES_SCENE_BUDGET"
+V4_VIDEO_SAMPLE_MARKER = "V4_VIDEO_SAMPLE_STAGING"
 
 
 def _replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -151,6 +153,9 @@ def _validate_v4(path: Path) -> None:
         V4_EARLY_ACCEPT_MARKER,
         V4_MEDIA_TYPE_MARKER,
         V4_VIDEO_BUDGET_MARKER,
+        V4_VIDEO_SAMPLE_MARKER,
+        "downloadVideoSample",
+        "video_contact_sheet_ffmpeg_failed",
         "retrieval_scene_count",
         "vision_call_limit",
         "failure_reasons",
@@ -173,6 +178,7 @@ def upgrade(path: Path) -> None:
 
     if V4_MARKER in text:
         _patch_v4_budget_reliability(path)
+        patch_v4_video_sampling_reliability(path)
         _validate_v4(path)
         # Compose telemetry is independent of the old resolver internals; apply
         # it when its anchors remain compatible, otherwise V4's own telemetry is
