@@ -66,7 +66,9 @@ async function judgeScene(imageUrl, contract, timestamps) {
     `Forbidden visuals: ${(contract.forbidden_visuals || []).join("; ")}`,
     "Judge the scene across the sampled frames; an action may occur in one frame while entities/relationship remain visible in another.",
     "Return ONLY JSON: {\"semantic_match\":0,\"entity_match\":0,\"action_match\":0,\"relationship_match\":0,\"readability\":0,\"overall\":0,\"problem\":\"\"}.",
-    "Do not reward generic topic relevance. If a required entity, action, or relationship is absent from all sampled frames, score that dimension below 70.",
+    contract.is_deterministic_template
+      ? "This scene is a designed text/graphic card, not a photo or video - it never contains a photographic entity, action, or relationship. Set entity_match, action_match, and relationship_match to null (they do not apply). Base overall ONLY on legibility and topical fit with the claim - do NOT lower overall because a photographic subject is absent, that is expected and correct for this scene type."
+      : "Do not reward generic topic relevance. If a required entity, action, or relationship is absent from all sampled frames, score that dimension below 70.",
   ].join(" ");
   try {
     const r = await axios.post("https://api.openai.com/v1/chat/completions", {
@@ -147,11 +149,19 @@ async function reviewFinalVideo(videoPath, scenes, durations) {
       action: MIN_SCORE,
       relationship: MIN_SCORE,
     });
-    if (!semanticOk || normalized.overall < MIN_SCORE || normalized.readability < 65) {
+    // The model's own "overall" field is a holistic judgment that still
+    // factors in the absence of a photographic entity/action/relationship,
+    // even when told not to (a designed text/graphic card structurally
+    // cannot show one - see visualContract.js). For a deterministic
+    // template scene, judge on semantic_match (legibility + topical fit)
+    // instead of trusting an "overall" the model penalizes for something
+    // this scene type was never going to show.
+    const effectiveScore = contract.is_deterministic_template ? normalized.semantic_match : normalized.overall;
+    if (!semanticOk || effectiveScore < MIN_SCORE || normalized.readability < 65) {
       issues.push({
         scene_index: sceneIndex,
         problem: normalized.problem || "rendered visual does not satisfy the scene visual contract",
-        score: normalized.overall,
+        score: effectiveScore,
         semantic_match: normalized.semantic_match,
         entity_match: normalized.entity_match,
         action_match: normalized.action_match,
