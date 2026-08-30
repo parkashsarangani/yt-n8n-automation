@@ -13,6 +13,20 @@ from pathlib import Path
 
 MARKER = "VISUAL_MATCHING_V4"
 CONTRACT_GATE = "VISUAL_MATCHING_V4 contract gate"
+LEGACY_AI_GATE_REMOVED = "V4_LEGACY_AI_VISUAL_GATE_REMOVED"
+DETERMINISTIC_TEMPLATE_NORMALIZER = "V4_DETERMINISTIC_TEMPLATE_NORMALIZER"
+LEGACY_TEMPLATE_RULE = "For template_explainer set visual_source=template and template_name ONLY stat_reveal, comparison, or kinetic_text with complete template_data."
+V4_TEMPLATE_RULE = (
+    "For template_explainer set visual_source=template and make template_name match visual_proof_mode exactly: "
+    "comparison=>comparison, number_visualization=>stat_reveal, kinetic_text=>kinetic_text, diagram=>diagram, timeline=>timeline, map=>map; "
+    "always provide the complete template_data required by that renderer."
+)
+OBSOLETE_AI_VISUAL_ERRORS = (
+    "visual_prompt too short/missing",
+    "missing negative_prompt",
+    "visual_prompt likely requires readable text/numbers in the AI-generated video",
+    "negative_prompt does not explicitly exclude readable text/numbers",
+)
 
 
 def node(workflow: dict, name: str) -> dict:
@@ -28,6 +42,7 @@ V4_INSTRUCTION = (
     "required_entities (array of concrete visible entities), required_actions (array of visible actions/states), required_relationships (array of visible spatial/scale/comparison relationships), "
     "forbidden_visuals (array including the tempting generic filler that would be topically related but narratively wrong), acceptable_visuals (0-3 valid alternate depictions), and visual_proof_mode. "
     "visual_proof_mode must be exactly one of literal_video, literal_image, annotated_real, comparison, number_visualization, kinetic_text, diagram, timeline, map. "
+    "visual_prompt and negative_prompt are legacy AI-generation fields and are NOT required by V4; do not spend repair attempts recreating them. "
     "Do NOT collapse a scene into its broad named subject: if narration says an octopus squeezes through a narrow gap, visual_claim must require the squeezing-through-gap action, not merely 'octopus'. "
     "Resolve pronouns and vague local wording using OVERALL SELECTED TOPIC / MACRO CONTEXT. "
     "REPRESENTATION ROUTER: comparison=>visual_source template + template_name comparison; number_visualization=>template + stat_reveal; kinetic_text=>template + kinetic_text; "
@@ -49,6 +64,85 @@ def _insert_once(body: str, anchor: str, text: str, *, after: bool = True) -> st
     return body.replace(anchor, text + " " + anchor, 1)
 
 
+def _strip_obsolete_ai_visual_gates(code: str) -> str:
+    """Remove inherited AI-image-era validator errors that are invalid under V4."""
+    lines = code.splitlines()
+    cleaned = [line for line in lines if not any(token in line for token in OBSOLETE_AI_VISUAL_ERRORS)]
+    code = "\n".join(cleaned)
+    if LEGACY_AI_GATE_REMOVED not in code:
+        marker = (
+            f"// {LEGACY_AI_GATE_REMOVED}: visual_prompt/negative_prompt are legacy AI-generation fields; "
+            "V4 validates visual_claim + semantic proof fields instead."
+        )
+        anchor = "const errors = [];"
+        code = code.replace(anchor, anchor + "\n" + marker, 1) if anchor in code else marker + "\n" + code
+    return code
+
+
+def _patch_legacy_v2_template_normalizer(code: str) -> str:
+    """Make the older V2 runtime normalizer preserve all V4 deterministic renderers.
+
+    The V2 normalizer used to recognize only stat_reveal/comparison/kinetic_text
+    and silently rewrite map/timeline/diagram to kinetic_text before the V4 gate
+    ran. V4 proof mode is authoritative; deterministic routing is derivable and
+    must not consume a model repair attempt. Invalid structured data is preserved
+    under the correct renderer name so the V4 validator can report the real
+    missing-data error instead of a fake template-name mismatch.
+    """
+    if "VISUAL_SOURCE_ROUTER_V2" not in code:
+        return code
+    if DETERMINISTIC_TEMPLATE_NORMALIZER in code:
+        return code
+
+    old_helper = """const _vrValidTemplate=(obj,s)=>{
+  if(!obj||typeof obj!=='object')return _vrKinetic(s);
+  const name=String(obj.template_name||''); const d=obj.template_data&&typeof obj.template_data==='object'?obj.template_data:{};
+  if(name==='stat_reveal'&&_vrClean(d.statValue,40)&&_vrClean(d.label,72))return {template_name:name,template_data:d};
+  if(name==='comparison'&&_vrClean(d.leftLabel,48)&&_vrClean(d.leftValue,48)&&_vrClean(d.rightLabel,48)&&_vrClean(d.rightValue,48))return {template_name:name,template_data:d};
+  if(name==='kinetic_text'&&_vrClean(d.line,120))return {template_name:name,template_data:d};
+  return _vrKinetic(s);
+};"""
+    new_helper = f"""// {DETERMINISTIC_TEMPLATE_NORMALIZER}: V4 proof mode owns deterministic renderer selection.
+const _vrProofTemplate={{comparison:'comparison',number_visualization:'stat_reveal',kinetic_text:'kinetic_text',diagram:'diagram',timeline:'timeline',map:'map'}};
+const _vrValidTemplate=(obj,s)=>{{
+  if(!obj||typeof obj!=='object')return _vrKinetic(s);
+  const name=String(obj.template_name||''); const d=obj.template_data&&typeof obj.template_data==='object'?obj.template_data:{{}};
+  if(name==='stat_reveal'&&_vrClean(d.statValue,40)&&_vrClean(d.label,72))return {{template_name:name,template_data:d}};
+  if(name==='comparison'&&_vrClean(d.leftLabel,48)&&_vrClean(d.leftValue,48)&&_vrClean(d.rightLabel,48)&&_vrClean(d.rightValue,48))return {{template_name:name,template_data:d}};
+  if(name==='kinetic_text'&&_vrClean(d.line,120))return {{template_name:name,template_data:d}};
+  if(name==='diagram'&&Array.isArray(d.nodes)&&d.nodes.length>=2&&Array.isArray(d.edges))return {{template_name:name,template_data:d}};
+  if(name==='timeline'&&Array.isArray(d.events)&&d.events.length>=2)return {{template_name:name,template_data:d}};
+  if(name==='map'&&Array.isArray(d.locations)&&d.locations.length>=1)return {{template_name:name,template_data:d}};
+  const expected=_vrProofTemplate[String(s&&s.visual_proof_mode||'')];
+  if(expected)return {{template_name:expected,template_data:d}};
+  return _vrKinetic(s);
+}};"""
+    if old_helper not in code:
+        raise ValueError("V2 template normalizer helper changed; refusing to leave destructive V4 downgrade in place")
+    code = code.replace(old_helper, new_helper, 1)
+
+    old_route = """  if(mode==='template_explainer'||s.visual_source==='template'){
+    const chosen=_vrValidTemplate({template_name:s.template_name,template_data:s.template_data},s);
+    s.visual_mode='template_explainer';s.visual_source='template';s.template_name=chosen.template_name;s.template_data=chosen.template_data;s.visual_type='template';
+  }else{s.visual_source='stock';if(s.visual_type==='ai'||!s.visual_type)s.visual_type='real';s.template_fallback=_vrValidTemplate(s.template_fallback,s);}"""
+    new_route = """  const proofTemplate=_vrProofTemplate[String(s.visual_proof_mode||'')];
+  if(proofTemplate){
+    const chosen=_vrValidTemplate({template_name:proofTemplate,template_data:s.template_data},s);
+    s.visual_mode='template_explainer';s.visual_source='template';s.template_name=proofTemplate;s.template_data=chosen.template_data;s.visual_type='template';
+  }else if(mode==='template_explainer'||s.visual_source==='template'){
+    const chosen=_vrValidTemplate({template_name:s.template_name,template_data:s.template_data},s);
+    s.visual_mode='template_explainer';s.visual_source='template';s.template_name=chosen.template_name;s.template_data=chosen.template_data;s.visual_type='template';
+  }else{s.visual_source='stock';if(s.visual_type==='ai'||!s.visual_type)s.visual_type='real';s.template_fallback=_vrValidTemplate(s.template_fallback,s);}"""
+    if old_route not in code:
+        raise ValueError("V2 template routing block changed; refusing to leave V4 proof mode non-authoritative")
+    return code.replace(old_route, new_route, 1)
+
+
+def _align_visual_prompt(body: str) -> str:
+    """Remove the V2 three-template-only instruction that contradicts V4."""
+    return body.replace(LEGACY_TEMPLATE_RULE, V4_TEMPLATE_RULE)
+
+
 def patch_visual_director(workflow: dict) -> None:
     n = node(workflow, "Claude: Visual Director")
     body = str(n["parameters"]["jsonBody"])
@@ -61,6 +155,7 @@ def patch_visual_director(workflow: dict) -> None:
             body = _insert_once(body, legacy_anchor, V4_INSTRUCTION, after=True)
         else:
             raise ValueError("Visual Director has neither QUALITY_ALIGNMENT nor creative-system V4 insertion anchor")
+    body = _align_visual_prompt(body)
 
     if "OVERALL SELECTED TOPIC / MACRO CONTEXT" not in body:
         old_quality = 'SCRIPT: " + JSON.stringify($json.draft) + "\\n\\nCOMMISSIONING INTENT:'
@@ -83,14 +178,16 @@ def patch_visual_director(workflow: dict) -> None:
                 repair_body = _insert_once(repair_body, "PHASE 2 - RETRIEVABLE VISUALS", V4_INSTRUCTION, after=True)
             elif "PHASE 1 - QUALITY CHECK" in repair_body:
                 repair_body = _insert_once(repair_body, "PHASE 1 - QUALITY CHECK", V4_INSTRUCTION, after=False)
-            repair["parameters"]["jsonBody"] = repair_body
+        repair["parameters"]["jsonBody"] = _align_visual_prompt(repair_body)
     except KeyError:
         pass
 
 
 def patch_validator(workflow: dict) -> None:
     n = node(workflow, "Validate Final Script")
-    code = str(n["parameters"]["jsCode"])
+    code = _strip_obsolete_ai_visual_gates(str(n["parameters"]["jsCode"]))
+    code = _patch_legacy_v2_template_normalizer(code)
+    n["parameters"]["jsCode"] = code
     if CONTRACT_GATE in code:
         return
     anchor = "// Medical/health exclusion backstop"
@@ -211,10 +308,17 @@ def assert_applied(workflow: dict) -> None:
     for marker in [MARKER, "visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "OVERALL SELECTED TOPIC / MACRO CONTEXT", "map=>template + map", "annotated_real"]:
         if marker not in visual:
             raise RuntimeError(f"V4 Visual Director contract missing {marker}")
+    if LEGACY_TEMPLATE_RULE in visual:
+        raise RuntimeError("V4 Visual Director still limits template_explainer to three legacy renderers")
     validate = str(names["Validate Final Script"]["parameters"]["jsCode"])
-    for marker in [CONTRACT_GATE, "deterministicModes", "template_data.locations", "timeline requires at least two events", "diagram requires at least two nodes"]:
+    for marker in [CONTRACT_GATE, LEGACY_AI_GATE_REMOVED, "deterministicModes", "template_data.locations", "timeline requires at least two events", "diagram requires at least two nodes"]:
         if marker not in validate:
             raise RuntimeError(f"V4 validator gate missing {marker}")
+    if "VISUAL_SOURCE_ROUTER_V2" in validate and DETERMINISTIC_TEMPLATE_NORMALIZER not in validate:
+        raise RuntimeError("V2 runtime normalizer can still downgrade V4 deterministic templates")
+    for obsolete in OBSOLETE_AI_VISUAL_ERRORS:
+        if obsolete in validate:
+            raise RuntimeError(f"V4 validator still contains obsolete AI-generation requirement: {obsolete}")
     resolver = str(names["Resolve B-roll"]["parameters"]["jsonBody"])
     for marker in ["visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "run_id", "$execution.id"]:
         if marker not in resolver:
