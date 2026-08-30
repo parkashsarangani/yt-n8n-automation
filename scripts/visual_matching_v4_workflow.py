@@ -357,7 +357,8 @@ def contract_expr(prefix: str = "$('Split Out Scenes').item.json") -> str:
         f"narration: ({p}.narration || ''), point: ({p}.point || ''), global_subject: ({p}.global_subject || $('Extract Generated Topic').item.json.topic || ''), "
         f"visual_claim: ({p}.visual_claim || {p}.must_show || {p}.visual_prompt || ''), required_entities: ({p}.required_entities || []), required_actions: ({p}.required_actions || []), "
         f"required_relationships: ({p}.required_relationships || []), forbidden_visuals: ({p}.forbidden_visuals || []), acceptable_visuals: ({p}.acceptable_visuals || {p}.acceptable_substitutes || []), "
-        f"visual_proof_mode: ({p}.visual_proof_mode || ''), prefer_template: ['comparison','number_visualization','kinetic_text','diagram','timeline','map'].includes({p}.visual_proof_mode)"
+        f"visual_proof_mode: ({p}.visual_proof_mode || ''), prefer_template: ['comparison','number_visualization','kinetic_text','diagram','timeline','map'].includes({p}.visual_proof_mode), "
+        f"template_fallback: ({p}.template_fallback || null)"
     )
 
 
@@ -439,7 +440,7 @@ def assert_applied(workflow: dict) -> None:
         if obsolete in validate:
             raise RuntimeError(f"V4 validator still contains obsolete AI-generation requirement: {obsolete}")
     resolver = str(names["Resolve B-roll"]["parameters"]["jsonBody"])
-    for marker in ["visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "run_id", "$execution.id"]:
+    for marker in ["visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "template_fallback", "run_id", "$execution.id"]:
         if marker not in resolver:
             raise RuntimeError(f"V4 resolver payload missing {marker}")
     tag = str(names["Tag B-roll"]["parameters"]["jsCode"])
