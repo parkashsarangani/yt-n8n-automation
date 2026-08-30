@@ -134,17 +134,25 @@ def _patch_legacy_v2_template_normalizer(code: str) -> str:
 // {PROOF_MODE_ROUTER}: real proof modes also override stale template metadata.
 const _vrProofTemplate={{comparison:'comparison',number_visualization:'stat_reveal',kinetic_text:'kinetic_text',diagram:'diagram',timeline:'timeline',map:'map'}};
 const _vrRealProofModes=new Set(['literal_video','literal_image','annotated_real']);
+const _vrTemplateDataValid={{
+  stat_reveal:(d)=>Boolean(_vrClean(d.statValue,40)&&_vrClean(d.label,72)),
+  comparison:(d)=>Boolean(_vrClean(d.leftLabel,48)&&_vrClean(d.leftValue,48)&&_vrClean(d.rightLabel,48)&&_vrClean(d.rightValue,48)),
+  kinetic_text:(d)=>Boolean(_vrClean(d.line,120)),
+  diagram:(d)=>Array.isArray(d.nodes)&&d.nodes.length>=2&&Array.isArray(d.edges),
+  timeline:(d)=>Array.isArray(d.events)&&d.events.length>=2,
+  map:(d)=>Array.isArray(d.locations)&&d.locations.length>=1,
+}};
 const _vrValidTemplate=(obj,s)=>{{
   if(!obj||typeof obj!=='object')return _vrKinetic(s);
   const name=String(obj.template_name||''); const d=obj.template_data&&typeof obj.template_data==='object'?obj.template_data:{{}};
-  if(name==='stat_reveal'&&_vrClean(d.statValue,40)&&_vrClean(d.label,72))return {{template_name:name,template_data:d}};
-  if(name==='comparison'&&_vrClean(d.leftLabel,48)&&_vrClean(d.leftValue,48)&&_vrClean(d.rightLabel,48)&&_vrClean(d.rightValue,48))return {{template_name:name,template_data:d}};
-  if(name==='kinetic_text'&&_vrClean(d.line,120))return {{template_name:name,template_data:d}};
-  if(name==='diagram'&&Array.isArray(d.nodes)&&d.nodes.length>=2&&Array.isArray(d.edges))return {{template_name:name,template_data:d}};
-  if(name==='timeline'&&Array.isArray(d.events)&&d.events.length>=2)return {{template_name:name,template_data:d}};
-  if(name==='map'&&Array.isArray(d.locations)&&d.locations.length>=1)return {{template_name:name,template_data:d}};
+  if(_vrTemplateDataValid[name]&&_vrTemplateDataValid[name](d))return {{template_name:name,template_data:d}};
+  // V4_PROOF_TEMPLATE_DATA_VALIDATED: the proof-mode-implied template must
+  // still pass its OWN field checks against the actual template_data - a
+  // template_name/data mismatch (e.g. visual_proof_mode='comparison' but the
+  // model supplied incomplete/kinetic-shaped data) must fall through to the
+  // deterministic kinetic_text fallback, never be returned as if it were valid.
   const expected=_vrProofTemplate[String(s&&s.visual_proof_mode||'')];
-  if(expected)return {{template_name:expected,template_data:d}};
+  if(expected&&_vrTemplateDataValid[expected]&&_vrTemplateDataValid[expected](d))return {{template_name:expected,template_data:d}};
   return _vrKinetic(s);
 }};"""
 
@@ -187,7 +195,12 @@ const _vrValidTemplate=(obj,s)=>{{
   const proofTemplate=_vrProofTemplate[proofMode];
   if(proofTemplate){
     const chosen=_vrValidTemplate({template_name:proofTemplate,template_data:s.template_data},s);
-    s.visual_mode='template_explainer';s.visual_source='template';s.template_name=proofTemplate;s.template_data=chosen.template_data;s.visual_type='template';
+    // If the requested proof-mode template's data was incomplete, _vrValidTemplate
+    // downgrades to kinetic_text - keep visual_proof_mode in lockstep so the V4
+    // contract gate's template_name/visual_proof_mode consistency check doesn't
+    // reject a scene this normalizer just finished repairing.
+    if(chosen.template_name!==proofTemplate)s.visual_proof_mode=chosen.template_name;
+    s.visual_mode='template_explainer';s.visual_source='template';s.template_name=chosen.template_name;s.template_data=chosen.template_data;s.visual_type='template';
   }else if(_vrRealProofModes.has(proofMode)){
     if(mode==='template_explainer')mode=_vrClean(s.named_subject,80)?'exact_real':'context_real';
     s.visual_mode=mode;s.visual_source='stock';s.visual_type='real';s.template_fallback=_vrValidTemplate(s.template_fallback,s);
@@ -283,7 +296,7 @@ if(Array.isArray(parsed.scenes)){parsed.scenes.forEach((s,i)=>{
   }
   if(s.visual_proof_mode==='annotated_real'&&s.visual_source==='template')errors.push(`scene ${i} annotated_real must retrieve a verified real image before template conversion`);
   if(s.visual_proof_mode==='literal_video'&&s.visual_source==='template')errors.push(`scene ${i} literal_video cannot be represented by a template`);
-  if(s.visual_source!=='template'&&s.required_actions.length>0&&s.visual_proof_mode==='literal_image')errors.push(`scene ${i} requires visible action but is routed as literal_image`);
+  if(s.visual_source!=='template'&&Array.isArray(s.required_actions)&&s.required_actions.length>0&&s.visual_proof_mode==='literal_image')errors.push(`scene ${i} requires visible action but is routed as literal_image`);
   if(s.visual_proof_mode==='map'){
     const locs=s?.template_data?.locations;
     if(!Array.isArray(locs)||locs.length<1)errors.push(`scene ${i} map requires template_data.locations`);
