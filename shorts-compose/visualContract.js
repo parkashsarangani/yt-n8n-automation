@@ -23,6 +23,15 @@ const DETERMINISTIC_TEMPLATE_PROOF_MODES = new Set([
   "comparison", "number_visualization", "kinetic_text", "diagram", "timeline", "map",
 ]);
 
+const TEMPLATE_NAME_TO_PROOF_MODE = {
+  comparison: "comparison",
+  stat_reveal: "number_visualization",
+  kinetic_text: "kinetic_text",
+  diagram: "diagram",
+  timeline: "timeline",
+  map: "map",
+};
+
 function normalizeText(v) {
   return String(v || "").replace(/\s+/g, " ").trim();
 }
@@ -81,10 +90,8 @@ function inferRelationship(text) {
 
 function classifyProofMode(contract) {
   const text = [contract.narration, contract.visual_claim, contract.description].filter(Boolean).join(" ");
-  if (contract.template_name === "comparison") return "comparison";
-  if (contract.template_name === "stat_reveal") return "number_visualization";
-  if (contract.template_name === "kinetic_text") return "kinetic_text";
-  if (["diagram", "timeline", "map"].includes(contract.template_name)) return contract.template_name;
+  const byTemplateName = TEMPLATE_NAME_TO_PROOF_MODE[String(contract.template_name || "").toLowerCase()];
+  if (byTemplateName) return byTemplateName;
   if (contract.required_relationships.length && /comparison|size\/scale/.test(contract.required_relationships.join(" "))) return "comparison";
   if (ABSTRACT_PATTERNS.some((re) => re.test(text))) return "annotated_real";
   if (contract.required_actions.length) return "literal_video";
@@ -117,13 +124,28 @@ function buildVisualContract(input = {}) {
   const explicitRelationships = explicitArray(input, "required_relationships");
   const legacyActions = explicitArray(input, "required_actions_or_relationships");
 
-  const requiredEntities = (entitiesSpecified
+  // A rendered graphic/text template (comparison card, stat card, kinetic
+  // text, diagram, timeline, map) physically cannot depict a literal
+  // photographic entity, action, or relationship - it only draws text,
+  // numbers, and simple shapes. Whatever required_entities/actions/
+  // relationships were planned for this scene before a resolver fallback
+  // silently demoted it to a template (see brollResolver's
+  // templateFallbackResult) - or before the Visual Director itself chose a
+  // template for a beat that still reads like it needs a real photo - no
+  // longer describe anything the render can produce. Holding a template
+  // scene to that literal bar is an unwinnable QA gate: it fails every
+  // time by construction, regardless of how good the template render is.
+  // So for these deterministic templates, the hard-gate arrays are forced
+  // empty here, overriding whatever the caller passed in.
+  const isDeterministicTemplate = Boolean(TEMPLATE_NAME_TO_PROOF_MODE[normalizeText(input.template_name).toLowerCase()]);
+
+  const requiredEntities = isDeterministicTemplate ? [] : (entitiesSpecified
     ? explicitEntities
     : inferEntities({ subject, description: visualClaim || description, narration, query: input.query })).slice(0, 6);
-  const requiredActions = (actionsSpecified
+  const requiredActions = isDeterministicTemplate ? [] : (actionsSpecified
     ? explicitActions
     : (legacyActionsSpecified ? legacyActions : inferActions(visualClaim || description))).slice(0, 5);
-  const requiredRelationships = (relationshipsSpecified
+  const requiredRelationships = isDeterministicTemplate ? [] : (relationshipsSpecified
     ? explicitRelationships
     : inferRelationship(visualClaim || description)).slice(0, 3);
 
@@ -147,6 +169,7 @@ function buildVisualContract(input = {}) {
     acceptable_visuals: uniq(input.acceptable_visuals || input.acceptable_substitutes || []),
     creative_format: normalizeText(input.creative_format),
     template_name: normalizeText(input.template_name),
+    is_deterministic_template: isDeterministicTemplate,
   };
   contract.visual_proof_mode = normalizeText(input.visual_proof_mode) || classifyProofMode(contract);
   return contract;
@@ -157,6 +180,17 @@ function shouldPreferTemplate(contract) {
 }
 
 function buildScoringTarget(contract) {
+  if (contract.is_deterministic_template) {
+    // A comparison/stat/kinetic-text/diagram/timeline/map card draws text,
+    // numbers, and simple shapes - it never contains a literal photo of the
+    // subject. Judge it on legibility and topical fit instead of demanding
+    // entities/actions/relationships it structurally cannot show.
+    return [
+      contract.visual_claim,
+      `This is a designed text/graphic card (${contract.template_name || contract.visual_proof_mode}), not a photo or video of the subject.`,
+      "Judge only whether the on-screen text/numbers are legible and topically consistent with the claim above - do not penalize the absence of a photographic subject, action, or scene.",
+    ].filter(Boolean).join(" ");
+  }
   const parts = [
     contract.visual_claim,
     contract.global_subject ? `Macro subject: ${contract.global_subject}.` : "",
