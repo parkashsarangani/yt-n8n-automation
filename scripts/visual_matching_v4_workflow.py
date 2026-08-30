@@ -13,6 +13,13 @@ from pathlib import Path
 
 MARKER = "VISUAL_MATCHING_V4"
 CONTRACT_GATE = "VISUAL_MATCHING_V4 contract gate"
+LEGACY_AI_GATE_REMOVED = "V4_LEGACY_AI_VISUAL_GATE_REMOVED"
+OBSOLETE_AI_VISUAL_ERRORS = (
+    "visual_prompt too short/missing",
+    "missing negative_prompt",
+    "visual_prompt likely requires readable text/numbers in the AI-generated video",
+    "negative_prompt does not explicitly exclude readable text/numbers",
+)
 
 
 def node(workflow: dict, name: str) -> dict:
@@ -28,6 +35,7 @@ V4_INSTRUCTION = (
     "required_entities (array of concrete visible entities), required_actions (array of visible actions/states), required_relationships (array of visible spatial/scale/comparison relationships), "
     "forbidden_visuals (array including the tempting generic filler that would be topically related but narratively wrong), acceptable_visuals (0-3 valid alternate depictions), and visual_proof_mode. "
     "visual_proof_mode must be exactly one of literal_video, literal_image, annotated_real, comparison, number_visualization, kinetic_text, diagram, timeline, map. "
+    "visual_prompt and negative_prompt are legacy AI-generation fields and are NOT required by V4; do not spend repair attempts recreating them. "
     "Do NOT collapse a scene into its broad named subject: if narration says an octopus squeezes through a narrow gap, visual_claim must require the squeezing-through-gap action, not merely 'octopus'. "
     "Resolve pronouns and vague local wording using OVERALL SELECTED TOPIC / MACRO CONTEXT. "
     "REPRESENTATION ROUTER: comparison=>visual_source template + template_name comparison; number_visualization=>template + stat_reveal; kinetic_text=>template + kinetic_text; "
@@ -47,6 +55,30 @@ def _insert_once(body: str, anchor: str, text: str, *, after: bool = True) -> st
     if after:
         return body.replace(anchor, anchor + " " + text, 1)
     return body.replace(anchor, text + " " + anchor, 1)
+
+
+def _strip_obsolete_ai_visual_gates(code: str) -> str:
+    """Remove inherited AI-image-era validator errors that are invalid under V4.
+
+    V4 retrieves real media or renders deterministic templates; it has no AI image
+    generator. visual_prompt remains a compatibility fallback only, and
+    negative_prompt has no runtime consumer. Requiring either field burns repair
+    attempts without improving rendered correctness.
+    """
+    lines = code.splitlines()
+    cleaned = [
+        line for line in lines
+        if not any(token in line for token in OBSOLETE_AI_VISUAL_ERRORS)
+    ]
+    code = "\n".join(cleaned)
+    if LEGACY_AI_GATE_REMOVED not in code:
+        marker = (
+            f"// {LEGACY_AI_GATE_REMOVED}: visual_prompt/negative_prompt are legacy AI-generation fields; "
+            "V4 validates visual_claim + semantic proof fields instead."
+        )
+        anchor = "const errors = [];"
+        code = code.replace(anchor, anchor + "\n" + marker, 1) if anchor in code else marker + "\n" + code
+    return code
 
 
 def patch_visual_director(workflow: dict) -> None:
@@ -90,7 +122,8 @@ def patch_visual_director(workflow: dict) -> None:
 
 def patch_validator(workflow: dict) -> None:
     n = node(workflow, "Validate Final Script")
-    code = str(n["parameters"]["jsCode"])
+    code = _strip_obsolete_ai_visual_gates(str(n["parameters"]["jsCode"]))
+    n["parameters"]["jsCode"] = code
     if CONTRACT_GATE in code:
         return
     anchor = "// Medical/health exclusion backstop"
@@ -212,9 +245,12 @@ def assert_applied(workflow: dict) -> None:
         if marker not in visual:
             raise RuntimeError(f"V4 Visual Director contract missing {marker}")
     validate = str(names["Validate Final Script"]["parameters"]["jsCode"])
-    for marker in [CONTRACT_GATE, "deterministicModes", "template_data.locations", "timeline requires at least two events", "diagram requires at least two nodes"]:
+    for marker in [CONTRACT_GATE, LEGACY_AI_GATE_REMOVED, "deterministicModes", "template_data.locations", "timeline requires at least two events", "diagram requires at least two nodes"]:
         if marker not in validate:
             raise RuntimeError(f"V4 validator gate missing {marker}")
+    for obsolete in OBSOLETE_AI_VISUAL_ERRORS:
+        if obsolete in validate:
+            raise RuntimeError(f"V4 validator still contains obsolete AI-generation requirement: {obsolete}")
     resolver = str(names["Resolve B-roll"]["parameters"]["jsonBody"])
     for marker in ["visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "run_id", "$execution.id"]:
         if marker not in resolver:
