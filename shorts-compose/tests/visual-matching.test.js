@@ -17,6 +17,15 @@ const {
   verifiedRangeFromFrameIndices,
   compileQueries,
 } = require("../brollResolver");
+const {
+  RUN_MAX_VISION_CALLS,
+  FIRST_FRAME_MAX_VISION_CALLS,
+  SUPPORT_BASE_VISION_CALLS,
+  SUPPORT_BORROW_MAX_VISION_CALLS,
+  getSceneLimit,
+  reserveVisionCall,
+  getBudgetState,
+} = require("../visualBudget");
 const { parseJsonObject: parseFinalQaJson } = require("../finalVisualQa");
 
 describe("visual contract", () => {
@@ -177,6 +186,43 @@ describe("candidate ranking", () => {
       mobile_clarity: 99,
     }, { type: "image" });
     assert.ok(score.overall <= 53);
+  });
+});
+
+describe("adaptive paid-vision budget", () => {
+  it("keeps the production hard ceiling while aligning defaults with the deployment policy", () => {
+    assert.equal(RUN_MAX_VISION_CALLS, 28);
+    assert.equal(FIRST_FRAME_MAX_VISION_CALLS, 7);
+    assert.equal(SUPPORT_BASE_VISION_CALLS, 3);
+    assert.equal(SUPPORT_BORROW_MAX_VISION_CALLS, 7);
+  });
+
+  it("lets a support scene borrow spare budget on a normal four-retrieval-scene Short", () => {
+    const runId = `budget-four-${Date.now()}-${Math.random()}`;
+    const first = { used: 0, limit: FIRST_FRAME_MAX_VISION_CALLS };
+    for (let i = 0; i < FIRST_FRAME_MAX_VISION_CALLS; i++) assert.equal(reserveVisionCall(runId, first).allowed, true);
+    assert.equal(getSceneLimit(false, { runId, retrievalSceneCount: 4, retrievalScenePosition: 1 }), 7);
+  });
+
+  it("preserves the three-call reserve when all eight retrieval scenes need vision", () => {
+    const runId = `budget-eight-${Date.now()}-${Math.random()}`;
+    const first = { used: 0, limit: FIRST_FRAME_MAX_VISION_CALLS };
+    for (let i = 0; i < FIRST_FRAME_MAX_VISION_CALLS; i++) assert.equal(reserveVisionCall(runId, first).allowed, true);
+    assert.equal(getSceneLimit(false, { runId, retrievalSceneCount: 8, retrievalScenePosition: 1 }), 3);
+  });
+
+  it("reclaims unused first-frame budget for a later hard scene without exceeding 28 calls", () => {
+    const runId = `budget-reclaim-${Date.now()}-${Math.random()}`;
+    const first = { used: 0, limit: FIRST_FRAME_MAX_VISION_CALLS };
+    for (let i = 0; i < 2; i++) assert.equal(reserveVisionCall(runId, first).allowed, true);
+    assert.equal(getSceneLimit(false, { runId, retrievalSceneCount: 8, retrievalScenePosition: 1 }), 7);
+    const state = getBudgetState(runId, first);
+    assert.equal(state.run_used, 2);
+    assert.equal(state.run_remaining, 26);
+  });
+
+  it("falls back to the conservative support reserve when topology is unavailable", () => {
+    assert.equal(getSceneLimit(false, {}), SUPPORT_BASE_VISION_CALLS);
   });
 });
 
