@@ -3,8 +3,9 @@
 
 The compose service is intentionally kept readable as its existing source; this
 small deterministic transform is validated in CI and applied before the Docker
-build. It makes engagement/outro optional, honors caption modes, and passes the
-visual director's multi-query commissioning metadata into the b-roll resolver.
+build. It makes engagement/outro optional, honors caption modes, passes the
+visual director's multi-query commissioning metadata into the b-roll resolver,
+and adds production preflight/media-format hardening.
 """
 
 from __future__ import annotations
@@ -55,6 +56,39 @@ def upgrade(text: str) -> str:
         "    const { hook, caption_style, caption_mode = 'karaoke', comment_hook, engagement_mode = 'none', creative_format = 'documentary_cinematic', data: scenes } = reqBody;",
         "compose payload creative fields",
     )
+
+    old_scene_guard = """    if (!Array.isArray(scenes) || scenes.length === 0) {
+      throw new Error("No scenes provided");
+    }
+
+    const mood = caption_style || "neutral";
+"""
+    new_scene_guard = """    if (!Array.isArray(scenes) || scenes.length === 0) {
+      throw new Error("No scenes provided");
+    }
+
+    // CREATIVE_SYSTEM_COMPOSE: fail malformed payloads before starting any
+    // Remotion/FFmpeg work. Promise.allSettled is still used for legitimate
+    // parallel renders, but a known-bad scene no longer leaves the job in
+    // `processing` while unrelated sibling renders finish.
+    const allowedTemplates = new Set(["kinetic_text", "stat_reveal", "comparison"]);
+    scenes.forEach((scene, i) => {
+      if (!scene?.audio?.audio_base64 && !scene?.audio?.audio_url) {
+        throw new Error(`Scene ${i} missing audio`);
+      }
+      if (scene?.visual_source === "template") {
+        if (!scene.template_name) throw new Error(`Scene ${i}: visual_source=template but no template_name`);
+        if (!allowedTemplates.has(scene.template_name)) throw new Error(`Unknown template_name "${scene.template_name}"`);
+        return;
+      }
+      if (!scene?.video_url && (!Array.isArray(scene?.images) || scene.images.length === 0)) {
+        throw new Error(`Scene ${i}: missing images array (and no video_url)`);
+      }
+    });
+
+    const mood = caption_style || "neutral";
+"""
+    text = replace_once(text, old_scene_guard, new_scene_guard, "compose scene preflight")
 
     old_outro = """    const hasScriptOutro = scenes.some((s) => s?.template_data?.is_outro);
     if (!hasScriptOutro) {
@@ -123,6 +157,19 @@ def upgrade(text: str) -> str:
         "      const musicVolume = creative_format === 'minimal_proof' ? 0.07 : creative_format === 'archival_history' ? 0.10 : 0.13;\n      audioFilters.push(`[${musicIdx}:a]aloop=loop=-1:size=2e9,volume=${musicVolume}[music]`);",
         "format-aware music",
     )
+
+    # Scene-level muxes should always emit a predictable audio format. This
+    # avoids encoder-dependent 96 kHz/mono intermediates and makes concat/final
+    # mixing deterministic across Debian/system FFmpeg and the old static build.
+    concat_marker = "// ---------------------------------------------------------------------------\n// Scene Concatenation"
+    if concat_marker not in text:
+        raise ValueError("could not patch scene audio format: concat marker not found")
+    before_concat, after_concat = text.split(concat_marker, 1)
+    before_concat = before_concat.replace(
+        '"-c:a", "aac", "-b:a", "192k"',
+        '"-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"',
+    )
+    text = before_concat + concat_marker + after_concat
 
     old_endpoint = """    const { query, subject, description } = req.body || {};
     const result = await resolveBroll({ query, subject, description });

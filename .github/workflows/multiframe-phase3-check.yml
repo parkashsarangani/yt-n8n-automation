@@ -1,32 +1,19 @@
-name: Validate Multi-frame Video Rerank Phase 3
+name: Validate Multi-frame Video Verification
 
 on:
   pull_request:
     paths:
-      - 'scripts/video_multiframe_phase3.py'
-      - 'scripts/workflow_multiframe_phase3.py'
+      - 'shorts-compose/brollResolver.js'
+      - 'shorts-compose/visualContract.js'
+      - 'shorts-compose/semanticReranker.js'
+      - 'shorts-compose/visualBudget.js'
+      - 'shorts-compose/tests/visual-matching.test.js'
       - 'scripts/upgrade-compose-runtime-hardening.py'
-      - 'scripts/upgrade_quality_alignment.py'
-      - 'shorts-compose/retrievalTelemetryStore.js'
-      - 'shorts-compose/package.json'
-      - 'shorts-compose/package-lock.json'
-      - 'docker-compose.yml'
+      - 'scripts/visual_matching_v4_workflow.py'
       - '.github/workflows/multiframe-phase3-check.yml'
       - '.github/workflows/deploy.yml'
   push:
-    branches:
-      - 'agent/**'
-    paths:
-      - 'scripts/video_multiframe_phase3.py'
-      - 'scripts/workflow_multiframe_phase3.py'
-      - 'scripts/upgrade-compose-runtime-hardening.py'
-      - 'scripts/upgrade_quality_alignment.py'
-      - 'shorts-compose/retrievalTelemetryStore.js'
-      - 'shorts-compose/package.json'
-      - 'shorts-compose/package-lock.json'
-      - 'docker-compose.yml'
-      - '.github/workflows/multiframe-phase3-check.yml'
-      - '.github/workflows/deploy.yml'
+    branches: ['agent/**']
 
 jobs:
   multiframe:
@@ -34,16 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compile phase 3 transforms
-        run: |
-          set -euo pipefail
-          python3 -m py_compile \
-            scripts/video_multiframe_phase3.py \
-            scripts/workflow_multiframe_phase3.py \
-            scripts/upgrade-compose-runtime-hardening.py \
-            scripts/upgrade_quality_alignment.py
-
-      - name: Build final resolver through production transform chain
+      - name: Validate final resolver through production transform chain
         run: |
           set -euo pipefail
           cp shorts-compose/compose.js /tmp/compose.js
@@ -51,67 +29,60 @@ jobs:
           python3 scripts/upgrade-compose-creative-system.py /tmp/compose.js
           python3 scripts/upgrade-compose-api-budget.py /tmp/compose.js /tmp/broll.js
           python3 scripts/upgrade-compose-runtime-hardening.py /tmp/broll.js
-          grep -q 'RETRIEVAL_RECALL_PHASE2' /tmp/broll.js
+          grep -q 'VISUAL_MATCHING_V4' /tmp/broll.js
           grep -q 'MULTIFRAME_VIDEO_RERANK_V1' /tmp/broll.js
           grep -q 'sampleVideoContactSheet' /tmp/broll.js
-          grep -q 'frameSemanticScore' /tmp/broll.js
-          grep -q 'frame_sampling_status' /tmp/broll.js
-          grep -q 'sample_url' /tmp/broll.js
-          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' /tmp/broll.js
+          grep -q 'VIDEO_SAMPLE_FRAMES' /tmp/broll.js
+          grep -q 'best_frame_indices' /tmp/broll.js
+          grep -q 'normalizeVerifiedFrameIndices' /tmp/broll.js
+          grep -q 'verifiedRangeFromFrameIndices' /tmp/broll.js
+          grep -q 'video_verified_frame_range_missing' /tmp/broll.js
+          grep -q 'verified_frame_indices' /tmp/broll.js
+          grep -q 'materializeVerifiedClip' /tmp/broll.js
+          grep -q 'actual_video_verified' /tmp/broll.js
+          if grep -q 'best_start_sec' /tmp/broll.js || grep -q 'best_end_sec' /tmp/broll.js; then
+            echo 'free-form model trim timestamps reintroduced' >&2
+            exit 1
+          fi
+          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
           node --check /tmp/broll.js
 
-      - name: Validate generated workflow telemetry
+      - name: Validate generated workflow video-verification telemetry
         run: |
           set -euo pipefail
           python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/w1.json
           python3 scripts/upgrade-creative-system.py /tmp/w1.json /tmp/w2.json
-          python3 scripts/upgrade-workflow-api-budget.py /tmp/w2.json /tmp/w3.json
+          python3 scripts/visual_matching_v4_workflow.py /tmp/w2.json /tmp/w2v4.json
+          python3 scripts/upgrade-workflow-api-budget.py /tmp/w2v4.json /tmp/w3.json
           python3 scripts/upgrade-topic-latency.py /tmp/w3.json /tmp/w4.json
           python3 scripts/upgrade-anthropic-parser.py /tmp/w4.json /tmp/wfinal.json
           python3 - <<'PY'
           import json
-          w=json.load(open('/tmp/wfinal.json'))
-          names={n['name']:n for n in w['nodes']}
+          w=json.load(open('/tmp/wfinal.json')); names={n['name']:n for n in w['nodes']}
           tag=names['Tag B-roll']['parameters']['jsCode']
-          assert 'MULTIFRAME_TELEMETRY_V1' in tag
-          for marker in ['frame_similarity','frame_sample_count','frame_sampling_status','frame_sampling_ms','frame_sampling']:
-              assert marker in tag, marker
-          print('phase3 workflow telemetry OK')
+          for marker in ['frame_similarity','actual_video_verified','in_point_sec','out_point_sec','verified_frame_indices','asset_semantic_match']:
+              assert marker in tag,marker
+          resolver=names['Resolve B-roll']['parameters']['jsonBody']
+          assert 'visual_claim' in resolver and 'required_actions' in resolver
+          print('V4 sampled-frame verification telemetry OK')
           PY
 
-      - name: Validate persisted frame telemetry normalization
-        run: |
-          set -euo pipefail
-          node - <<'JS'
-          const store=require('./shorts-compose/retrievalTelemetryStore');
-          const scene=store.normalizeScene({scene_index:2,frame_similarity:84,frame_sample_count:3,frame_sampling_status:'ok',frame_sampling_ms:1420,frame_sampling:{enabled:true,attempted:3,completed:2,elapsed_ms:4800,deadline_exhausted:false}});
-          if(scene.frame_similarity!==84||scene.frame_sample_count!==3||scene.frame_sampling_status!=='ok')throw new Error('selected frame telemetry normalization failed');
-          if(scene.frame_sampling.attempted!==3||scene.frame_sampling.completed!==2||scene.frame_sampling.elapsed_ms!==4800||scene.frame_sampling.deadline_exhausted!==false)throw new Error('scene sampling telemetry normalization failed');
-          console.log('phase3 persisted telemetry OK');
-          JS
-
-      - name: Exercise FFmpeg contact-sheet filter
+      - name: Exercise sampled-frame range unit tests
         run: |
           set -euo pipefail
           cd shorts-compose
           npm install --no-package-lock --no-audit --no-fund
-          node - <<'JS'
-          const {execFileSync}=require('child_process');
-          const fs=require('fs');
-          const ffmpeg=require('ffmpeg-static');
-          const input='/tmp/phase3-test.mp4',output='/tmp/phase3-sheet.jpg';
-          execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=duration=3:size=320x240:rate=24','-pix_fmt','yuv420p','-y',input]);
-          execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-i',input,'-vf','fps=1.0000,scale=320:-2,tile=3x1:nb_frames=3:padding=2:margin=0','-frames:v','1','-q:v','5','-y',output]);
-          const stat=fs.statSync(output);
-          if(!stat.size)throw new Error('contact sheet was empty');
-          console.log('phase3 FFmpeg contact sheet OK bytes='+stat.size);
-          JS
+          node --test tests/visual-matching.test.js
 
-      - name: Assert bounded runtime defaults
+      - name: Exercise FFmpeg chronological contact sheet
         run: |
           set -euo pipefail
-          grep -q 'BROLL_MULTIFRAME_CANDIDATES=${BROLL_MULTIFRAME_CANDIDATES:-3}' docker-compose.yml
-          grep -q 'BROLL_MULTIFRAME_FRAMES=${BROLL_MULTIFRAME_FRAMES:-3}' docker-compose.yml
-          grep -q 'BROLL_MULTIFRAME_TIMEOUT_MS=${BROLL_MULTIFRAME_TIMEOUT_MS:-12000}' docker-compose.yml
-          grep -q 'BROLL_MULTIFRAME_MAX_BYTES=${BROLL_MULTIFRAME_MAX_BYTES:-12582912}' docker-compose.yml
-          grep -q 'BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-28}' docker-compose.yml
+          cd shorts-compose
+          node - <<'JS'
+          const {execFileSync}=require('child_process'); const fs=require('fs'); const ffmpeg=require('ffmpeg-static');
+          const input='/tmp/v4-test.mp4',output='/tmp/v4-sheet.jpg';
+          execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc=duration=4:size=320x240:rate=24','-pix_fmt','yuv420p','-y',input]);
+          execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-i',input,'-vf','fps=3,scale=320:-2:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2:color=black,tile=4x3:nb_frames=12:padding=3:margin=3','-frames:v','1','-q:v','3','-y',output]);
+          if(!fs.statSync(output).size)throw new Error('contact sheet empty');
+          console.log('V4 contact sheet OK');
+          JS
