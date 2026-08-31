@@ -374,6 +374,7 @@ def patch_resolver(workflow: dict) -> None:
         "={{ JSON.stringify({ query: (" + p + ".stock_search_query || " + p + ".visual_prompt), queries: (" + p + ".search_queries || []), "
         "alternate_queries: (" + p + ".search_queries || []).slice(1), subject: (" + p + ".named_subject || ''), description: (" + p + ".visual_prompt || " + p + ".must_show || " + p + ".stock_search_query), "
         "scene_index: " + p + ".scene_index, first_frame: Number(" + p + ".scene_index) === 0, creative_format: ($('Validate Final Script').item.json.creative_format || ''), "
+        "planned_template_count: ($('Validate Final Script').item.json.scenes || []).filter((sc) => sc && sc.visual_source === 'template').length, "
         + contract_expr(p) + ", run_id: String($execution.id || '') }) }}"
     )
     r["parameters"]["jsonBody"] = body

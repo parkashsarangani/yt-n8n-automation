@@ -29,6 +29,7 @@ const {
   RUN_MAX_VISION_CALLS,
   getSceneLimit,
   reserveVisionCall,
+  reserveTemplateFallback,
   getBudgetState,
   cacheKey,
   getCachedResult,
