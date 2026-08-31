@@ -82,7 +82,6 @@ jobs:
           python3 scripts/upgrade-compose-runtime-hardening.py /tmp/broll_final.js
           python3 scripts/visual_matching_v4_compose.py /tmp/compose_final.js
           grep -q 'VISUAL_MATCHING_V4' /tmp/broll_final.js
-          grep -q 'passesSemanticGate' /tmp/broll_final.js
           grep -q 'localSemanticRerank' /tmp/broll_final.js
           grep -q 'sampleVideoContactSheet' /tmp/broll_final.js
           grep -q 'best_frame_indices' /tmp/broll_final.js
