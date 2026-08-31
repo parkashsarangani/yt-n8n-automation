@@ -95,7 +95,8 @@ jobs:
           ! grep -q 'best_end_sec' /tmp/broll_final.js
           grep -q 'VISUAL_MATCHING_V4_COMPOSE' /tmp/compose_final.js
           grep -q 'reviewFinalVideo' /tmp/compose_final.js
-          grep -q 'Final visual QA rejected' /tmp/compose_final.js
+          ! grep -q 'throw new Error(`Final visual QA rejected' /tmp/compose_final.js
+          grep -q 'publishing anyway' /tmp/compose_final.js
           for marker in 'MapVisual' 'TimelineVisual' 'DiagramVisual' 'AnnotatedReal' '"map", "timeline", "diagram", "annotated_real"'; do grep -q "$marker" /tmp/compose_final.js; done
           grep -q '"-ar", "48000", "-ac", "2"' /tmp/compose_final.js
           ! grep -q 'const target = subj ||' /tmp/broll_final.js

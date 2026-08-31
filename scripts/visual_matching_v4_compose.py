@@ -105,12 +105,17 @@ def upgrade(text: str) -> str:
     await run(finalCmd);
 
     // VISUAL_MATCHING_V4_COMPOSE: final rendered-pixel QA. This happens after
-    // captions/branding/mix are applied and before the artifact is exposed for
-    // upload, so retrieval correctness cannot be undone by crop/composition.
+    // captions/branding/mix are applied, so retrieval correctness has already
+    // survived crop/composition by the time it's judged. NON_BLOCKING_FINAL_QA:
+    // by explicit decision, this no longer blocks publishing - a scheduled
+    // upload happening on time outweighs holding back an imperfect-but-usable
+    // Short. The QA still runs and its findings are logged and returned for
+    // visibility/telemetry (and to keep the retry loop's learning signal
+    // intact upstream), it just never throws.
     const finalVisualQa = await reviewFinalVideo(finalPath, scenes, durations);
     if (!finalVisualQa.passed) {
       const summary = (finalVisualQa.issues || []).map((x) => `scene ${x.scene_index}: ${x.problem} (semantic=${x.semantic_match ?? 'n/a'}, score=${x.score ?? 'n/a'})`).join('; ');
-      throw new Error(`Final visual QA rejected rendered Short: ${summary || 'unknown visual mismatch'}`);
+      console.warn(`[job ${jobId}] Final visual QA flagged issues (publishing anyway): ${summary || 'unknown visual mismatch'}`);
     }
 
     await fsp.copyFile(finalPath, outputFullPath);
