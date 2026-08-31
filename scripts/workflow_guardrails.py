@@ -139,7 +139,14 @@ def _enforce_remotion_template_cap(workflow: dict) -> None:
         if line_end < 0:
             raise RuntimeError("asset quality aggregate line malformed for Remotion template cap")
         insert = (
-            "\nconst remotion_template_scene_indexes = merged.filter(v => !v?.template_data?.is_outro && v.visual_source === 'template').map(v => Number(v.scene_index));"
+            # annotated_real is a REAL photo/footage candidate rendered through
+            # a Remotion composition to burn in pixel-anchored callout labels -
+            # Tag B-roll sets visual_source='template' for it purely as a
+            # rendering-pipeline detail (see brollResolver.js), not because it
+            # is a designed graphic card standing in for missing real content.
+            # Counting it against the "avoid template-heavy renders" cap would
+            # reject a scene that found genuinely well-matched real footage.
+            "\nconst remotion_template_scene_indexes = merged.filter(v => !v?.template_data?.is_outro && v.visual_source === 'template' && v.template_name !== 'annotated_real').map(v => Number(v.scene_index));"
             "\nif (remotion_template_scene_indexes.includes(0)) throw new Error('Remotion template cap failed: scene 0 cannot be a Remotion template; the opening visual must be real/archive footage or imagery');"
             "\nif (remotion_template_scene_indexes.length > 1) throw new Error('Remotion template cap failed: video has ' + remotion_template_scene_indexes.length + ' Remotion template scenes (' + remotion_template_scene_indexes.join(',') + '); maximum is 1');"
         )
