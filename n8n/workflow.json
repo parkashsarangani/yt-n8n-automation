@@ -266,7 +266,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.elevenlabs.io/v1/text-to-speech/UgBBYS2sOqTuMpoF3BR0/with-timestamps",
+        "url": "https://api.elevenlabs.io/v1/text-to-speech/xw9TKt9F8gTH9KkstbE9/with-timestamps",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
