@@ -65,7 +65,8 @@ async function judgeScene(imageUrl, contract, timestamps) {
     `Frame timestamps: ${(timestamps || []).join(", ")} seconds.`,
     `Forbidden visuals: ${(contract.forbidden_visuals || []).join("; ")}`,
     "Judge the scene across the sampled frames; an action may occur in one frame while entities/relationship remain visible in another.",
-    "Return ONLY JSON: {\"semantic_match\":0,\"entity_match\":0,\"action_match\":0,\"relationship_match\":0,\"readability\":0,\"overall\":0,\"problem\":\"\"}.",
+    "Score each field 0-100 from your actual visual judgment of the image - never copy a placeholder or example value verbatim.",
+    "Return ONLY JSON with these exact keys, each holding a real integer 0-100 you computed (or an empty string for problem if none): {\"semantic_match\":<int>,\"entity_match\":<int>,\"action_match\":<int>,\"relationship_match\":<int>,\"readability\":<int>,\"overall\":<int>,\"problem\":\"<string>\"}.",
     contract.is_deterministic_template
       ? "This scene is a designed text/graphic card, not a photo or video - it never contains a photographic entity, action, or relationship. Set entity_match, action_match, and relationship_match to null (they do not apply). Base overall ONLY on legibility and topical fit with the claim - do NOT lower overall because a photographic subject is absent, that is expected and correct for this scene type."
       : "Do not reward generic topic relevance. If a required entity, action, or relationship is absent from all sampled frames, score that dimension below 70.",
