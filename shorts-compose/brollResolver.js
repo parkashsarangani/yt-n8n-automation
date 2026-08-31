@@ -54,6 +54,14 @@ const INITIAL_SEARCH_QUERIES = Math.max(1, Number(process.env.BROLL_INITIAL_SEAR
 const MAX_SEARCH_QUERIES = Math.max(INITIAL_SEARCH_QUERIES, Number(process.env.BROLL_MAX_SEARCH_QUERIES || 5));
 const CANDIDATE_POOL_MAX = Math.max(20, Number(process.env.BROLL_CANDIDATE_POOL_MAX || 80));
 const MAX_RELEVANCE_RETRY_ROUNDS = Math.max(0, Number(process.env.BROLL_MAX_RELEVANCE_RETRY_ROUNDS || 2));
+// The public endpoint sits behind a proxy/tunnel with its own timeout
+// (commonly ~100s for a Cloudflare-fronted domain) shorter than n8n's own
+// 180s node-level timeout. A retry round that runs candidate search + paid
+// vision scoring can genuinely take tens of seconds, so a hard round count
+// alone isn't enough - a wall-clock budget keeps a single resolveBroll call
+// from ever running long enough to get its connection reset by an
+// intermediary that was never told about the retry loop.
+const RELEVANCE_RETRY_WALL_CLOCK_MS = Math.max(10000, Number(process.env.BROLL_RELEVANCE_RETRY_WALL_CLOCK_MS || 65000));
 const OUTPUT_DIR = process.env.OUTPUT_DIR || "/outputs";
 const VERIFIED_CACHE_DIR = process.env.BROLL_VERIFIED_CACHE_DIR || path.join(OUTPUT_DIR, "broll-cache");
 const VERIFIED_PUBLIC_BASE = String(process.env.BROLL_PUBLIC_BASE_URL || "http://127.0.0.1:4000/outputs").replace(/\/$/, "");
@@ -463,6 +471,7 @@ function cheapSemanticRank(candidate, contract) { const target = buildScoringTar
 function summarizeCandidate(best) { return best ? { type: best.type, source: best.source, score: best.score, semantic_match: best.semantic_match, entity_match: best.entity_match, action_match: best.action_match, relationship_match: best.relationship_match, relevance: best.relevance, scroll_stop: best.scroll_stop, mobile_clarity: best.mobile_clarity, local_similarity: best.local_similarity ?? null, frame_similarity: best.frame_similarity ?? null } : null; }
 
 async function resolveBroll(input = {}) {
+  const resolveStartedAt = Date.now();
   const contract = buildVisualContract(input), desc = String(input.description || input.query || input.subject || "").trim(), subj = String(input.subject || input.named_subject || "").trim(), target = buildScoringTarget(contract) || desc || subj;
   const queryList = compileQueries(input, contract);
   if (!queryList.length || !target) return { ok: false, reason: "missing_search_target", visual_contract: contract };
@@ -545,7 +554,8 @@ async function resolveBroll(input = {}) {
   const roundBest = scored.find((c) => !c.rejected);
   const passesRelevance = roundBest && roundBest.score >= threshold;
   const hasMoreToTry = queryCursor < queryList.length || mixed.length > 0;
-  if (passesRelevance || !hasMoreToTry || state.budget_exhausted) break;
+  const wallClockExceeded = Date.now() - resolveStartedAt >= RELEVANCE_RETRY_WALL_CLOCK_MS;
+  if (passesRelevance || !hasMoreToTry || state.budget_exhausted || wallClockExceeded) break;
   }
 
   scored.sort((a, b) => b.score - a.score);
