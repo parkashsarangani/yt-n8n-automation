@@ -50,6 +50,46 @@ function getSceneLimit(firstFrame, context = {}) {
   return Math.max(1, Math.min(hardMax, allocatableNow));
 }
 
+// A designed Remotion template (comparison/stat_reveal/kinetic_text/etc) is
+// the resolver's last resort when no real footage clears the quality bar.
+// Nothing coordinates how many scenes reach for it independently, so a Short
+// where 3 different scenes each fail real-media search on their own can end
+// up with 3+ template scenes - well past the 1-template-per-Short ceiling
+// enforced later (Validate Final Script, and again at the merge stage).
+// That ceiling counts BOTH the Visual Director's own intentional template
+// plan and any resolver fallback together, so reserveTemplateFallback also
+// takes plannedTemplateCount (how many scenes elsewhere in this exact
+// script are already visual_source='template') into account: if the plan
+// already has one, no fallback budget remains for this run at all.
+function reserveTemplateFallback(runId, sceneIndex, context = {}) {
+  const scene = Number(sceneIndex);
+  if (scene === 0 || context.firstFrame === true || context.first_frame === true) {
+    return { allowed: false, reason: "template_fallback_first_frame_forbidden" };
+  }
+
+  const planned = Number(context.plannedTemplateCount ?? context.planned_template_count ?? 0);
+  if (Number.isFinite(planned) && planned > 0) {
+    return { allowed: false, reason: "template_fallback_planned_template_already_present" };
+  }
+
+  const id = String(runId || "").trim();
+  if (!id) return { allowed: false, reason: "template_fallback_missing_run_id" };
+  cleanupRuns();
+
+  const state = runBudgets.get(id) || { used: 0, template_fallbacks: [], updated_at: Date.now() };
+  state.template_fallbacks = Array.isArray(state.template_fallbacks) ? state.template_fallbacks : [];
+  if (state.template_fallbacks.length >= 1) {
+    state.updated_at = Date.now();
+    runBudgets.set(id, state);
+    return { allowed: false, reason: "template_fallback_cap_exhausted", used: state.template_fallbacks.length };
+  }
+
+  state.template_fallbacks.push(scene);
+  state.updated_at = Date.now();
+  runBudgets.set(id, state);
+  return { allowed: true, used: state.template_fallbacks.length, scene_index: scene };
+}
+
 function reserveVisionCall(runId, sceneState = null) {
   const id = String(runId || "").trim();
   cleanupRuns();
@@ -129,6 +169,7 @@ module.exports = {
   SUPPORT_BORROW_MAX_VISION_CALLS,
   getSceneLimit,
   reserveVisionCall,
+  reserveTemplateFallback,
   getBudgetState,
   cacheKey,
   getCachedResult,

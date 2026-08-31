@@ -166,7 +166,7 @@ def _patch_v4_template_fallback(path: Path) -> None:
     const failure_reasons = [...new Set(scored.filter((x) => x.rejected).map((x) => String(x.reason || "semantic_gate_failed").slice(0, 120)))].slice(0, 6);
     const reason = state.budget_exhausted || "below_quality_threshold";
     // {V4_TEMPLATE_FALLBACK_MARKER}: try the model's own designed fallback before failing the scene.
-    const tf = templateFallbackResult(input.template_fallback, reason);
+    const tf = templateFallbackResult(input.template_fallback, reason, state.run_id, input.scene_index, isFirstFrame, input.planned_template_count);
     if (tf) return tf;
     return {{ ok: false, reason, threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, vision_call_limit: state.scene_budget.limit, early_accept: state.early_accept, failure_reasons, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget }};
   }}'''
@@ -183,11 +183,20 @@ const TEMPLATE_FALLBACK_SPECS = {{
   timeline: (d) => d && Array.isArray(d.events) && d.events.length >= 2,
   map: (d) => d && Array.isArray(d.locations) && d.locations.length >= 1,
 }};
-function templateFallbackResult(tf, reason) {{
+function templateFallbackResult(tf, reason, runId, sceneIndex, firstFrame, plannedTemplateCount) {{
   if (!tf || typeof tf !== "object") return null;
   const name = String(tf.template_name || "");
   const spec = TEMPLATE_FALLBACK_SPECS[name];
   if (!spec || !spec(tf.template_data || {{}})) return null;
+  // A run-wide cap: this scene's own real-media search failing does not
+  // mean a fallback template is free to use - if another scene already
+  // has a template (planned by the Visual Director or an earlier
+  // fallback in this same run), a second one would exceed the 1-template
+  // ceiling enforced later at the merge stage, after TTS/resolution have
+  // already run for every scene. Catch it here instead, before spending
+  // any more of the run on a video that is guaranteed to be rejected.
+  const reservation = reserveTemplateFallback(runId, sceneIndex, {{ firstFrame, plannedTemplateCount }});
+  if (!reservation.allowed) return null;
   return {{ ok: true, type: "template", visual_source: "template", template_name: name, template_data: tf.template_data, degraded: true, quality_gate_passed: false, fallback_reason: reason }};
 }}
 '''
