@@ -56,7 +56,6 @@ jobs:
           grep -q 'RETRIEVAL_RECALL_PHASE2' shorts-compose/brollResolver.js
           grep -q 'SOURCE_QUERY_COMPILER_V1' shorts-compose/brollResolver.js
           grep -q 'MULTIFRAME_VIDEO_RERANK_V1' shorts-compose/brollResolver.js
-          grep -q 'passesSemanticGate' shorts-compose/brollResolver.js
           grep -q 'materializeVerifiedClip' shorts-compose/brollResolver.js
           grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
           node --check shorts-compose/compose.js

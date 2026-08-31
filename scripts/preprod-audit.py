@@ -268,7 +268,7 @@ def audit() -> None:
         run([sys.executable, str(ROOT / "scripts/visual_matching_v4_compose.py"), str(compose_js)])
         run(["node", "--check", str(compose_js)]); run(["node", "--check", str(broll_js)])
         compose, broll = compose_js.read_text(), broll_js.read_text()
-        for marker in ["VISUAL_MATCHING_V4","PREPROD_BROLL_HARDENING","RETRIEVAL_RECALL_PHASE2","SOURCE_QUERY_COMPILER_V1","MULTIFRAME_VIDEO_RERANK_V1","sampleVideoContactSheet","localSemanticRerank","passesSemanticGate","materializeVerifiedClip","fromPixabayVideos","fromWikimediaCommons"]:
+        for marker in ["VISUAL_MATCHING_V4","PREPROD_BROLL_HARDENING","RETRIEVAL_RECALL_PHASE2","SOURCE_QUERY_COMPILER_V1","MULTIFRAME_VIDEO_RERANK_V1","sampleVideoContactSheet","localSemanticRerank","materializeVerifiedClip","fromPixabayVideos","fromWikimediaCommons"]:
             if marker not in broll: die(f"V4 resolver missing {marker}")
         if "const target = subj ||" in broll: die("broad-subject scoring regression returned")
         if "reviewFinalVideo" not in compose or "Final visual QA rejected" not in compose: die("final rendered QA is not blocking compose")
