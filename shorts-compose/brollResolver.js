@@ -53,6 +53,7 @@ const SOURCE_PER_QUERY = Math.max(4, Number(process.env.BROLL_SOURCE_PER_QUERY |
 const INITIAL_SEARCH_QUERIES = Math.max(1, Number(process.env.BROLL_INITIAL_SEARCH_QUERIES || 2));
 const MAX_SEARCH_QUERIES = Math.max(INITIAL_SEARCH_QUERIES, Number(process.env.BROLL_MAX_SEARCH_QUERIES || 5));
 const CANDIDATE_POOL_MAX = Math.max(20, Number(process.env.BROLL_CANDIDATE_POOL_MAX || 80));
+const MAX_RELEVANCE_RETRY_ROUNDS = Math.max(0, Number(process.env.BROLL_MAX_RELEVANCE_RETRY_ROUNDS || 2));
 const OUTPUT_DIR = process.env.OUTPUT_DIR || "/outputs";
 const VERIFIED_CACHE_DIR = process.env.BROLL_VERIFIED_CACHE_DIR || path.join(OUTPUT_DIR, "broll-cache");
 const VERIFIED_PUBLIC_BASE = String(process.env.BROLL_PUBLIC_BASE_URL || "http://127.0.0.1:4000/outputs").replace(/\/$/, "");
@@ -178,6 +179,46 @@ async function fromUnsplash(query) {
 }
 
 function stripHtml(v) { return String(v || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
+
+// Openverse aggregates CC-licensed images across many open collections
+// (Flickr Commons, museums, GLAM institutions, etc). No API key required for
+// anonymous use. license_type=commercial,modification restricts results to
+// licenses that permit both the channel's commercial use and the color
+// grading/cropping this pipeline applies to every stock frame.
+async function fromOpenverse(query) {
+  if (!query) return [];
+  const d = await safeGet(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${Math.min(20, SOURCE_PER_QUERY)}&license_type=commercial,modification&mature=false`, { headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" } });
+  return (d?.results || []).map((p) => {
+    const url = p.url || p.thumbnail; if (!url) return null;
+    return {
+      id: p.id, type: "image", url, thumb: p.thumbnail || url,
+      width: p.width || null, height: p.height || null, alt: p.title || query,
+      query, source: "openverse",
+      attribution: stripHtml(`${p.title || "Image"} by ${p.creator || "unknown"} (${p.license ? p.license.toUpperCase() : "CC"}${p.license_version ? " " + p.license_version : ""}) via Openverse`),
+    };
+  }).filter(Boolean);
+}
+
+// NASA's public image/video library - all content is either public domain
+// or covered by NASA's media usage guidelines (free use, attribution
+// requested but not legally required for most items). No API key required.
+async function fromNasaImages(query) {
+  if (!query) return [];
+  const d = await safeGet(`https://images-api.nasa.gov/search?q=${encodeURIComponent(query)}&media_type=image`, {}, 20000);
+  return (d?.collection?.items || []).slice(0, Math.min(12, SOURCE_PER_QUERY)).map((item) => {
+    const meta = item?.data?.[0] || {}, links = item?.links || [];
+    const canonical = links.find((l) => l.rel === "canonical" && l.render === "image");
+    const preview = links.find((l) => l.rel === "preview" && l.render === "image") || links[0];
+    const link = canonical || preview;
+    const url = link?.href; if (!url) return null;
+    return {
+      id: meta.nasa_id || url, type: "image", url, thumb: preview?.href || url,
+      width: link?.width || null, height: link?.height || null, alt: meta.title || query,
+      query, source: "nasa", attribution: `NASA${meta.center ? ` / ${meta.center}` : ""}: ${meta.title || "image"}`,
+    };
+  }).filter(Boolean);
+}
+
 async function fromWikimediaCommons(query) {
   if (!query) return [];
   const d = await safeGet(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=${Math.min(12, SOURCE_PER_QUERY)}&gsrsearch=${encodeURIComponent(query)}&prop=imageinfo&iiprop=url|mime|extmetadata&iiurlwidth=1600&format=json&origin=*`, { headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" } }, 20000);
@@ -211,7 +252,7 @@ async function fromWikipedia(subject) {
 
 async function collectCandidates(queries, subject) {
   const jobs = [];
-  for (const q of queries) jobs.push(fromPexelsPhotos(q), fromPexelsVideos(q), fromPixabayPhotos(q), fromPixabayVideos(q), fromUnsplash(q), fromWikimediaCommons(q));
+  for (const q of queries) jobs.push(fromPexelsPhotos(q), fromPexelsVideos(q), fromPixabayPhotos(q), fromPixabayVideos(q), fromUnsplash(q), fromWikimediaCommons(q), fromOpenverse(q), fromNasaImages(q));
   jobs.push(fromWikipedia(subject));
   const groups = await Promise.all(jobs);
   return dedupeCandidates(groups.flat()).slice(0, CANDIDATE_POOL_MAX);
@@ -434,8 +475,21 @@ async function resolveBroll(input = {}) {
   let candidates = reusable.map((r) => ({ ...r, source: `library:${r.source || "proven"}`, alt: r.contract_text, query: queryList[0], library_hit: true }));
 
   let searchRounds = 0, queriesTried = [];
-  for (let start = 0; start < queryList.length && candidates.length < CANDIDATE_POOL_MAX; start += INITIAL_SEARCH_QUERIES) {
-    const batch = queryList.slice(start, start + INITIAL_SEARCH_QUERIES); if (!batch.length) break;
+  let queryCursor = 0;
+  const scored = []; let videoCalls = 0;
+  const scoredUrls = new Set();
+
+  // RELEVANCE_RETRY_V1: a single search+score pass can land on a technically
+  // usable candidate that still doesn't actually satisfy the scene's visual
+  // claim (a low semantic/entity match). Rather than accept that first pass
+  // outright or hard-fail the scene, spend up to MAX_RELEVANCE_RETRY_ROUNDS
+  // extra rounds pulling from queries not yet tried (the initial gather loop
+  // below usually stops well short of the full query list, once it has
+  // "enough" candidates by count) before settling for the best candidate
+  // found across every round.
+  for (let retryRound = 0; retryRound <= MAX_RELEVANCE_RETRY_ROUNDS; retryRound++) {
+  for (; queryCursor < queryList.length && candidates.length < CANDIDATE_POOL_MAX; queryCursor += INITIAL_SEARCH_QUERIES) {
+    const batch = queryList.slice(queryCursor, queryCursor + INITIAL_SEARCH_QUERIES); if (!batch.length) break;
     searchRounds++; queriesTried.push(...batch);
     const external = await collectCandidates(batch, subj);
     candidates = dedupeCandidates([...candidates, ...external]).filter((c) => !recent.has(c.url) || c.library_hit).slice(0, CANDIDATE_POOL_MAX);
@@ -451,15 +505,15 @@ async function resolveBroll(input = {}) {
     if (la !== lb) return lb - la; return cheapSemanticRank(b, contract) - cheapSemanticRank(a, contract);
   });
 
-  const mixed = [], add = (c) => { if (c && !mixed.some((x) => x.url === c.url)) mixed.push(c); };
+  const mixed = [], add = (c) => { if (c && !scoredUrls.has(c.url) && !mixed.some((x) => x.url === c.url)) mixed.push(c); };
   candidates.filter((c) => c.source === "wikipedia" || c.source === "wikimedia").slice(0, 1).forEach(add);
   const videos = candidates.filter((c) => c.type === "video"), photos = candidates.filter((c) => c.type !== "video" && c.source !== "wikipedia" && c.source !== "wikimedia");
   for (let i = 0; mixed.length < VISION_TOP_N && (i < videos.length || i < photos.length); i++) { add(videos[i]); if (mixed.length < VISION_TOP_N) add(photos[i]); }
   candidates.forEach((c) => { if (mixed.length < VISION_TOP_N) add(c); });
 
-  const scored = []; let videoCalls = 0;
   for (const c of mixed) {
     if (state.budget_exhausted) break;
+    scoredUrls.add(c.url);
     const reusableAnnotated = contract.visual_proof_mode !== "annotated_real" || (Array.isArray(c.annotation_plan) && c.annotation_plan.length > 0 && c.local_path && fs.existsSync(c.local_path));
     if (c.library_hit && Number(c.semantic_match || 0) >= 88 && reusableAnnotated) { scored.push({ ...c, score: Number(c.score || c.semantic_match), rejected: false }); continue; }
     if (c.type === "video") {
@@ -471,7 +525,7 @@ async function resolveBroll(input = {}) {
       scored.push({ ...c, ...verification, ...materialized, original_url: c.url, score: verification.overall }); continue;
     }
     const dimensions = await scoreImageCandidate(c, contract, { firstFrame: isFirstFrame }, state);
-    // No relevance gate here by design either: every candidate keeps its
+    // No hard relevance gate here by design either: every candidate keeps its
     // real computed score and stays eligible to be picked, regardless of
     // how it compares to any threshold. annotationOk is a technical
     // requirement, not a relevance judgment - annotated_real mode overlays
@@ -488,10 +542,19 @@ async function resolveBroll(input = {}) {
   }
 
   scored.sort((a, b) => b.score - a.score);
-  // No relevance threshold gates the pick: the highest-scoring technically
-  // usable candidate always wins, whatever its score is. `rejected` here
-  // only marks candidates that are literally unusable (couldn't be
-  // downloaded/verified/materialized), never "scored too low."
+  const roundBest = scored.find((c) => !c.rejected);
+  const passesRelevance = roundBest && roundBest.score >= threshold;
+  const hasMoreToTry = queryCursor < queryList.length || mixed.length > 0;
+  if (passesRelevance || !hasMoreToTry || state.budget_exhausted) break;
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  // No relevance threshold hard-gates the final pick: after retrying against
+  // fresh candidates for scenes that fell short, the highest-scoring
+  // technically usable candidate wins, whatever its score is - a low-scoring
+  // real photo still beats no photo. `rejected` here only marks candidates
+  // that are literally unusable (couldn't be downloaded/verified/
+  // materialized), never "scored too low."
   const best = scored.find((c) => !c.rejected), budget = getBudgetState(state.run_id, state.scene_budget);
   if (!best) return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };
 
