@@ -280,7 +280,7 @@ if(!Number.isFinite(Number(parsed.visual_plan_quality))||Number(parsed.visual_pl
 if(!parsed.first_frame_type)errors.push('first_frame_type missing');
 if(parsed.engagement_mode==='none'&&(parsed.comment_hook||parsed.outro_line))errors.push('engagement_mode=none but CTA fields populated');
 if(parsed.engagement_mode==='comment_only'&&parsed.outro_line)errors.push('comment_only cannot carry a share outro');
-if(Array.isArray(parsed.scenes)){parsed.scenes.forEach((s,i)=>{if(s?.template_data?.is_outro)return;if(!s.visual_role)errors.push(`scene ${i} missing visual_role`);if(s.visual_source!=='template'&&(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<2))errors.push(`scene ${i} needs at least 2 search_queries`);});}
+if(Array.isArray(parsed.scenes)){parsed.scenes.forEach((s,i)=>{if(s?.template_data?.is_outro)return;if(!s.visual_role)errors.push(`scene ${s.scene_index} missing visual_role`);if(s.visual_source!=='template'&&(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<2))errors.push(`scene ${s.scene_index} needs at least 2 search_queries`);});}
 
 """ + anchor
         code = replace_once(code, anchor, gate, "visual validator")

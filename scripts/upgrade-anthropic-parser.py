@@ -104,8 +104,8 @@ def patch_visual_schema_normalizer(workflow: dict) -> None:
         raise ValueError("could not patch visual schema normalizer: pre-validation anchor not found")
     code = code.replace(anchor, normalizer + anchor, 1)
     code = code.replace(
-        "(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<2))errors.push(`scene ${i} needs at least 2 search_queries`)",
-        "(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<3))errors.push(`scene ${i} needs at least 3 search_queries`)",
+        "(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<2))errors.push(`scene ${s.scene_index} needs at least 2 search_queries`)",
+        "(!Array.isArray(s.search_queries)||s.search_queries.filter(Boolean).length<3))errors.push(`scene ${s.scene_index} needs at least 3 search_queries`)",
     )
     node["parameters"]["jsCode"] = code
 

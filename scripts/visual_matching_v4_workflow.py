@@ -95,8 +95,8 @@ def _expand_legacy_template_validator(code: str) -> str:
     elif new_spec not in code:
         raise ValueError("legacy template validator spec changed; V4 deterministic templates may be rejected")
 
-    old_error = 'errors.push(`scene ${i} has unknown template_name "${s.template_name}" - must be one of stat_reveal, comparison, kinetic_text`);'
-    new_error = 'errors.push(`scene ${i} has unknown template_name "${s.template_name}" - must be one of stat_reveal, comparison, kinetic_text, diagram, timeline, map`);'
+    old_error = 'errors.push(`scene ${s.scene_index} has unknown template_name "${s.template_name}" - must be one of stat_reveal, comparison, kinetic_text`);'
+    new_error = 'errors.push(`scene ${s.scene_index} has unknown template_name "${s.template_name}" - must be one of stat_reveal, comparison, kinetic_text, diagram, timeline, map`);'
     if old_error in code:
         code = code.replace(old_error, new_error, 1)
     elif new_error not in code:
@@ -288,59 +288,59 @@ if(remotionTemplateIndexes.length>1)errors.push(`video uses ${remotionTemplateIn
 if(remotionTemplateIndexes.includes(0))errors.push('scene 0 cannot be a Remotion template; the opening visual must be real/archive footage or imagery');
 parsed.scenes.forEach((s,i)=>{
   if(s?.template_data?.is_outro)return;
-  if(!s.visual_claim||String(s.visual_claim).trim().length<8)errors.push(`scene ${i} missing visual_claim`);
-  if(!Array.isArray(s.required_entities))errors.push(`scene ${i} missing required_entities array`);
-  if(!Array.isArray(s.required_actions))errors.push(`scene ${i} missing required_actions array`);
-  if(!Array.isArray(s.required_relationships))errors.push(`scene ${i} missing required_relationships array`);
-  if(!Array.isArray(s.forbidden_visuals)||s.forbidden_visuals.length<1)errors.push(`scene ${i} missing forbidden_visuals`);
-  if(!Array.isArray(s.acceptable_visuals))errors.push(`scene ${i} missing acceptable_visuals array`);
-  if(!proofModes.includes(s.visual_proof_mode))errors.push(`scene ${i} invalid visual_proof_mode=${s.visual_proof_mode}`);
+  if(!s.visual_claim||String(s.visual_claim).trim().length<8)errors.push(`scene ${s.scene_index} missing visual_claim`);
+  if(!Array.isArray(s.required_entities))errors.push(`scene ${s.scene_index} missing required_entities array`);
+  if(!Array.isArray(s.required_actions))errors.push(`scene ${s.scene_index} missing required_actions array`);
+  if(!Array.isArray(s.required_relationships))errors.push(`scene ${s.scene_index} missing required_relationships array`);
+  if(!Array.isArray(s.forbidden_visuals)||s.forbidden_visuals.length<1)errors.push(`scene ${s.scene_index} missing forbidden_visuals`);
+  if(!Array.isArray(s.acceptable_visuals))errors.push(`scene ${s.scene_index} missing acceptable_visuals array`);
+  if(!proofModes.includes(s.visual_proof_mode))errors.push(`scene ${s.scene_index} invalid visual_proof_mode=${s.visual_proof_mode}`);
   if(deterministicModes.includes(s.visual_proof_mode)){
-    if(s.visual_source!=='template')errors.push(`scene ${i} proof mode ${s.visual_proof_mode} must use deterministic template`);
-    if(s.template_name!==expectedTemplate[s.visual_proof_mode])errors.push(`scene ${i} proof mode ${s.visual_proof_mode} requires template_name=${expectedTemplate[s.visual_proof_mode]}`);
+    if(s.visual_source!=='template')errors.push(`scene ${s.scene_index} proof mode ${s.visual_proof_mode} must use deterministic template`);
+    if(s.template_name!==expectedTemplate[s.visual_proof_mode])errors.push(`scene ${s.scene_index} proof mode ${s.visual_proof_mode} requires template_name=${expectedTemplate[s.visual_proof_mode]}`);
   }
-  if(s.visual_proof_mode==='annotated_real'&&s.visual_source==='template')errors.push(`scene ${i} annotated_real must retrieve a verified real image before template conversion`);
-  if(s.visual_proof_mode==='literal_video'&&s.visual_source==='template')errors.push(`scene ${i} literal_video cannot be represented by a template`);
-  if(s.visual_source!=='template'&&Array.isArray(s.required_actions)&&s.required_actions.length>0&&s.visual_proof_mode==='literal_image')errors.push(`scene ${i} requires visible action but is routed as literal_image`);
+  if(s.visual_proof_mode==='annotated_real'&&s.visual_source==='template')errors.push(`scene ${s.scene_index} annotated_real must retrieve a verified real image before template conversion`);
+  if(s.visual_proof_mode==='literal_video'&&s.visual_source==='template')errors.push(`scene ${s.scene_index} literal_video cannot be represented by a template`);
+  if(s.visual_source!=='template'&&Array.isArray(s.required_actions)&&s.required_actions.length>0&&s.visual_proof_mode==='literal_image')errors.push(`scene ${s.scene_index} requires visible action but is routed as literal_image`);
   if(s.visual_proof_mode==='map'){
     const locs=s?.template_data?.locations;
-    if(!Array.isArray(locs)||locs.length<1)errors.push(`scene ${i} map requires template_data.locations`);
+    if(!Array.isArray(locs)||locs.length<1)errors.push(`scene ${s.scene_index} map requires template_data.locations`);
     else{
-      if(locs.length>8)errors.push(`scene ${i} map supports at most 8 locations`);
+      if(locs.length>8)errors.push(`scene ${s.scene_index} map supports at most 8 locations`);
       const labels=new Set();
       locs.forEach((p,j)=>{
         const label=String(p?.label||'').trim();const key=label.toLowerCase();
-        if(!label||!Number.isFinite(Number(p?.lat))||!Number.isFinite(Number(p?.lon))||Number(p.lat)<-90||Number(p.lat)>90||Number(p.lon)<-180||Number(p.lon)>180)errors.push(`scene ${i} map location ${j} invalid`);
-        if(label&&labels.has(key))errors.push(`scene ${i} map location ${j} duplicates label ${label}`);
+        if(!label||!Number.isFinite(Number(p?.lat))||!Number.isFinite(Number(p?.lon))||Number(p.lat)<-90||Number(p.lat)>90||Number(p.lon)<-180||Number(p.lon)>180)errors.push(`scene ${s.scene_index} map location ${j} invalid`);
+        if(label&&labels.has(key))errors.push(`scene ${s.scene_index} map location ${j} duplicates label ${label}`);
         if(label)labels.add(key);
       });
       const conns=s?.template_data?.connections;
-      if(conns!==undefined&&!Array.isArray(conns))errors.push(`scene ${i} map connections must be an array`);
+      if(conns!==undefined&&!Array.isArray(conns))errors.push(`scene ${s.scene_index} map connections must be an array`);
       if(Array.isArray(conns)){
-        if(conns.length>8)errors.push(`scene ${i} map supports at most 8 connections`);
-        conns.forEach((c,j)=>{const from=String(c?.from||'').trim().toLowerCase();const to=String(c?.to||'').trim().toLowerCase();if(!from||!to||!labels.has(from)||!labels.has(to))errors.push(`scene ${i} map connection ${j} must reference existing location labels`);});
+        if(conns.length>8)errors.push(`scene ${s.scene_index} map supports at most 8 connections`);
+        conns.forEach((c,j)=>{const from=String(c?.from||'').trim().toLowerCase();const to=String(c?.to||'').trim().toLowerCase();if(!from||!to||!labels.has(from)||!labels.has(to))errors.push(`scene ${s.scene_index} map connection ${j} must reference existing location labels`);});
       }
     }
   }
   if(s.visual_proof_mode==='timeline'){
     const events=s?.template_data?.events;
-    if(!Array.isArray(events)||events.length<2)errors.push(`scene ${i} timeline requires at least two events`);
+    if(!Array.isArray(events)||events.length<2)errors.push(`scene ${s.scene_index} timeline requires at least two events`);
     else{
-      if(events.length>7)errors.push(`scene ${i} timeline supports at most 7 events`);
-      events.forEach((e,j)=>{if(!String(e?.date||'').trim()||!String(e?.label||'').trim())errors.push(`scene ${i} timeline event ${j} requires date and label`);});
+      if(events.length>7)errors.push(`scene ${s.scene_index} timeline supports at most 7 events`);
+      events.forEach((e,j)=>{if(!String(e?.date||'').trim()||!String(e?.label||'').trim())errors.push(`scene ${s.scene_index} timeline event ${j} requires date and label`);});
     }
   }
   if(s.visual_proof_mode==='diagram'){
     const nodes=s?.template_data?.nodes;const edges=s?.template_data?.edges;
-    if(!Array.isArray(nodes)||nodes.length<2)errors.push(`scene ${i} diagram requires at least two nodes`);
+    if(!Array.isArray(nodes)||nodes.length<2)errors.push(`scene ${s.scene_index} diagram requires at least two nodes`);
     else{
-      if(nodes.length>8)errors.push(`scene ${i} diagram supports at most 8 nodes`);
+      if(nodes.length>8)errors.push(`scene ${s.scene_index} diagram supports at most 8 nodes`);
       const ids=new Set();
-      nodes.forEach((n,j)=>{const id=String(n?.id||'').trim();const label=String(n?.label||'').trim();if(!id||!label)errors.push(`scene ${i} diagram node ${j} requires id and label`);if(id&&ids.has(id))errors.push(`scene ${i} diagram node ${j} duplicates id ${id}`);if(id)ids.add(id);});
-      if(!Array.isArray(edges)||edges.length<1)errors.push(`scene ${i} diagram requires at least one edge`);
+      nodes.forEach((n,j)=>{const id=String(n?.id||'').trim();const label=String(n?.label||'').trim();if(!id||!label)errors.push(`scene ${s.scene_index} diagram node ${j} requires id and label`);if(id&&ids.has(id))errors.push(`scene ${s.scene_index} diagram node ${j} duplicates id ${id}`);if(id)ids.add(id);});
+      if(!Array.isArray(edges)||edges.length<1)errors.push(`scene ${s.scene_index} diagram requires at least one edge`);
       else{
-        if(edges.length>12)errors.push(`scene ${i} diagram supports at most 12 edges`);
-        edges.forEach((e,j)=>{const from=String(e?.from||'').trim();const to=String(e?.to||'').trim();if(!from||!to||!ids.has(from)||!ids.has(to))errors.push(`scene ${i} diagram edge ${j} must reference existing node ids`);});
+        if(edges.length>12)errors.push(`scene ${s.scene_index} diagram supports at most 12 edges`);
+        edges.forEach((e,j)=>{const from=String(e?.from||'').trim();const to=String(e?.to||'').trim();if(!from||!to||!ids.has(from)||!ids.has(to))errors.push(`scene ${s.scene_index} diagram edge ${j} must reference existing node ids`);});
       }
     }
   }
