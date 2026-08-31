@@ -21,7 +21,6 @@ const {
   buildVisualContract,
   buildScoringTarget,
   shouldPreferTemplate,
-  passesSemanticGate,
 } = require("./visualContract");
 const { localSemanticRerank, diversifyCandidates } = require("./semanticReranker");
 const library = require("./clipLibrary");
@@ -358,7 +357,11 @@ async function verifyVideoCandidate(candidate, contract, opts, state) {
   const parsed = await askVision(sheet.imageUrl, `${visualContractPrompt(contract, { ...opts, videoContactSheet: true })} Sample frame center-times row-major: ${sheet.timestamps.join(", ")} seconds.`, 420, state, [candidate.url, "video"]);
   if (!parsed) return { ok: false, reason: state.budget_exhausted || "video_visual_verifier_failed" };
   const dimensions = normalizeScore(parsed, candidate);
-  if (parsed.match === false || !passesSemanticGate(dimensions, contract, { semantic: SEMANTIC_THRESHOLD, entity: ENTITY_THRESHOLD, action: ACTION_THRESHOLD, relationship: RELATIONSHIP_THRESHOLD })) return { ok: false, reason: "video_semantic_gate_failed", ...dimensions };
+  // No relevance gate here by design: every technically usable candidate is
+  // scored and ranked, never rejected for scoring low - the highest-scoring
+  // candidate always wins (see the `best` selection below). Only genuine
+  // technical failures (sampling, verification, or a missing frame range)
+  // return ok:false.
   const r = verifiedRangeFromFrameIndices(parsed.best_frame_indices, sheet.timestamps, candidate.duration);
   if (!r) return { ok: false, reason: "video_verified_frame_range_missing", ...dimensions, sampled_timestamps: sheet.timestamps };
   return { ok: true, ...dimensions, frame_similarity: dimensions.semantic_match, verified_start_sec: r.start, verified_end_sec: r.end, verified_frame_indices: r.indices, sampled_timestamps: sheet.timestamps };
@@ -468,19 +471,28 @@ async function resolveBroll(input = {}) {
       scored.push({ ...c, ...verification, ...materialized, original_url: c.url, score: verification.overall }); continue;
     }
     const dimensions = await scoreImageCandidate(c, contract, { firstFrame: isFirstFrame }, state);
-    const semanticOk = passesSemanticGate(dimensions, contract, { semantic: SEMANTIC_THRESHOLD, entity: ENTITY_THRESHOLD, action: ACTION_THRESHOLD, relationship: RELATIONSHIP_THRESHOLD });
+    // No relevance gate here by design either: every candidate keeps its
+    // real computed score and stays eligible to be picked, regardless of
+    // how it compares to any threshold. annotationOk is a technical
+    // requirement, not a relevance judgment - annotated_real mode overlays
+    // callouts onto the image, and a candidate with no grounded callout plan
+    // literally cannot render that way, independent of how relevant it is.
     const annotationOk = contract.visual_proof_mode !== "annotated_real" || (Array.isArray(dimensions.annotation_plan) && dimensions.annotation_plan.length > 0);
-    if (semanticOk && annotationOk && contract.visual_proof_mode === "annotated_real") {
+    if (annotationOk && contract.visual_proof_mode === "annotated_real") {
       const materialized = await materializeVerifiedImage(c).catch(() => null);
-      if (!materialized) { scored.push({ ...c, ...dimensions, score: 0, rejected: true, reason: "annotated_real_materialization_failed" }); continue; }
+      if (!materialized) { scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: true, reason: "annotated_real_materialization_failed" }); continue; }
       scored.push({ ...c, ...dimensions, ...materialized, score: dimensions.overall, rejected: false });
       continue;
     }
-    scored.push({ ...c, ...dimensions, score: semanticOk && annotationOk ? dimensions.overall : 0, rejected: !(semanticOk && annotationOk), reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" });
+    scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: !annotationOk, reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" });
   }
 
   scored.sort((a, b) => b.score - a.score);
-  const best = scored.find((c) => !c.rejected && c.score >= threshold), budget = getBudgetState(state.run_id, state.scene_budget);
+  // No relevance threshold gates the pick: the highest-scoring technically
+  // usable candidate always wins, whatever its score is. `rejected` here
+  // only marks candidates that are literally unusable (couldn't be
+  // downloaded/verified/materialized), never "scored too low."
+  const best = scored.find((c) => !c.rejected), budget = getBudgetState(state.run_id, state.scene_budget);
   if (!best) return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };
 
   const result = {

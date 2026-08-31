@@ -119,8 +119,8 @@ def _patch_v4_budget_reliability(path: Path) -> None:
     new_annotated = '''      const accepted = { ...c, ...dimensions, ...materialized, score: dimensions.overall, rejected: false }; scored.push(accepted);\n      if (accepted.score >= threshold) { state.early_accept = true; break; }\n      continue;'''
     text = _replace_once(text, old_annotated, new_annotated, "annotated-real early accept")
 
-    old_image = '    scored.push({ ...c, ...dimensions, score: semanticOk && annotationOk ? dimensions.overall : 0, rejected: !(semanticOk && annotationOk), reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" });'
-    new_image = '''    const accepted = { ...c, ...dimensions, score: semanticOk && annotationOk ? dimensions.overall : 0, rejected: !(semanticOk && annotationOk), reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" };\n    scored.push(accepted);\n    if (!accepted.rejected && accepted.score >= threshold) { state.early_accept = true; break; }'''
+    old_image = '    scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: !annotationOk, reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" });'
+    new_image = '''    const accepted = { ...c, ...dimensions, score: dimensions.overall, rejected: !annotationOk, reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" };\n    scored.push(accepted);\n    if (!accepted.rejected && accepted.score >= threshold) { state.early_accept = true; break; }'''
     text = _replace_once(text, old_image, new_image, "image early accept")
 
     old_failure = '  if (!best) return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };'
@@ -221,7 +221,6 @@ def _validate_v4(path: Path) -> None:
         "frame_similarity",
         "localSemanticRerank",
         "materializeVerifiedClip",
-        "passesSemanticGate",
         "fromPixabayVideos",
         "fromWikimediaCommons",
         V4_BUDGET_MARKER,
