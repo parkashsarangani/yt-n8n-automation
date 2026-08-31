@@ -271,7 +271,14 @@ def audit() -> None:
         for marker in ["VISUAL_MATCHING_V4","PREPROD_BROLL_HARDENING","RETRIEVAL_RECALL_PHASE2","SOURCE_QUERY_COMPILER_V1","MULTIFRAME_VIDEO_RERANK_V1","sampleVideoContactSheet","localSemanticRerank","materializeVerifiedClip","fromPixabayVideos","fromWikimediaCommons"]:
             if marker not in broll: die(f"V4 resolver missing {marker}")
         if "const target = subj ||" in broll: die("broad-subject scoring regression returned")
-        if "reviewFinalVideo" not in compose or "Final visual QA rejected" not in compose: die("final rendered QA is not blocking compose")
+        # NON_BLOCKING_FINAL_QA (explicit decision): Final Visual QA still
+        # runs and its findings are logged, but no longer throws - a
+        # scheduled upload happening on time outweighs holding back an
+        # imperfect-but-usable Short. Assert it runs and stays non-blocking,
+        # not that it rejects.
+        if "reviewFinalVideo" not in compose: die("final rendered QA is missing from compose")
+        if "throw new Error(`Final visual QA rejected" in compose: die("final rendered QA regressed back to blocking compose")
+        if "publishing anyway" not in compose: die("final rendered QA lost its non-blocking warning path")
 
         budget = (ROOT / "shorts-compose/visualBudget.js").read_text()
         if "BROLL_RUN_MAX_VISION_CALLS || 28" not in budget: die("V4 run budget default is not 28")
