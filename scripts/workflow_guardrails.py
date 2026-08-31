@@ -126,10 +126,32 @@ def _surface_degraded_broll(workflow: dict) -> None:
     log["parameters"]["jsonBody"] = body
 
 
+def _enforce_remotion_template_cap(workflow: dict) -> None:
+    """Block template-heavy renders after retrieval fallback, before compose/upload."""
+    merge = node_by_name(workflow, "Merge By scene_index (not position)")
+    code = str(merge["parameters"]["jsCode"])
+    if "const remotion_template_scene_indexes" not in code:
+        anchor = "const asset_quality_avg ="
+        pos = code.find(anchor)
+        if pos < 0:
+            raise RuntimeError("asset quality aggregate anchor missing for Remotion template cap")
+        line_end = code.find("\n", pos)
+        if line_end < 0:
+            raise RuntimeError("asset quality aggregate line malformed for Remotion template cap")
+        insert = (
+            "\nconst remotion_template_scene_indexes = merged.filter(v => !v?.template_data?.is_outro && v.visual_source === 'template').map(v => Number(v.scene_index));"
+            "\nif (remotion_template_scene_indexes.includes(0)) throw new Error('Remotion template cap failed: scene 0 cannot be a Remotion template; the opening visual must be real/archive footage or imagery');"
+            "\nif (remotion_template_scene_indexes.length > 1) throw new Error('Remotion template cap failed: video has ' + remotion_template_scene_indexes.length + ' Remotion template scenes (' + remotion_template_scene_indexes.join(',') + '); maximum is 1');"
+        )
+        code = code[:line_end] + insert + code[line_end:]
+    merge["parameters"]["jsCode"] = code
+
+
 def finalize_workflow(workflow: dict) -> dict:
     _require_execution_id(workflow)
     _fix_first_frame_selection(workflow)
     _surface_degraded_broll(workflow)
+    _enforce_remotion_template_cap(workflow)
     return workflow
 
 
@@ -178,9 +200,11 @@ def assert_workflow_contracts(workflow: dict) -> None:
             raise RuntimeError(f"{name} does not fail loudly when execution id is missing")
 
     merge_code = str(node_by_name(workflow, "Merge By scene_index (not position)")["parameters"]["jsCode"])
-    for marker in ("degraded_asset_count", "quality_gate_fail_count", "degraded_scene_indexes"):
+    for marker in ("degraded_asset_count", "quality_gate_fail_count", "degraded_scene_indexes", "remotion_template_scene_indexes"):
         if marker not in merge_code:
             raise RuntimeError(f"merge payload lost degraded-media telemetry: {marker}")
+    if "maximum is 1" not in merge_code or "scene 0 cannot be a Remotion template" not in merge_code:
+        raise RuntimeError("merge payload lost Remotion template cap")
 
     docker = (ROOT / "docker-compose.yml").read_text()
     expected_env = (

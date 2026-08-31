@@ -4,8 +4,8 @@
  * chain and the JS logic embedded in its Code nodes.
  *
  * This does NOT touch the production server, n8n, or any API - it builds the
- * fully-transformed workflow.json locally (by actually running the same 5
- * Python transform scripts deploy.yml runs) and then exercises the resulting
+ * fully-transformed workflow.json locally (by actually running the same
+ * Python transform chain deploy.yml runs) and then exercises the resulting
  * node code with `new Function()` against synthetic inputs, the same way a
  * real n8n Code/HTTP node would receive them.
  *
@@ -90,7 +90,8 @@ function buildWorkflow() {
   const steps = [
     ['upgrade-viral-shorts.py', 'workflow.json', 'v1.json'],
     ['upgrade-creative-system.py', 'v1.json', 'v2.json'],
-    ['upgrade-workflow-api-budget.py', 'v2.json', 'v3.json'],
+    ['visual_matching_v4_workflow.py', 'v2.json', 'v2v4.json'],
+    ['upgrade-workflow-api-budget.py', 'v2v4.json', 'v3.json'],
     ['upgrade-topic-latency.py', 'v3.json', 'v4.json'],
     ['upgrade-anthropic-parser.py', 'v4.json', 'final.json'],
   ];
@@ -115,8 +116,13 @@ function nodeMap(workflow) {
 function runNodeCode(nodes, nodeName, input, extraGlobals) {
   const node = nodes[nodeName];
   if (!node) throw new Error(`node not found: ${nodeName}`);
-  const args = ['$input'];
-  const vals = [{ first: () => ({ json: input }) }];
+  const staticData = {};
+  const args = ['$input', '$execution', '$getWorkflowStaticData'];
+  const vals = [
+    { first: () => ({ json: input }) },
+    { id: 'workflow-test-execution' },
+    () => staticData,
+  ];
   if (extraGlobals) {
     for (const [k, v] of Object.entries(extraGlobals)) {
       args.push(k);
@@ -360,7 +366,31 @@ function main() {
         shareability: 80, naturalness: 80, distinctiveness: 80, voice_specificity: 80, overall: 80,
       }, overrides);
     }
-    const scene = { scene_index: 0, point: 'the point of this scene', narration: 'a real narration line that is definitely long enough to pass', visual_source: 'stock', visual_type: 'real', visual_prompt: 'a real visual prompt describing this specific scene in detail', negative_prompt: 'no readable text, no legible numbers', stock_search_query: 'a real query', search_queries: ['query one', 'query two'], visual_role: 'hero' };
+    const scene = {
+      scene_index: 0,
+      point: 'the point of this scene',
+      narration: 'a real narration line that is definitely long enough to pass',
+      visual_source: 'stock',
+      visual_type: 'real',
+      visual_prompt: 'a real visual prompt describing this specific scene in detail',
+      negative_prompt: 'no readable text, no legible numbers',
+      stock_search_query: 'a real query',
+      search_queries: ['query one', 'query two', 'query three'],
+      visual_role: 'hero',
+      visual_claim: 'a literal visible scene proof',
+      global_subject: 'a recognizable broad topic',
+      required_entities: ['visible subject'],
+      required_actions: ['visible action'],
+      required_relationships: [],
+      forbidden_visuals: ['unrelated filler'],
+      acceptable_visuals: ['related fallback'],
+      visual_proof_mode: 'literal_video',
+      visual_mode: 'exact_real',
+      must_show: 'visible subject action',
+      acceptable_substitutes: ['related fallback'],
+      source_priority: ['pexels', 'wikimedia', 'unsplash'],
+      template_fallback: { template_name: 'kinetic_text', template_data: { line: 'fallback' } },
+    };
     function buildScript(quality) {
       return {
         hook: 'a real hook that is long enough', title: 'a real title', caption_style: 'neutral', trigger: 'disbelief',
@@ -383,6 +413,32 @@ function main() {
 
     const passing = validate(goodQuality());
     check('a genuinely good script (all 80s, consistent overall) passes', passing.json._scriptValid === true, JSON.stringify(passing.json._validationErrors));
+
+    const firstTemplateScene = {
+      ...scene,
+      visual_source: 'template',
+      visual_type: 'template',
+      template_name: 'kinetic_text',
+      template_data: { line: 'opening template' },
+      required_actions: [],
+      visual_proof_mode: 'kinetic_text',
+    };
+    const scriptWithOpeningTemplate = buildScript(goodQuality());
+    scriptWithOpeningTemplate.scenes = [firstTemplateScene, { ...scene, scene_index: 1 }, { ...scene, scene_index: 2 }];
+    const openingTemplateResult = runNodeCode(nodes, 'Validate Final Script', openaiResponse(JSON.stringify(scriptWithOpeningTemplate)), { $: noTopicDollar });
+    check('Validate Final Script rejects a Remotion template opener',
+      openingTemplateResult.json._scriptValid === false &&
+      openingTemplateResult.json._validationErrors.some((e) => e.includes('scene 0 cannot be a Remotion template')),
+      JSON.stringify(openingTemplateResult.json._validationErrors));
+
+    const secondTemplateScene = { ...firstTemplateScene, scene_index: 2, template_data: { line: 'second template' } };
+    const scriptWithTwoTemplates = buildScript(goodQuality());
+    scriptWithTwoTemplates.scenes = [{ ...scene, scene_index: 0 }, { ...firstTemplateScene, scene_index: 1 }, secondTemplateScene];
+    const twoTemplateResult = runNodeCode(nodes, 'Validate Final Script', openaiResponse(JSON.stringify(scriptWithTwoTemplates)), { $: noTopicDollar });
+    check('Validate Final Script rejects more than one Remotion template scene',
+      twoTemplateResult.json._scriptValid === false &&
+      twoTemplateResult.json._validationErrors.some((e) => e.includes('maximum is 1')),
+      JSON.stringify(twoTemplateResult.json._validationErrors));
 
     const belowGate = validate(goodQuality({ hook_strength: 70 }));
     check('a script scoring below the new mid-70s gate is still rejected', belowGate.json._scriptValid === false &&
@@ -407,6 +463,8 @@ function main() {
     // the run over a check that should never apply to template scenes.
     const templateSceneWithStrayPrompt = {
       ...scene, scene_index: 1, visual_source: 'template', template_name: 'kinetic_text', template_data: { line: 'x' },
+      required_actions: [],
+      visual_proof_mode: 'kinetic_text',
       visual_prompt: 'Kinetic text template: a small teaspoon icon showing a readable comparison label',
     };
     const scriptWithStrayTemplatePrompt = buildScript(goodQuality());
@@ -547,12 +605,21 @@ function main() {
     check('mixed stock+template scenes: asset_quality_avg = 86', mixed.json.asset_quality_avg === 86, `got ${mixed.json.asset_quality_avg}`);
     check('template scene correctly excluded from per-scene asset_score', mixed.json.data[2].asset_score === undefined);
 
-    const allTemplate = runMerge(
+    throws(() => runMerge(
       [{ scene_index: 0, visual_source: 'template', template_name: 'kinetic_text', template_data: {} }],
       [{ scene_index: 0, audio: { a: 1 } }],
-    );
-    check('all-template video: asset_quality_min is null (not 0, not NaN)', allTemplate.json.asset_quality_min === null);
-    check('all-template video: asset_quality_avg is null (not 0, not NaN)', allTemplate.json.asset_quality_avg === null);
+    ), 'Merge blocks a final Remotion template opener before compose/upload',
+      (m) => m.includes('scene 0 cannot be a Remotion template'));
+
+    throws(() => runMerge(
+      [
+        { scene_index: 0, images: ['a'], visual_source: 'stock', asset_score: 82 },
+        { scene_index: 1, visual_source: 'template', template_name: 'kinetic_text', template_data: {} },
+        { scene_index: 2, visual_source: 'template', template_name: 'stat_reveal', template_data: {} },
+      ],
+      [0, 1, 2].map((i) => ({ scene_index: i, audio: { a: 1 } })),
+    ), 'Merge blocks more than one final Remotion template before compose/upload',
+      (m) => m.includes('maximum is 1'));
 
     const logCode = nodes['Log Published Video'].parameters.jsonBody;
     check('Log Published Video no longer hardcodes null', !logCode.includes('asset_quality_min: null'));

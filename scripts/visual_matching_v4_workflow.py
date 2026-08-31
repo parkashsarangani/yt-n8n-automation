@@ -55,6 +55,7 @@ V4_INSTRUCTION = (
     "diagram=>template + diagram with template_data {title,nodes:[{id,label,detail?}],edges:[{from,to,label?}]} using 2-8 uniquely identified nodes and 1-12 edges whose endpoints match node ids. "
     "Use map only when the script/context supports trustworthy coordinates; otherwise use annotated_real/archive proof. "
     "annotated_real MUST remain a real-media retrieval scene, not a template at planning time: the resolver will select the exact real image, visually locate callout boxes on those pixels, then convert it into the annotated_real Remotion composition. "
+    "REMOTION TEMPLATE CAP: across the non-outro video, at most ONE scene may use visual_source=template or a deterministic Remotion proof mode, and it must NEVER be scene_index 0. Scene 0 must be real/archive footage or imagery. "
     "If a fact is fundamentally abstract and stock cannot literally prove it, choose annotated_real or a deterministic template instead of generic symbolic stock. literal_video is preferred whenever an observable action is required. "
     "For real/archive scenes, search_queries must separately cover the subject, action, and relationship where applicable. A beautiful broad-topic shot that omits the narrated action/relationship is wrong."
 )
@@ -281,7 +282,11 @@ def patch_validator(workflow: dict) -> None:
 const proofModes=['literal_video','literal_image','annotated_real','comparison','number_visualization','kinetic_text','diagram','timeline','map'];
 const deterministicModes=['comparison','number_visualization','kinetic_text','diagram','timeline','map'];
 const expectedTemplate={comparison:'comparison',number_visualization:'stat_reveal',kinetic_text:'kinetic_text',diagram:'diagram',timeline:'timeline',map:'map'};
-if(Array.isArray(parsed.scenes)){parsed.scenes.forEach((s,i)=>{
+if(Array.isArray(parsed.scenes)){
+const remotionTemplateIndexes=parsed.scenes.filter(s=>s&&!s?.template_data?.is_outro&&(s.visual_source==='template'||deterministicModes.includes(s.visual_proof_mode))).map(s=>Number(s.scene_index));
+if(remotionTemplateIndexes.length>1)errors.push(`video uses ${remotionTemplateIndexes.length} Remotion template scenes (${remotionTemplateIndexes.join(',')}); maximum is 1`);
+if(remotionTemplateIndexes.includes(0))errors.push('scene 0 cannot be a Remotion template; the opening visual must be real/archive footage or imagery');
+parsed.scenes.forEach((s,i)=>{
   if(s?.template_data?.is_outro)return;
   if(!s.visual_claim||String(s.visual_claim).trim().length<8)errors.push(`scene ${i} missing visual_claim`);
   if(!Array.isArray(s.required_entities))errors.push(`scene ${i} missing required_entities array`);
@@ -419,13 +424,13 @@ def assert_applied(workflow: dict) -> None:
         raise RuntimeError("V4 workflow marker missing")
     names = {n.get("name"): n for n in workflow.get("nodes", [])}
     visual = str(names["Claude: Visual Director"]["parameters"]["jsonBody"])
-    for marker in [MARKER, "visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "OVERALL SELECTED TOPIC / MACRO CONTEXT", "map=>template + map", "annotated_real"]:
+    for marker in [MARKER, "visual_claim", "required_entities", "required_actions", "required_relationships", "forbidden_visuals", "visual_proof_mode", "OVERALL SELECTED TOPIC / MACRO CONTEXT", "map=>template + map", "annotated_real", "REMOTION TEMPLATE CAP"]:
         if marker not in visual:
             raise RuntimeError(f"V4 Visual Director contract missing {marker}")
     if LEGACY_TEMPLATE_RULE in visual:
         raise RuntimeError("V4 Visual Director still limits template_explainer to three legacy renderers")
     validate = str(names["Validate Final Script"]["parameters"]["jsCode"])
-    for marker in [CONTRACT_GATE, LEGACY_AI_GATE_REMOVED, LEGACY_TEMPLATE_VALIDATOR_EXPANDED, "deterministicModes", "template_data.locations", "timeline requires at least two events", "diagram requires at least two nodes", "map supports at most 8 locations", "map supports at most 8 connections", "timeline supports at most 7 events", "diagram supports at most 8 nodes", "diagram supports at most 12 edges", "must reference existing location labels", "must reference existing node ids"]:
+    for marker in [CONTRACT_GATE, LEGACY_AI_GATE_REMOVED, LEGACY_TEMPLATE_VALIDATOR_EXPANDED, "deterministicModes", "template_data.locations", "timeline requires at least two events", "diagram requires at least two nodes", "map supports at most 8 locations", "map supports at most 8 connections", "timeline supports at most 7 events", "diagram supports at most 8 nodes", "diagram supports at most 12 edges", "must reference existing location labels", "must reference existing node ids", "maximum is 1", "scene 0 cannot be a Remotion template"]:
         if marker not in validate:
             raise RuntimeError(f"V4 validator gate missing {marker}")
     if "VISUAL_SOURCE_ROUTER_V2" in validate:
