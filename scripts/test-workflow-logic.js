@@ -414,6 +414,32 @@ function main() {
     const passing = validate(goodQuality());
     check('a genuinely good script (all 80s, consistent overall) passes', passing.json._scriptValid === true, JSON.stringify(passing.json._validationErrors));
 
+    const firstTemplateScene = {
+      ...scene,
+      visual_source: 'template',
+      visual_type: 'template',
+      template_name: 'kinetic_text',
+      template_data: { line: 'opening template' },
+      required_actions: [],
+      visual_proof_mode: 'kinetic_text',
+    };
+    const scriptWithOpeningTemplate = buildScript(goodQuality());
+    scriptWithOpeningTemplate.scenes = [firstTemplateScene, { ...scene, scene_index: 1 }, { ...scene, scene_index: 2 }];
+    const openingTemplateResult = runNodeCode(nodes, 'Validate Final Script', openaiResponse(JSON.stringify(scriptWithOpeningTemplate)), { $: noTopicDollar });
+    check('Validate Final Script rejects a Remotion template opener',
+      openingTemplateResult.json._scriptValid === false &&
+      openingTemplateResult.json._validationErrors.some((e) => e.includes('scene 0 cannot be a Remotion template')),
+      JSON.stringify(openingTemplateResult.json._validationErrors));
+
+    const secondTemplateScene = { ...firstTemplateScene, scene_index: 2, template_data: { line: 'second template' } };
+    const scriptWithTwoTemplates = buildScript(goodQuality());
+    scriptWithTwoTemplates.scenes = [{ ...scene, scene_index: 0 }, { ...firstTemplateScene, scene_index: 1 }, secondTemplateScene];
+    const twoTemplateResult = runNodeCode(nodes, 'Validate Final Script', openaiResponse(JSON.stringify(scriptWithTwoTemplates)), { $: noTopicDollar });
+    check('Validate Final Script rejects more than one Remotion template scene',
+      twoTemplateResult.json._scriptValid === false &&
+      twoTemplateResult.json._validationErrors.some((e) => e.includes('maximum is 1')),
+      JSON.stringify(twoTemplateResult.json._validationErrors));
+
     const belowGate = validate(goodQuality({ hook_strength: 70 }));
     check('a script scoring below the new mid-70s gate is still rejected', belowGate.json._scriptValid === false &&
       belowGate.json._validationErrors.some((e) => e.includes('hook_strength')));
@@ -579,12 +605,21 @@ function main() {
     check('mixed stock+template scenes: asset_quality_avg = 86', mixed.json.asset_quality_avg === 86, `got ${mixed.json.asset_quality_avg}`);
     check('template scene correctly excluded from per-scene asset_score', mixed.json.data[2].asset_score === undefined);
 
-    const allTemplate = runMerge(
+    throws(() => runMerge(
       [{ scene_index: 0, visual_source: 'template', template_name: 'kinetic_text', template_data: {} }],
       [{ scene_index: 0, audio: { a: 1 } }],
-    );
-    check('all-template video: asset_quality_min is null (not 0, not NaN)', allTemplate.json.asset_quality_min === null);
-    check('all-template video: asset_quality_avg is null (not 0, not NaN)', allTemplate.json.asset_quality_avg === null);
+    ), 'Merge blocks a final Remotion template opener before compose/upload',
+      (m) => m.includes('scene 0 cannot be a Remotion template'));
+
+    throws(() => runMerge(
+      [
+        { scene_index: 0, images: ['a'], visual_source: 'stock', asset_score: 82 },
+        { scene_index: 1, visual_source: 'template', template_name: 'kinetic_text', template_data: {} },
+        { scene_index: 2, visual_source: 'template', template_name: 'stat_reveal', template_data: {} },
+      ],
+      [0, 1, 2].map((i) => ({ scene_index: i, audio: { a: 1 } })),
+    ), 'Merge blocks more than one final Remotion template before compose/upload',
+      (m) => m.includes('maximum is 1'));
 
     const logCode = nodes['Log Published Video'].parameters.jsonBody;
     check('Log Published Video no longer hardcodes null', !logCode.includes('asset_quality_min: null'));
