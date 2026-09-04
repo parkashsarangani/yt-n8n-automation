@@ -146,12 +146,24 @@ jobs:
           for f in shorts-compose/remotion/src/compositions/MapVisual.tsx shorts-compose/remotion/src/compositions/TimelineVisual.tsx shorts-compose/remotion/src/compositions/DiagramVisual.tsx shorts-compose/remotion/src/compositions/AnnotatedReal.tsx; do test -s "$f"; done
           ! grep -q 'Callouts are positioned from visual verification' shorts-compose/remotion/src/compositions/AnnotatedReal.tsx
 
-      - name: Verify pinned FreeLLMAPI container and Compose wiring
+      - name: Smoke-test pinned FreeLLMAPI container and Compose wiring
         run: |
           set -euo pipefail
           docker manifest inspect ghcr.io/tashfeenahmed/freellmapi:v0.9.5 >/dev/null
           docker compose config >/dev/null
-          echo 'Pinned FreeLLMAPI image and Docker Compose wiring OK'
+          export FREELLMAPI_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+          trap 'docker compose rm -sf freellmapi >/dev/null 2>&1 || true' EXIT
+          docker compose up -d freellmapi
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:3001/api/ping >/dev/null; then
+              echo 'Pinned FreeLLMAPI v0.9.5 container health check OK'
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --tail=100 freellmapi
+          echo 'ERROR: pinned FreeLLMAPI container failed runtime health check' >&2
+          exit 1
 
       - name: Provision production media runtime
         run: |
