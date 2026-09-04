@@ -43,11 +43,13 @@ jobs:
           print('V5 workflow source contract OK')
           PY
 
-      - name: Verify bounded multi-source hard-gated resolver
+      - name: Verify bounded multi-source best-available resolver
         run: |
           set -euo pipefail
           B=/tmp/retrieval-production/brollResolver.js
-          for marker in VISUAL_MATCHING_V4 RETRIEVAL_RECALL_PHASE2 SOURCE_QUERY_COMPILER_V1 fromPexelsVideos fromPixabayVideos fromPixabayPhotos fromWikimediaCommons CANDIDATE_POOL_MAX localSemanticRerank diversifyCandidates candidatePassesGate below_semantic_quality_gate deterministic_template_fallback RESOLVER_V5_RUNTIME V5_VIDEO_SAMPLE_STAGING V5_PROOF_MEDIA_TYPE_FILTER; do grep -q "$marker" "$B"; done
+          for marker in VISUAL_MATCHING_V4 RETRIEVAL_RECALL_PHASE2 SOURCE_QUERY_COMPILER_V1 fromPexelsVideos fromPixabayVideos fromPixabayPhotos fromWikimediaCommons CANDIDATE_POOL_MAX localSemanticRerank diversifyCandidates candidatePassesGate deterministic_template_fallback RESOLVER_V5_RUNTIME V5_VIDEO_SAMPLE_STAGING V5_ALWAYS_PUBLISH_BEST_AVAILABLE best_available_below_quality_target no_technically_usable_candidate quality_gate_passed selection_reason; do grep -q "$marker" "$B"; done
+          ! grep -q 'V5_PROOF_MEDIA_TYPE_FILTER' "$B"
+          ! grep -q 'reason: state.budget_exhausted || "below_semantic_quality_gate"' "$B"
           ! grep -q 'annotation_plan' "$B"
           grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
           grep -q 'durable_state: true' shorts-compose/visualBudget.js
