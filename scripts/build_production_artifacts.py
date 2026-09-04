@@ -73,9 +73,9 @@ def clean_tag_broll(workflow: dict) -> None:
     """Consume verified-real images and deterministic fallback templates."""
     tag = node_by_name(workflow, "Tag B-roll")
     tag["parameters"]["jsCode"] = r'''const r=$json;const s=$('Split Out Scenes').item.json;const sceneIndex=s.scene_index;
-if(!r||r.ok!==true)throw new Error('B-roll commissioning rejected scene '+sceneIndex+': '+(r?.reason||'no acceptable asset')+' best_score='+(r?.best_score??r?.score??'n/a')+' threshold='+(r?.threshold??'n/a')+' proof_mode='+(r?.recommended_visual_proof_mode||s.visual_proof_mode||'n/a'));
+if(!r||r.ok!==true)throw new Error('B-roll commissioning rejected scene '+sceneIndex+': '+(r?.reason||'no usable asset')+' best_score='+(r?.best_score??r?.score??'n/a')+' threshold='+(r?.threshold??'n/a')+' proof_mode='+(r?.recommended_visual_proof_mode||s.visual_proof_mode||'n/a'));
 const proofByTemplate={stat_reveal:'number_visualization',comparison:'comparison',kinetic_text:'kinetic_text',map:'map',timeline:'timeline',diagram:'diagram'};
-const out={scene_index:sceneIndex,point:s.point,narration:s.narration,visual_prompt:s.visual_prompt,named_subject:s.named_subject||'',visual_claim:s.visual_claim||s.must_show||s.visual_prompt||'',global_subject:s.global_subject||$('Extract Generated Topic').item.json.topic||'',required_entities:s.required_entities||[],required_actions:s.required_actions||[],required_relationships:s.required_relationships||[],forbidden_visuals:s.forbidden_visuals||[],acceptable_visuals:s.acceptable_visuals||s.acceptable_substitutes||[],visual_proof_mode:s.visual_proof_mode||r.recommended_visual_proof_mode||'',_source:r.source||'broll',_attribution:r.attribution||'',asset_score:r.score??null,asset_semantic_match:r.semantic_match??null,asset_entity_match:r.entity_match??null,asset_action_match:r.action_match??null,asset_relationship_match:r.relationship_match??null,asset_local_similarity:r.local_similarity??null,asset_frame_similarity:r.frame_similarity??null,frame_similarity:r.frame_similarity??null,frame_sampling_status:r.frame_sampling_status||null,asset_scroll_stop:r.scroll_stop??null,asset_mobile_clarity:r.mobile_clarity??null,selected_query:r.selected_query||null,actual_video_verified:r.actual_video_verified===true,in_point_sec:r.in_point_sec??null,out_point_sec:r.out_point_sec??null,verified_frame_indices:r.verified_frame_indices||null,library_hit:r.library_hit===true};
+const out={scene_index:sceneIndex,point:s.point,narration:s.narration,visual_prompt:s.visual_prompt,named_subject:s.named_subject||'',visual_claim:s.visual_claim||s.must_show||s.visual_prompt||'',global_subject:s.global_subject||$('Extract Generated Topic').item.json.topic||'',required_entities:s.required_entities||[],required_actions:s.required_actions||[],required_relationships:s.required_relationships||[],forbidden_visuals:s.forbidden_visuals||[],acceptable_visuals:s.acceptable_visuals||s.acceptable_substitutes||[],visual_proof_mode:s.visual_proof_mode||r.recommended_visual_proof_mode||'',_source:r.source||'broll',_attribution:r.attribution||'',asset_score:r.score??null,asset_semantic_match:r.semantic_match??null,asset_entity_match:r.entity_match??null,asset_action_match:r.action_match??null,asset_relationship_match:r.relationship_match??null,asset_local_similarity:r.local_similarity??null,asset_frame_similarity:r.frame_similarity??null,frame_similarity:r.frame_similarity??null,frame_sampling_status:r.frame_sampling_status||null,asset_scroll_stop:r.scroll_stop??null,asset_mobile_clarity:r.mobile_clarity??null,selected_query:r.selected_query||null,actual_video_verified:r.actual_video_verified===true,in_point_sec:r.in_point_sec??null,out_point_sec:r.out_point_sec??null,verified_frame_indices:r.verified_frame_indices||null,library_hit:r.library_hit===true,quality_gate_passed:r.quality_gate_passed??null,selection_reason:r.selection_reason||null};
 if(r.type==='template'){
   if(!r.template_name||!r.template_data)throw new Error('deterministic fallback for scene '+sceneIndex+' is incomplete');
   out.visual_source='template';out.template_name=r.template_name;out.template_data=r.template_data;out.visual_proof_mode=proofByTemplate[r.template_name]||out.visual_proof_mode;return {json:out};
@@ -104,7 +104,7 @@ const merged=visualAgg.data.map(v=>{const match=audios.find(a=>a.scene_index===v
   forbidden_visuals:v.forbidden_visuals,acceptable_visuals:v.acceptable_visuals,visual_proof_mode:v.visual_proof_mode,asset_semantic_match:v.asset_semantic_match,asset_entity_match:v.asset_entity_match,
   asset_action_match:v.asset_action_match,asset_relationship_match:v.asset_relationship_match,asset_local_similarity:v.asset_local_similarity,asset_frame_similarity:v.asset_frame_similarity,
   actual_video_verified:v.actual_video_verified,in_point_sec:v.in_point_sec,out_point_sec:v.out_point_sec,verified_frame_indices:v.verified_frame_indices,library_hit:v.library_hit,
-  selected_query:v.selected_query,_source:v._source,_attribution:v._attribution,audio:match.audio
+  quality_gate_passed:v.quality_gate_passed,selection_reason:v.selection_reason,selected_query:v.selected_query,_source:v._source,_attribution:v._attribution,audio:match.audio
 };});
 merged.sort((a,b)=>a.scene_index-b.scene_index);
 const sceneCredits=merged.map(s=>String(s._attribution||'').replace(/\s+/g,' ').trim()).filter(Boolean);
@@ -162,7 +162,7 @@ def build(root: Path, output: Path) -> dict:
 
     # Compose/resolver pipeline. Legacy runtime-hardening rewrites are no longer
     # re-applied to the V5 resolver; resolver_v5_runtime owns the small runtime
-    # mechanics while semantic policy stays in the checked-in resolver.
+    # mechanics and final always-publish selection policy.
     compose_out = output / "compose.js"
     resolver_out = output / "brollResolver.js"
     shutil.copy2(root / "shorts-compose" / "compose.js", compose_out)
@@ -185,6 +185,8 @@ def build(root: Path, output: Path) -> dict:
         raise RuntimeError("verified-real clean-frame contract missing from Visual Director")
     if "deterministic fallback" not in tag_code or "r.type==='template'" not in tag_code:
         raise RuntimeError("production Tag B-roll does not consume deterministic resolver fallback")
+    if "quality_gate_passed" not in tag_code or "selection_reason" not in tag_code:
+        raise RuntimeError("production Tag B-roll lost advisory quality telemetry")
     if "publication_description" not in merge_code or "_attribution" not in merge_code:
         raise RuntimeError("publication attribution propagation missing")
     if not resolver_url.startswith(INTERNAL_SERVICE_ORIGIN):
@@ -192,12 +194,18 @@ def build(root: Path, output: Path) -> dict:
 
     compose_text = compose_out.read_text()
     resolver_text = resolver_out.read_text()
-    for marker in ("VISUAL_MATCHING_V4_COMPOSE", "CATASTROPHIC_FINAL_QA_GATE", "PRODUCTION_BT709_RANGE_NORMALIZATION", "reviewFinalVideo"):
+    for marker in ("VISUAL_MATCHING_V4_COMPOSE", "NON_BLOCKING_FINAL_QA", "PRODUCTION_BT709_RANGE_NORMALIZATION", "reviewFinalVideo"):
         if marker not in compose_text:
             raise RuntimeError(f"compose artifact missing {marker}")
-    for marker in ("candidatePassesGate", "below_semantic_quality_gate", "deterministic_template_fallback", "RESOLVE_DEADLINE_MS", "RESOLVER_V5_RUNTIME", "V5_VIDEO_SAMPLE_STAGING", "V5_PROOF_MEDIA_TYPE_FILTER"):
+    if "Final visual QA rejected catastrophic render defects" in compose_text:
+        raise RuntimeError("final visual QA can still block publication")
+    for marker in ("candidatePassesGate", "deterministic_template_fallback", "RESOLVE_DEADLINE_MS", "RESOLVER_V5_RUNTIME", "V5_VIDEO_SAMPLE_STAGING", "V5_ALWAYS_PUBLISH_BEST_AVAILABLE", "best_available_below_quality_target", "no_technically_usable_candidate"):
         if marker not in resolver_text:
             raise RuntimeError(f"resolver artifact missing {marker}")
+    if 'reason: state.budget_exhausted || "below_semantic_quality_gate"' in resolver_text:
+        raise RuntimeError("resolver can still reject an asset solely for quality score")
+    if "V5_PROOF_MEDIA_TYPE_FILTER" in resolver_text:
+        raise RuntimeError("literal_video was reintroduced as a hard media-type availability gate")
     if "normalizeAnnotationPlan" in resolver_text or "return annotations as an array" in resolver_text or "annotation_plan" in resolver_text:
         raise RuntimeError("resolver artifact still generates annotation geometry")
 
