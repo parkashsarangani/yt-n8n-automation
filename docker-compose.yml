@@ -49,8 +49,9 @@ services:
       - BROLL_LOCAL_RERANK_TIMEOUT_MS=${BROLL_LOCAL_RERANK_TIMEOUT_MS:-18000}
       - HF_CACHE_DIR=${HF_CACHE_DIR:-/app/data/hf-cache}
 
-      # V4 semantic gates. Production polish can be slightly below the old
-      # aesthetic target, but entity/action/relationship correctness cannot.
+      # V4 semantic gates are actual acceptance gates. If no real candidate
+      # clears them, one deterministic template fallback may be used (never the
+      # first frame); otherwise the run fails instead of publishing wrong stock.
       - BROLL_SCORE_THRESHOLD=${BROLL_SCORE_THRESHOLD:-72}
       - BROLL_FIRST_FRAME_THRESHOLD=${BROLL_FIRST_FRAME_THRESHOLD:-78}
       - BROLL_SEMANTIC_THRESHOLD=${BROLL_SEMANTIC_THRESHOLD:-82}
@@ -58,50 +59,51 @@ services:
       - BROLL_ACTION_THRESHOLD=${BROLL_ACTION_THRESHOLD:-80}
       - BROLL_RELATIONSHIP_THRESHOLD=${BROLL_RELATIONSHIP_THRESHOLD:-80}
       - BROLL_TEMPLATE_FALLBACK_THRESHOLD=${BROLL_TEMPLATE_FALLBACK_THRESHOLD:-60}
+      - BROLL_RELEVANCE_RETRY_WALL_CLOCK_MS=${BROLL_RELEVANCE_RETRY_WALL_CLOCK_MS:-65000}
+      - BROLL_RESOLVE_DEADLINE_MS=${BROLL_RESOLVE_DEADLINE_MS:-135000}
 
       # Actual-video verification. V4 samples a chronological contact sheet from
       # shortlisted clips, asks vision for the visible matching interval, then
       # materializes only that verified in/out range for composition.
       - BROLL_VIDEO_VERIFY_TOP_N=${BROLL_VIDEO_VERIFY_TOP_N:-4}
       - BROLL_VIDEO_SAMPLE_FRAMES=${BROLL_VIDEO_SAMPLE_FRAMES:-12}
-      # Keep legacy phase-3 knobs for compatibility with older scripts/tools;
-      # V4's active controls are the VIDEO_* variables directly above.
       - BROLL_MULTIFRAME_ENABLED=${BROLL_MULTIFRAME_ENABLED:-true}
       - BROLL_MULTIFRAME_CANDIDATES=${BROLL_MULTIFRAME_CANDIDATES:-3}
       - BROLL_MULTIFRAME_FRAMES=${BROLL_MULTIFRAME_FRAMES:-3}
       - BROLL_MULTIFRAME_TIMEOUT_MS=${BROLL_MULTIFRAME_TIMEOUT_MS:-12000}
       - BROLL_MULTIFRAME_MAX_BYTES=${BROLL_MULTIFRAME_MAX_BYTES:-12582912}
 
-      # Paid-vision budget guardrails. The global ceiling remains 28 calls.
-      # Scene 0 may use up to seven. Each support retrieval scene is guaranteed
-      # a three-call reserve, but may borrow unused run budget up to seven calls
-      # after reserving the same baseline for future retrieval scenes. The
-      # resolver stops as soon as a CLIP-ranked candidate passes every semantic
-      # gate and the scene threshold, so normal runs spend far less than 28.
+      # Paid-vision budget guardrails. State is persisted on /app/data and
+      # protected with an atomic filesystem lock, so restarts or multiple service
+      # processes cannot reset/overspend the run-wide ceiling.
       - BROLL_INITIAL_SEARCH_QUERIES=${BROLL_INITIAL_SEARCH_QUERIES:-2}
       - BROLL_MAX_SEARCH_QUERIES=${BROLL_MAX_SEARCH_QUERIES:-4}
       - BROLL_FIRST_FRAME_MAX_VISION_CALLS=${BROLL_FIRST_FRAME_MAX_VISION_CALLS:-7}
-      # Legacy alias retained for existing audits/deploy overrides. It is a
-      # guaranteed reserve, not the adaptive hard ceiling anymore.
       - BROLL_SUPPORT_MAX_VISION_CALLS=${BROLL_SUPPORT_MAX_VISION_CALLS:-3}
       - BROLL_SUPPORT_BASE_VISION_CALLS=${BROLL_SUPPORT_BASE_VISION_CALLS:-3}
       - BROLL_SUPPORT_BORROW_MAX_VISION_CALLS=${BROLL_SUPPORT_BORROW_MAX_VISION_CALLS:-7}
       - BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-28}
       - BROLL_SCORE_CACHE_TTL_MS=${BROLL_SCORE_CACHE_TTL_MS:-21600000}
+      - BROLL_BUDGET_STATE_PATH=${BROLL_BUDGET_STATE_PATH:-/app/data/visual_budget_state.json}
 
-      # Persistent proven-clip memory + verified trim cache.
+      # Persistent proven-clip memory + verified trim/image cache.
       - BROLL_LIBRARY_PATH=${BROLL_LIBRARY_PATH:-/app/data/broll_library.json}
       - BROLL_LIBRARY_MAX=${BROLL_LIBRARY_MAX:-2500}
       - BROLL_RECENT_WINDOW=${BROLL_RECENT_WINDOW:-12}
       - BROLL_VERIFIED_CACHE_DIR=${BROLL_VERIFIED_CACHE_DIR:-/app/outputs/broll-cache}
       - BROLL_CACHE_MAX_AGE_HOURS=${BROLL_CACHE_MAX_AGE_HOURS:-72}
 
-      # Blocking rendered-pixel QA: inspect 3 representative frames per scene
-      # after crop/captions/branding. Missing key/model failure fails closed in
-      # production rather than silently publishing an unverified video.
+      # Tiered rendered-pixel QA after crop/captions/branding. Wrong/missing
+      # visuals, leaked debug UI, severe clipping or unreadable captions block
+      # publication. Mild aesthetic misses are logged as soft warnings.
       - BROLL_FINAL_QA_ENABLED=${BROLL_FINAL_QA_ENABLED:-true}
       - BROLL_FINAL_QA_REQUIRE_KEY=${BROLL_FINAL_QA_REQUIRE_KEY:-true}
       - BROLL_FINAL_QA_MIN_SCORE=${BROLL_FINAL_QA_MIN_SCORE:-78}
+      - BROLL_FINAL_QA_HARD_SCORE=${BROLL_FINAL_QA_HARD_SCORE:-65}
+      - BROLL_FINAL_QA_HARD_READABILITY=${BROLL_FINAL_QA_HARD_READABILITY:-55}
+      - BROLL_FINAL_QA_SOFT_READABILITY=${BROLL_FINAL_QA_SOFT_READABILITY:-70}
+      - BROLL_FINAL_QA_HARD_LAYOUT=${BROLL_FINAL_QA_HARD_LAYOUT:-55}
+      - BROLL_FINAL_QA_SOFT_LAYOUT=${BROLL_FINAL_QA_SOFT_LAYOUT:-70}
       - BROLL_FINAL_QA_SAMPLE_FRAMES=${BROLL_FINAL_QA_SAMPLE_FRAMES:-3}
 
       # Competitor outlier mining.
@@ -112,8 +114,6 @@ services:
       - CHANNEL_WORDMARK=${CHANNEL_WORDMARK:-Favourite Facts}
       - CHANNEL_HANDLE=${CHANNEL_HANDLE:-@YourFavouriteDailyFacts}
     volumes:
-      # App-writable paths use named volumes so git clean during deployment
-      # cannot invalidate a bind mount.
       - shorts_outputs:/app/outputs
       - shorts_data:/app/data
     healthcheck:
