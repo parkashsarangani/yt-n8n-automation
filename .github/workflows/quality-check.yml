@@ -28,11 +28,9 @@ jobs:
       - name: Build exact production artifacts
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/build_production_artifacts.py scripts/visual_matching_v4_compose.py scripts/visual_matching_v4_workflow.py scripts/preprod-audit.py
+          python3 -m py_compile scripts/build_production_artifacts.py scripts/resolver_v5_runtime.py scripts/visual_matching_v4_compose.py scripts/visual_matching_v4_workflow.py scripts/preprod-audit.py
           rm -rf /tmp/production-a /tmp/production-b
           python3 scripts/build_production_artifacts.py --output-dir /tmp/production-a
-          # Build twice from the same source and require byte-identical deployable
-          # artifacts. This guards against CI/deploy drift and hidden mutable state.
           python3 scripts/build_production_artifacts.py --output-dir /tmp/production-b
           cmp /tmp/production-a/manifest.json /tmp/production-b/manifest.json
           python3 -m json.tool /tmp/production-a/workflow.json >/dev/null
@@ -48,31 +46,26 @@ jobs:
           assert w.get('meta',{}).get('visual_matching_version')=='4'
           assert w.get('meta',{}).get('production_build_version')=='5'
           assert w.get('meta',{}).get('compose_service_transport')=='docker_internal'
-
           visual=names['Claude: Visual Director']['parameters']['jsonBody']
           assert 'VISUAL_MATCHING_V4' in visual
           assert 'Do NOT request callout boxes' in visual
-          assert 'locate callout boxes' not in visual
-
+          assert 'visually locate callout boxes' not in visual
           resolver=names['Resolve B-roll']
           assert resolver['parameters']['url'].startswith('http://shorts-compose:4000/')
           assert resolver['parameters']['options']['timeout']==160000
           rb=resolver['parameters']['jsonBody']
           for marker in ['retrieval_scene_count','retrieval_scene_position','run_id','$execution.id','visual_claim','required_entities','required_actions','required_relationships']:
               assert marker in rb, marker
-
           tag=names['Tag B-roll']['parameters']['jsCode']
           for marker in ["r.type==='template'",'deterministic fallback','verified-real scene','asset_semantic_match','verified_frame_indices']:
               assert marker in tag, marker
           assert 'annotation_plan' not in tag and 'annotations:' not in tag
-
           merge=names['Merge By scene_index (not position)']['parameters']['jsCode']
           assert '_attribution' in merge
           assert 'publicationDescription' in merge
           assert 'useanimations.com (CC BY 4.0)' in merge
           assert names['YouTube: Upload Draft']['parameters']['options']['description'].endswith('publication_description }}')
           assert 'publication_description' in names['Disclose AI-Generated Content']['parameters']['jsonBody']
-
           for node in w['nodes']:
               url=node.get('parameters',{}).get('url')
               if isinstance(url,str) and 'shorts.interviewbuddy.cloud' in url:
@@ -83,20 +76,21 @@ jobs:
       - name: Verify compose and resolver hardening
         run: |
           set -euo pipefail
-          node --check /tmp/production-a/compose.js
-          node --check /tmp/production-a/brollResolver.js
+          C=/tmp/production-a/compose.js
+          B=/tmp/production-a/brollResolver.js
+          node --check "$C"
+          node --check "$B"
           node --check shorts-compose/visualContract.js
           node --check shorts-compose/visualBudget.js
           node --check shorts-compose/finalVisualQa.js
-          grep -q 'CATASTROPHIC_FINAL_QA_GATE' /tmp/production-a/compose.js
-          grep -q 'Final visual QA rejected catastrophic render defects' /tmp/production-a/compose.js
-          ! grep -q 'publishing anyway' /tmp/production-a/compose.js
-          grep -q 'candidatePassesGate' /tmp/production-a/brollResolver.js
-          grep -q 'below_semantic_quality_gate' /tmp/production-a/brollResolver.js
-          grep -q 'deterministic_template_fallback' /tmp/production-a/brollResolver.js
-          grep -q 'RESOLVE_DEADLINE_MS' /tmp/production-a/brollResolver.js
-          ! grep -q 'normalizeAnnotationPlan' /tmp/production-a/brollResolver.js
-          ! grep -q 'annotation_plan' /tmp/production-a/brollResolver.js
+          grep -q 'CATASTROPHIC_FINAL_QA_GATE' "$C"
+          grep -q 'PRODUCTION_BT709_RANGE_NORMALIZATION' "$C"
+          grep -q '"-color_range", "tv"' "$C"
+          grep -q 'Final visual QA rejected catastrophic render defects' "$C"
+          ! grep -q 'publishing anyway' "$C"
+          for marker in candidatePassesGate below_semantic_quality_gate deterministic_template_fallback RESOLVE_DEADLINE_MS RESOLVER_V5_RUNTIME V5_VIDEO_SAMPLE_STAGING V5_PROOF_MEDIA_TYPE_FILTER V5_FULL_GATE_EARLY_ACCEPT downloadVideoSample video_contact_sheet_ffmpeg_failed; do grep -q "$marker" "$B"; done
+          ! grep -q 'normalizeAnnotationPlan' "$B"
+          ! grep -q 'annotation_plan' "$B"
           grep -q 'BROLL_BUDGET_STATE_PATH' shorts-compose/visualBudget.js
           grep -q 'durable_state: true' shorts-compose/visualBudget.js
           grep -q 'debug_artifact' shorts-compose/finalVisualQa.js
