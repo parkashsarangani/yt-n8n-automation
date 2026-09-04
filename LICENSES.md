@@ -15,12 +15,22 @@ this project and retain their original licenses.
 
 - Source: https://github.com/useAnimations/react-useanimations
 - License: Creative Commons Attribution 4.0 (CC-BY 4.0)
-- Commercial use is permitted, but **attribution to useanimations.com is
-  required** in any project using these assets. This has not yet been
-  added anywhere in the associated YouTube channel and is an open TODO —
-  see README "Known limitations."
+- Commercial use is permitted with attribution.
+- The production artifact builder now appends
+  `Motion icon assets: useanimations.com (CC BY 4.0)` to every YouTube
+  description under `Sources / credits`, alongside per-scene source credits.
+  The same attribution-bearing description is reused by the post-upload
+  disclosure/update step so it cannot be accidentally overwritten later.
 - Only the raw animation data (JSON) was used, recolored programmatically;
   no modification of the original artwork's design.
+
+## Retrieved real-media assets
+
+The resolver carries each selected asset's `_attribution` metadata through the
+scene merge. The V5 production workflow deduplicates those credits and appends
+them to the YouTube description automatically. Sources that require attribution
+(e.g. eligible Wikimedia/Openverse content) therefore retain their supplied
+credit line in the published metadata instead of relying on a manual step.
 
 ## Generated assets (no external license)
 
