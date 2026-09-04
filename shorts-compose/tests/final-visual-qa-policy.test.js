@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const { classifyRenderedIssue, normalizeJudgement } = require("../finalVisualQa");
 const { buildVisualContract } = require("../visualContract");
@@ -30,23 +32,31 @@ function good(overrides = {}) {
   });
 }
 
-test("debug/CV overlays are catastrophic publish blockers", () => {
+test("debug/CV overlays are recorded as severe QA telemetry", () => {
   const result = classifyRenderedIssue(2, good({ debug_artifact: true }), contract);
   assert.ok(result.hard.some((x) => /debug\/diagnostic/i.test(x.problem)));
 });
 
-test("severe caption collision is a catastrophic publish blocker", () => {
+test("severe caption collision is recorded as severe QA telemetry", () => {
   const result = classifyRenderedIssue(2, good({ caption_integrity: 30 }), contract);
   assert.ok(result.hard.some((x) => /captions/i.test(x.problem)));
 });
 
-test("mild editorial clutter is a soft warning, not a hard block", () => {
+test("mild editorial clutter remains soft telemetry", () => {
   const result = classifyRenderedIssue(2, good({ editorial_cleanliness: 60 }), contract);
   assert.equal(result.hard.length, 0);
   assert.ok(result.soft.some((x) => /cleanliness/i.test(x.problem)));
 });
 
-test("wrong required entity is a hard semantic failure", () => {
+test("wrong required entity remains visible in severe semantic telemetry", () => {
   const result = classifyRenderedIssue(2, good({ entity_match: 45, overall: 82 }), contract);
   assert.ok(result.hard.some((x) => /scene contract/i.test(x.problem)));
+});
+
+test("final visual QA can never block an otherwise successful compose", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "compose.js"), "utf8");
+  assert.match(source, /NON_BLOCKING_FINAL_QA/);
+  assert.match(source, /publishing anyway/);
+  assert.doesNotMatch(source, /Final visual QA rejected catastrophic render defects/);
+  assert.doesNotMatch(source, /if \(finalVisualQa\.hard_failed\)[\s\S]{0,500}throw new Error/);
 });
