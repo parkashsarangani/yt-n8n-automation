@@ -1,5 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   buildVisualContract,
@@ -12,7 +14,6 @@ const {
   cheapSemanticRank,
   normalizeRange,
   normalizeScore,
-  normalizeAnnotationPlan,
   normalizeVerifiedFrameIndices,
   verifiedRangeFromFrameIndices,
   compileQueries,
@@ -98,40 +99,22 @@ describe("visual contract", () => {
     if (c.visual_proof_mode === "comparison") assert.equal(shouldPreferTemplate(c), true);
   });
 
-  it("prefers every proof mode that now has a deterministic renderer", () => {
+  it("prefers every proof mode that has a deterministic renderer except verified-real", () => {
     for (const mode of ["number_visualization", "comparison", "kinetic_text", "map", "timeline", "diagram"]) {
       assert.equal(shouldPreferTemplate(buildVisualContract({ visual_claim: `show ${mode}`, visual_proof_mode: mode, required_entities: [], required_actions: [], required_relationships: [] })), true, mode);
     }
-    assert.equal(shouldPreferTemplate(buildVisualContract({ visual_claim: "annotate this real image", visual_proof_mode: "annotated_real", required_entities: [], required_actions: [], required_relationships: [] })), false);
+    assert.equal(shouldPreferTemplate(buildVisualContract({ visual_claim: "verify this real image", visual_proof_mode: "annotated_real", required_entities: [], required_actions: [], required_relationships: [] })), false);
   });
 
   it("treats semantic correctness as a hard gate", () => {
-    const c = buildVisualContract({
-      subject: "octopus",
-      description: "octopus squeezing through a narrow opening",
-    });
-    const flashyButWrong = {
-      semantic_match: 68,
-      entity_match: 96,
-      action_match: 42,
-      relationship_match: 30,
-      overall: 97,
-    };
+    const c = buildVisualContract({ subject: "octopus", description: "octopus squeezing through a narrow opening" });
+    const flashyButWrong = { semantic_match: 68, entity_match: 96, action_match: 42, relationship_match: 30, overall: 97 };
     assert.equal(passesSemanticGate(flashyButWrong, c), false);
   });
 
   it("accepts a candidate that satisfies entities, action and relationship", () => {
-    const c = buildVisualContract({
-      subject: "octopus",
-      description: "octopus squeezing through a narrow opening",
-    });
-    const correct = {
-      semantic_match: 94,
-      entity_match: 95,
-      action_match: 92,
-      relationship_match: 90,
-      overall: 88,
-    };
+    const c = buildVisualContract({ subject: "octopus", description: "octopus squeezing through a narrow opening" });
+    const correct = { semantic_match: 94, entity_match: 95, action_match: 92, relationship_match: 90, overall: 88 };
     assert.equal(passesSemanticGate(correct, c), true);
   });
 });
@@ -154,37 +137,14 @@ describe("query compilation", () => {
 
 describe("candidate ranking", () => {
   it("ranks a scene-specific candidate above generic broad-topic filler", () => {
-    const contract = buildVisualContract({
-      subject: "octopus",
-      description: "octopus squeezing through narrow rock opening",
-    });
-    const exact = {
-      type: "video",
-      alt: "octopus squeezing through narrow rock opening",
-      query: "octopus narrow opening",
-      width: 1080,
-      height: 1920,
-    };
-    const generic = {
-      type: "video",
-      alt: "octopus swimming underwater",
-      query: "octopus",
-      width: 1080,
-      height: 1920,
-    };
+    const contract = buildVisualContract({ subject: "octopus", description: "octopus squeezing through narrow rock opening" });
+    const exact = { type: "video", alt: "octopus squeezing through narrow rock opening", query: "octopus narrow opening", width: 1080, height: 1920 };
+    const generic = { type: "video", alt: "octopus swimming underwater", query: "octopus", width: 1080, height: 1920 };
     assert.ok(cheapSemanticRank(exact, contract) > cheapSemanticRank(generic, contract));
   });
 
   it("caps overall score when semantic/entity match is weak", () => {
-    const score = normalizeScore({
-      semantic_match: 45,
-      entity_match: 52,
-      action_match: 99,
-      relationship_match: 99,
-      overall: 99,
-      scroll_stop: 99,
-      mobile_clarity: 99,
-    }, { type: "image" });
+    const score = normalizeScore({ semantic_match: 45, entity_match: 52, action_match: 99, relationship_match: 99, overall: 99, scroll_stop: 99, mobile_clarity: 99 }, { type: "image" });
     assert.ok(score.overall <= 53);
   });
 });
@@ -226,14 +186,13 @@ describe("adaptive paid-vision budget", () => {
   });
 });
 
-describe("annotated-real grounding", () => {
-  it("accepts only bounded pixel-relative callouts", () => {
-    const plan = normalizeAnnotationPlan([
-      { label: "beak", x_pct: 48.2, y_pct: 55.1, w_pct: 12, h_pct: 8 },
-      { label: "off image", x_pct: 150, y_pct: 20 },
-      { label: "", x_pct: 10, y_pct: 10 },
-    ]);
-    assert.deepEqual(plan, [{ label: "beak", x_pct: 48.2, y_pct: 55.1, w_pct: 12, h_pct: 8 }]);
+describe("verified-real proof", () => {
+  it("does not generate or normalize audience-facing annotation geometry", () => {
+    const resolverSource = fs.readFileSync(path.join(__dirname, "..", "brollResolver.js"), "utf8");
+    assert.doesNotMatch(resolverSource, /normalizeAnnotationPlan/);
+    assert.doesNotMatch(resolverSource, /annotation_plan/);
+    assert.doesNotMatch(resolverSource, /annotations as an array/i);
+    assert.match(resolverSource, /verified_image_/);
   });
 });
 
