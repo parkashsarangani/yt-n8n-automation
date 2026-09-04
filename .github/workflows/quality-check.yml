@@ -114,12 +114,19 @@ jobs:
           grep -q 'LLM_ROUTER_FAIL_OPEN_TO_DIRECT' shorts-compose/llmRouting.js
           grep -q 'auto:smart' shorts-compose/llmRouting.js
           grep -q 'requestViaRouter' shorts-compose/llmGateway.js
-          grep -q 'ghcr.io/tashfeenahmed/freellmapi:v0.6.5' docker-compose.yml
+          grep -q 'ghcr.io/tashfeenahmed/freellmapi:v0.9.5' docker-compose.yml
           grep -q 'NODE_OPTIONS=--max-old-space-size=4096 --require=/app/llmRouting.js' docker-compose.yml
           grep -q 'LLM_ROUTER_MODE=${LLM_ROUTER_MODE:-freellmapi}' docker-compose.yml
           grep -q 'LLM_ROUTER_FAIL_OPEN_TO_DIRECT=${LLM_ROUTER_FAIL_OPEN_TO_DIRECT:-true}' docker-compose.yml
           for f in shorts-compose/remotion/src/compositions/MapVisual.tsx shorts-compose/remotion/src/compositions/TimelineVisual.tsx shorts-compose/remotion/src/compositions/DiagramVisual.tsx shorts-compose/remotion/src/compositions/AnnotatedReal.tsx; do test -s "$f"; done
           ! grep -q 'Callouts are positioned from visual verification' shorts-compose/remotion/src/compositions/AnnotatedReal.tsx
+
+      - name: Verify pinned FreeLLMAPI container and Compose wiring
+        run: |
+          set -euo pipefail
+          docker manifest inspect ghcr.io/tashfeenahmed/freellmapi:v0.9.5 >/dev/null
+          docker compose config >/dev/null
+          echo 'Pinned FreeLLMAPI image and Docker Compose wiring OK'
 
       - name: Provision production media runtime
         run: |
