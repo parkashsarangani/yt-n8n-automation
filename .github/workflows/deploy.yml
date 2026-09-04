@@ -33,14 +33,22 @@ jobs:
           set -euo pipefail
           python3 scripts/preprod-audit.py
 
-      - name: Validate and deploy compose service
+      - name: Validate and deploy compose plus LLM routing services
         env:
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           UNSPLASH_KEY: ${{ secrets.UNSPLASH_KEY }}
           PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}
           OPENAI_KEY: ${{ secrets.OPEN_AI_KEY }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           COMPETITOR_CHANNELS: ${{ secrets.COMPETITOR_CHANNELS }}
+          FREELLMAPI_ENCRYPTION_KEY: ${{ secrets.FREELLMAPI_ENCRYPTION_KEY }}
+          FREELLMAPI_API_KEY: ${{ secrets.FREELLMAPI_API_KEY }}
+          FREELLMAPI_CONFIG_JSON: ${{ secrets.FREELLMAPI_CONFIG_JSON }}
+          LLM_ROUTER_MODE: ${{ vars.LLM_ROUTER_MODE || 'freellmapi' }}
+          LLM_ROUTER_FAIL_OPEN_TO_DIRECT: ${{ vars.LLM_ROUTER_FAIL_OPEN_TO_DIRECT || 'true' }}
+          FREELLMAPI_TEXT_MODEL: ${{ vars.FREELLMAPI_TEXT_MODEL || 'auto:smart' }}
+          FREELLMAPI_VISION_MODEL: ${{ vars.FREELLMAPI_VISION_MODEL || 'auto:smart' }}
         run: |
           set -euo pipefail
 
@@ -69,14 +77,31 @@ jobs:
           node --check shorts-compose/semanticReranker.js
           node --check shorts-compose/clipLibrary.js
           node --check shorts-compose/finalVisualQa.js
+          node --check shorts-compose/llmRouting.js
+          node --check shorts-compose/llmGateway.js
 
-          echo "=== Building shorts-compose with Docker layer cache ==="
-          docker compose build shorts-compose
+          echo "=== Building shorts-compose and internal LLM gateway ==="
+          docker compose build shorts-compose llm-gateway
 
-          echo "=== Deploying shorts-compose ==="
-          docker compose up -d --no-deps shorts-compose
+          # FreeLLMAPI is optional at deployment time so adding this PR cannot
+          # take publishing down before its provider keys are configured. In
+          # freellmapi mode the gateway automatically uses direct OpenAI as an
+          # emergency fallback when the local free router is unavailable.
+          if [ -n "${FREELLMAPI_ENCRYPTION_KEY:-}" ]; then
+            echo "=== Starting pinned FreeLLMAPI v0.9.5 ==="
+            docker compose pull freellmapi
+            docker compose up -d freellmapi
+          else
+            echo "WARNING: FREELLMAPI_ENCRYPTION_KEY is not configured; FreeLLMAPI container will not be started. Direct fail-open remains available."
+          fi
+
+          echo "=== Deploying LLM gateway and shorts-compose ==="
+          docker compose up -d --no-deps llm-gateway shorts-compose
+          echo "LLM routing mode: ${LLM_ROUTER_MODE}; fail-open-to-direct: ${LLM_ROUTER_FAIL_OPEN_TO_DIRECT}"
 
       - name: Health check
+        env:
+          FREELLMAPI_ENCRYPTION_KEY: ${{ secrets.FREELLMAPI_ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
           RETRY=0
@@ -91,7 +116,21 @@ jobs:
             echo "Waiting for shorts-compose to be ready... ($RETRY/$MAX_RETRY)"
             sleep 5
           done
-          echo "Health check passed"
+
+          docker compose exec -T llm-gateway node -e "fetch('http://127.0.0.1:3100/health').then(async r=>{if(!r.ok)process.exit(1);console.log(await r.text())}).catch(e=>{console.error(e);process.exit(1)})"
+
+          if [ -n "${FREELLMAPI_ENCRYPTION_KEY:-}" ]; then
+            until curl -sf http://127.0.0.1:3001/api/ping > /dev/null 2>&1; do
+              RETRY=$((RETRY + 1))
+              if [ $RETRY -ge $MAX_RETRY ]; then
+                echo "ERROR: FreeLLMAPI was configured but failed its health check"
+                docker compose logs --tail=80 freellmapi
+                exit 1
+              fi
+              sleep 5
+            done
+          fi
+          echo "Health checks passed"
 
       - name: Verify generated workflow contract
         run: |
@@ -103,6 +142,8 @@ jobs:
           assert w.get('meta',{}).get('visual_matching_version')=='4'
           assert w.get('meta',{}).get('production_build_version')=='5'
           assert w.get('meta',{}).get('compose_service_transport')=='docker_internal'
+          assert w.get('meta',{}).get('llm_gateway_transport')=='docker_internal'
+          assert int(w.get('meta',{}).get('llm_gateway_routed_nodes',0)) >= 1
           assert names['Resolve B-roll']['parameters']['url'].startswith('http://shorts-compose:4000/')
           assert names['Start Compose Job']['parameters']['url'].startswith('http://shorts-compose:4000/')
           assert 'publication_description' in names['Merge By scene_index (not position)']['parameters']['jsCode']
@@ -112,10 +153,20 @@ jobs:
           assert 'quality_gate_passed' in tag and 'selection_reason' in tag
           visual=names['Claude: Visual Director']['parameters']['jsonBody']
           assert 'Do NOT request callout boxes' in visual and 'locate callout boxes' not in visual
-          print('Generated production workflow contract OK')
+
+          routed=0
+          for node in w['nodes']:
+            url=node.get('parameters',{}).get('url')
+            if isinstance(url,str) and ('api.openai.com' in url or 'api.anthropic.com' in url):
+              raise AssertionError(f"provider bypass remains in {node.get('name')}: {url}")
+            if isinstance(url,str) and url.startswith('http://llm-gateway:3100/v1/'):
+              routed += 1
+              assert not node.get('credentials'), node.get('name')
+          assert routed == int(w['meta']['llm_gateway_routed_nodes'])
+          print(f'Generated production workflow contract OK; {routed} LLM nodes use internal gateway')
           PY
 
-      - name: Execute parser nodes against synthetic OpenAI responses
+      - name: Execute parser nodes against synthetic OpenAI-compatible responses
         run: |
           set -euo pipefail
           node - <<'JS'
