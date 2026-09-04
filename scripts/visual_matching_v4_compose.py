@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 MARKER = "VISUAL_MATCHING_V4_COMPOSE"
+HARD_QA_MARKER = "CATASTROPHIC_FINAL_QA_GATE"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -49,9 +50,9 @@ def upgrade(text: str) -> str:
         "V4 template preflight",
     )
 
-    # V4 structured proof renderers. Map/timeline/diagram are now deterministic
-    # Remotion compositions, and annotated_real renders the exact verified image
-    # with VLM-grounded callout coordinates.
+    # V4 structured proof renderers. annotated_real is now a clean verified-real
+    # frame: upstream may still send legacy title/annotation props, but the
+    # audience-facing component deliberately ignores them.
     old_map = '''  const compositionMap = {
     stat_reveal: "StatReveal",
     comparison: "Comparison",
@@ -89,8 +90,6 @@ def upgrade(text: str) -> str:
     props.imageUrl = templateData?.imageUrl || "";
     props.imageWidth = Number(templateData?.imageWidth || 1080);
     props.imageHeight = Number(templateData?.imageHeight || 1920);
-    props.title = templateData?.title || "";
-    props.annotations = Array.isArray(templateData?.annotations) ? templateData.annotations : [];
   }
 '''
     text = replace_once(text, old_props, new_props, "structured template props")
@@ -101,26 +100,26 @@ def upgrade(text: str) -> str:
     await fsp.copyFile(finalPath, outputFullPath);
     console.log(`[job ${jobId}] Done -> ${outputFullPath}`);
     return { success: true, output_path: outputFullPath, job_id: jobId };'''
-    new = '''    finalCmd.output(finalPath);
+    new = f'''    finalCmd.output(finalPath);
     await run(finalCmd);
 
-    // VISUAL_MATCHING_V4_COMPOSE: final rendered-pixel QA. This happens after
-    // captions/branding/mix are applied, so retrieval correctness has already
-    // survived crop/composition by the time it's judged. NON_BLOCKING_FINAL_QA:
-    // by explicit decision, this no longer blocks publishing - a scheduled
-    // upload happening on time outweighs holding back an imperfect-but-usable
-    // Short. The QA still runs and its findings are logged and returned for
-    // visibility/telemetry (and to keep the retry loop's learning signal
-    // intact upstream), it just never throws.
+    // VISUAL_MATCHING_V4_COMPOSE / {HARD_QA_MARKER}: inspect the actual final
+    // pixels after crop, captions and branding. Catastrophic defects block the
+    // publish path; softer polish findings are returned as telemetry but do not
+    // throw away an otherwise usable scheduled Short.
     const finalVisualQa = await reviewFinalVideo(finalPath, scenes, durations);
-    if (!finalVisualQa.passed) {
-      const summary = (finalVisualQa.issues || []).map((x) => `scene ${x.scene_index}: ${x.problem} (semantic=${x.semantic_match ?? 'n/a'}, score=${x.score ?? 'n/a'})`).join('; ');
-      console.warn(`[job ${jobId}] Final visual QA flagged issues (publishing anyway): ${summary || 'unknown visual mismatch'}`);
-    }
+    if (finalVisualQa.hard_failed) {{
+      const summary = (finalVisualQa.hard_issues || finalVisualQa.issues || []).map((x) => `scene ${{x.scene_index}}: ${{x.problem}} (semantic=${{x.semantic_match ?? 'n/a'}}, score=${{x.score ?? 'n/a'}})`).join('; ');
+      throw new Error(`Final visual QA rejected catastrophic render defects: ${{summary || 'unknown final-render failure'}}`);
+    }}
+    if (!finalVisualQa.passed) {{
+      const summary = (finalVisualQa.soft_issues || []).map((x) => `scene ${{x.scene_index}}: ${{x.problem}} (semantic=${{x.semantic_match ?? 'n/a'}}, score=${{x.score ?? 'n/a'}})`).join('; ');
+      console.warn(`[job ${{jobId}}] Final visual QA soft warnings: ${{summary || 'quality below preferred target'}}`);
+    }}
 
     await fsp.copyFile(finalPath, outputFullPath);
-    console.log(`[job ${jobId}] Done -> ${outputFullPath}`);
-    return { success: true, output_path: outputFullPath, job_id: jobId, final_visual_qa: finalVisualQa };'''
+    console.log(`[job ${{jobId}}] Done -> ${{outputFullPath}}`);
+    return {{ success: true, output_path: outputFullPath, job_id: jobId, final_visual_qa: finalVisualQa }};'''
     text = replace_once(text, old, new, "final render QA")
     return text + f"\n// {MARKER}\n"
 
