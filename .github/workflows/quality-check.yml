@@ -5,8 +5,6 @@ on:
     paths:
       - 'n8n/workflow.json'
       - 'scripts/**'
-      - 'scripts/visual_matching_v4_workflow.py'
-      - 'scripts/visual_matching_v4_compose.py'
       - 'shorts-compose/**'
       - '.github/workflows/quality-check.yml'
       - '.github/workflows/deploy.yml'
@@ -16,8 +14,6 @@ on:
     paths:
       - 'n8n/workflow.json'
       - 'scripts/**'
-      - 'scripts/visual_matching_v4_workflow.py'
-      - 'scripts/visual_matching_v4_compose.py'
       - 'shorts-compose/**'
       - '.github/workflows/quality-check.yml'
       - '.github/workflows/deploy.yml'
@@ -29,90 +25,85 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply production workflow upgrades
+      - name: Build exact production artifacts
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-viral-shorts.py scripts/upgrade-creative-system.py scripts/visual_matching_v4_workflow.py scripts/upgrade-workflow-api-budget.py scripts/upgrade-topic-latency.py scripts/upgrade_quality_alignment.py scripts/upgrade-anthropic-parser.py scripts/preprod-audit.py
-          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/w1.json
-          python3 scripts/upgrade-creative-system.py /tmp/w1.json /tmp/w2.json
-          python3 scripts/visual_matching_v4_workflow.py /tmp/w2.json /tmp/w2v4.json
-          python3 scripts/upgrade-workflow-api-budget.py /tmp/w2v4.json /tmp/w3.json
-          python3 scripts/upgrade-topic-latency.py /tmp/w3.json /tmp/w4.json
-          python3 scripts/upgrade-anthropic-parser.py /tmp/w4.json /tmp/workflow_final.json
-          python3 -m json.tool /tmp/workflow_final.json >/dev/null
+          python3 -m py_compile scripts/build_production_artifacts.py scripts/visual_matching_v4_compose.py scripts/visual_matching_v4_workflow.py scripts/preprod-audit.py
+          rm -rf /tmp/production-a /tmp/production-b
+          python3 scripts/build_production_artifacts.py --output-dir /tmp/production-a
+          # Build twice from the same source and require byte-identical deployable
+          # artifacts. This guards against CI/deploy drift and hidden mutable state.
+          python3 scripts/build_production_artifacts.py --output-dir /tmp/production-b
+          cmp /tmp/production-a/manifest.json /tmp/production-b/manifest.json
+          python3 -m json.tool /tmp/production-a/workflow.json >/dev/null
+          cat /tmp/production-a/manifest.json
 
-      - name: Verify V4 workflow contract
+      - name: Verify production workflow policy
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           import json
-          w=json.load(open('/tmp/workflow_final.json')); names={n['name']:n for n in w['nodes']}; c=w['connections']
+          w=json.load(open('/tmp/production-a/workflow.json'))
+          names={n['name']:n for n in w['nodes']}
           assert w.get('meta',{}).get('visual_matching_version')=='4'
-          def first(src): return c[src]['main'][0][0]['node']
-          assert first('Claude: Generate Topic')=='Parse Topic Pool'
-          assert first('Parse Draft JSON')=='Claude: Visual Director'
-          assert first('Claude: Visual Director')=='Validate Final Script'
-          visual=names['Claude: Visual Director']; vb=visual['parameters']['jsonBody']
-          assert visual['parameters']['options']['timeout']==180000 and visual.get('retryOnFail') is False and visual.get('maxTries')==1
-          assert 'reasoning_effort: "none"' in vb and 'VISUAL_MATCHING_V4' in vb
-          for f in ['visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','OVERALL SELECTED TOPIC','map=>template + map','timeline=>template + timeline','diagram=>template + diagram','annotated_real MUST remain a real-media retrieval scene']:
-              assert f in vb,f
-          resolver=names['Resolve B-roll']; rb=resolver['parameters']['jsonBody']
-          assert resolver['parameters']['options']['timeout']==180000
-          for f in ['search_queries','first_frame','run_id','$execution.id','visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','narration','global_subject']:
-              assert f in rb,f
-          validate=names['Validate Final Script']['parameters']['jsCode']
-          for f in ['VISUAL_MATCHING_V4 contract gate','needs at least 3 search_queries','rebuiltFullScript','deterministicModes','expectedTemplate','map requires template_data.locations','timeline requires at least two events','diagram requires at least two nodes']:
-              assert f in validate,f
+          assert w.get('meta',{}).get('production_build_version')=='5'
+          assert w.get('meta',{}).get('compose_service_transport')=='docker_internal'
+
+          visual=names['Claude: Visual Director']['parameters']['jsonBody']
+          assert 'VISUAL_MATCHING_V4' in visual
+          assert 'Do NOT request callout boxes' in visual
+          assert 'locate callout boxes' not in visual
+
+          resolver=names['Resolve B-roll']
+          assert resolver['parameters']['url'].startswith('http://shorts-compose:4000/')
+          assert resolver['parameters']['options']['timeout']==160000
+          rb=resolver['parameters']['jsonBody']
+          for marker in ['retrieval_scene_count','retrieval_scene_position','run_id','$execution.id','visual_claim','required_entities','required_actions','required_relationships']:
+              assert marker in rb, marker
+
           tag=names['Tag B-roll']['parameters']['jsCode']
-          for f in ['asset_semantic_match','asset_entity_match','asset_action_match','asset_relationship_match','actual_video_verified','frame_similarity','verified_frame_indices','annotation_plan',"template_name='annotated_real'"]:
-              assert f in tag,f
-          for n in ['Parse Topic Pool','Extract Generated Topic','Parse Draft JSON','Validate Final Script']:
-              code=names[n]['parameters']['jsCode']; assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code and 'LAST_VALID_JSON_OBJECT' in code and 'content?.[0]?.text' not in code
-          print('V4 workflow contract OK')
+          for marker in ["r.type==='template'",'deterministic fallback','verified-real scene','asset_semantic_match','verified_frame_indices']:
+              assert marker in tag, marker
+          assert 'annotation_plan' not in tag and 'annotations:' not in tag
+
+          merge=names['Merge By scene_index (not position)']['parameters']['jsCode']
+          assert '_attribution' in merge
+          assert 'publicationDescription' in merge
+          assert 'useanimations.com (CC BY 4.0)' in merge
+          assert names['YouTube: Upload Draft']['parameters']['options']['description'].endswith('publication_description }}')
+          assert 'publication_description' in names['Disclose AI-Generated Content']['parameters']['jsonBody']
+
+          for node in w['nodes']:
+              url=node.get('parameters',{}).get('url')
+              if isinstance(url,str) and 'shorts.interviewbuddy.cloud' in url:
+                  raise AssertionError(f"compose-service call still uses public proxy: {node.get('name')} -> {url}")
+          print('production workflow policy OK')
           PY
 
-      - name: Validate compose and resolver production transforms
+      - name: Verify compose and resolver hardening
         run: |
           set -euo pipefail
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/visual_matching_v4_compose.py
-          cp shorts-compose/compose.js /tmp/compose_final.js
-          cp shorts-compose/brollResolver.js /tmp/broll_final.js
-          python3 scripts/upgrade-compose-creative-system.py /tmp/compose_final.js
-          python3 scripts/upgrade-compose-api-budget.py /tmp/compose_final.js /tmp/broll_final.js
-          python3 scripts/upgrade-compose-runtime-hardening.py /tmp/broll_final.js
-          python3 scripts/visual_matching_v4_compose.py /tmp/compose_final.js
-          grep -q 'VISUAL_MATCHING_V4' /tmp/broll_final.js
-          grep -q 'localSemanticRerank' /tmp/broll_final.js
-          grep -q 'sampleVideoContactSheet' /tmp/broll_final.js
-          grep -q 'best_frame_indices' /tmp/broll_final.js
-          grep -q 'verifiedRangeFromFrameIndices' /tmp/broll_final.js
-          grep -q 'materializeVerifiedClip' /tmp/broll_final.js
-          grep -q 'materializeVerifiedImage' /tmp/broll_final.js
-          grep -q 'contract.visual_claim' /tmp/broll_final.js
-          grep -q 'fromPixabayVideos' /tmp/broll_final.js
-          grep -q 'fromWikimediaCommons' /tmp/broll_final.js
-          ! grep -q 'best_start_sec' /tmp/broll_final.js
-          ! grep -q 'best_end_sec' /tmp/broll_final.js
-          grep -q 'VISUAL_MATCHING_V4_COMPOSE' /tmp/compose_final.js
-          grep -q 'reviewFinalVideo' /tmp/compose_final.js
-          ! grep -q 'throw new Error(`Final visual QA rejected' /tmp/compose_final.js
-          grep -q 'publishing anyway' /tmp/compose_final.js
-          for marker in 'MapVisual' 'TimelineVisual' 'DiagramVisual' 'AnnotatedReal' '"map", "timeline", "diagram", "annotated_real"'; do grep -q "$marker" /tmp/compose_final.js; done
-          grep -q '"-ar", "48000", "-ac", "2"' /tmp/compose_final.js
-          ! grep -q 'const target = subj ||' /tmp/broll_final.js
-          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
-          for f in shorts-compose/remotion/src/compositions/MapVisual.tsx shorts-compose/remotion/src/compositions/TimelineVisual.tsx shorts-compose/remotion/src/compositions/DiagramVisual.tsx shorts-compose/remotion/src/compositions/AnnotatedReal.tsx; do test -s "$f"; done
-          grep -q 'id="MapVisual"' shorts-compose/remotion/src/Root.tsx
-          grep -q 'id="TimelineVisual"' shorts-compose/remotion/src/Root.tsx
-          grep -q 'id="DiagramVisual"' shorts-compose/remotion/src/Root.tsx
-          grep -q 'id="AnnotatedReal"' shorts-compose/remotion/src/Root.tsx
-          node --check /tmp/compose_final.js
-          node --check /tmp/broll_final.js
+          node --check /tmp/production-a/compose.js
+          node --check /tmp/production-a/brollResolver.js
           node --check shorts-compose/visualContract.js
           node --check shorts-compose/visualBudget.js
-          node --check shorts-compose/semanticReranker.js
-          node --check shorts-compose/clipLibrary.js
           node --check shorts-compose/finalVisualQa.js
+          grep -q 'CATASTROPHIC_FINAL_QA_GATE' /tmp/production-a/compose.js
+          grep -q 'Final visual QA rejected catastrophic render defects' /tmp/production-a/compose.js
+          ! grep -q 'publishing anyway' /tmp/production-a/compose.js
+          grep -q 'candidatePassesGate' /tmp/production-a/brollResolver.js
+          grep -q 'below_semantic_quality_gate' /tmp/production-a/brollResolver.js
+          grep -q 'deterministic_template_fallback' /tmp/production-a/brollResolver.js
+          grep -q 'RESOLVE_DEADLINE_MS' /tmp/production-a/brollResolver.js
+          ! grep -q 'normalizeAnnotationPlan' /tmp/production-a/brollResolver.js
+          ! grep -q 'annotation_plan' /tmp/production-a/brollResolver.js
+          grep -q 'BROLL_BUDGET_STATE_PATH' shorts-compose/visualBudget.js
+          grep -q 'durable_state: true' shorts-compose/visualBudget.js
+          grep -q 'debug_artifact' shorts-compose/finalVisualQa.js
+          grep -q 'caption_integrity' shorts-compose/finalVisualQa.js
+          grep -q 'hard_failed' shorts-compose/finalVisualQa.js
+          for f in shorts-compose/remotion/src/compositions/MapVisual.tsx shorts-compose/remotion/src/compositions/TimelineVisual.tsx shorts-compose/remotion/src/compositions/DiagramVisual.tsx shorts-compose/remotion/src/compositions/AnnotatedReal.tsx; do test -s "$f"; done
+          ! grep -q 'Callouts are positioned from visual verification' shorts-compose/remotion/src/compositions/AnnotatedReal.tsx
 
       - name: Provision production media runtime
         run: |
@@ -140,16 +131,13 @@ jobs:
           npm install --no-package-lock --no-audit --no-fund --no-save "@rspack/binding-linux-x64-gnu@${RSPACK_VER}"
           node -e "require('@rspack/binding'); console.log('rspack binding OK')"
 
-      - name: Run resolver and render regression tests on deploy artifacts
+      - name: Run regression tests on exact deploy artifacts
         env:
           CREATIVE_SYSTEM_EXPECT_PREFLIGHT: 'true'
         run: |
           set -euo pipefail
-          # The deployment path transforms compose/resolver before Docker build.
-          # Run media regressions against those exact artifacts, not the readable
-          # canonical sources, or CI can be green while production differs.
-          cp /tmp/compose_final.js shorts-compose/compose.js
-          cp /tmp/broll_final.js shorts-compose/brollResolver.js
+          cp /tmp/production-a/compose.js shorts-compose/compose.js
+          cp /tmp/production-a/brollResolver.js shorts-compose/brollResolver.js
           cd shorts-compose
           node --check compose.js
           node --check brollResolver.js
