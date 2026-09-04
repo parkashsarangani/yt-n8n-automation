@@ -7,6 +7,7 @@ const axios = require("axios");
 process.env.FREELLMAPI_API_KEY = "freellmapi-test-key";
 process.env.FREELLMAPI_TEXT_MODEL = "auto:fast";
 process.env.FREELLMAPI_VISION_MODEL = "auto:smart";
+process.env.FREELLMAPI_ANTHROPIC_MODEL = "claude-sonnet-4-5";
 process.env.OPENAI_KEY = "paid-openai-test-key";
 process.env.ANTHROPIC_KEY = "paid-anthropic-test-key";
 
@@ -69,6 +70,26 @@ test("free request replaces the paid model but preserves the request payload", (
   assert.deepEqual(free.data.response_format, original.response_format);
   assert.deepEqual(free.data.messages, original.messages);
   assert.equal(free.headers.Authorization, "Bearer freellmapi-test-key");
+});
+
+test("Anthropic-compatible requests keep the Claude wire contract through FreeLLMAPI", () => {
+  const original = {
+    model: "claude-original-paid-model",
+    max_tokens: 256,
+    messages: [{ role: "user", content: "return JSON" }],
+  };
+  const free = routing.makeFreeRequest("messages", original);
+  assert.equal(free.url, "http://freellmapi:3001/v1/messages");
+  assert.equal(free.data.model, "claude-sonnet-4-5");
+  assert.equal(free.headers.Authorization, "Bearer freellmapi-test-key");
+  assert.equal(free.headers["anthropic-version"], "2023-06-01");
+  assert.equal(free.data.max_tokens, 256);
+  assert.deepEqual(free.data.messages, original.messages);
+
+  const direct = routing.makeDirectRequest("messages", original);
+  assert.equal(direct.data.model, "claude-original-paid-model");
+  assert.equal(direct.headers["x-api-key"], "paid-anthropic-test-key");
+  assert.equal(direct.headers["anthropic-version"], "2023-06-01");
 });
 
 test("preloaded axios interceptor really rewrites an existing direct OpenAI call", async () => {
