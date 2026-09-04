@@ -1,139 +1,224 @@
 # YouTube Shorts Facts Automation Pipeline
 
-A fully automated pipeline that generates, voices, composes, and uploads
-YouTube Shorts — posting **3×/day** with zero manual intervention. Each video is
-a punchy **20–30s single-fact Short**: one surprising, counterintuitive fact
-about an instantly recognizable subject, with cinematic visuals, per-word
-captions, and a spoken engagement beat.
+A self-hosted pipeline that researches, writes, voices, composes, validates and
+uploads vertical YouTube Shorts. The production path is n8n + OpenAI +
+ElevenLabs + multi-source real-media retrieval + FFmpeg/Remotion.
 
-## Architecture
+## Production architecture
 
-```
-n8n (workflow orchestration, Europe/Berlin, 3× daily: 14:00 / 19:00 / 22:00)
+```text
+n8n
   │
-  ├─ OpenAI API — topic selection (single curiosity facts), 2-stage script
-  │    (draft → visual director), validation with auto-retry
-  ├─ ElevenLabs — text-to-speech with word-level timestamps (per scene)
-  ├─ Pexels API — stock VIDEO clips and PHOTOS for scenes that need real footage
-  │    └─ Video search first, automatic photo fallback if no video found
-  ├─ shorts-compose (this repo) — hybrid video assembly, async job-polling
-  │    ├─ Remotion (React) — studio motion-graphics templates (stat reveals,
-  │    │    comparisons, kinetic text) with spring physics and web typography
-  │    ├─ FFmpeg — stock video processing (scale/crop/grade), eased Ken Burns
-  │    │    on photos, audio normalization, music ducking, SFX mixing,
-  │    │    crossfade transitions, and final encoding (CRF 16, BT.709)
-  │    ├─ Split-tone color science per mood (warm highlights + cool shadows,
-  │    │    shadow lift, highlight rolloff, cinematic vignette)
-  │    ├─ Scene transitions: 0.4s crossfades between all scenes via xfade
-  │    ├─ Sound design: whoosh + sub-bass on every cut, impact + riser on
-  │    │    template reveals, gently-ducked background music (ratio 4, shaped)
-  │    ├─ Per-word "karaoke" captions burned via ASS, with active-word pop
-  │    └─ Final: fade-in/out, BT.709 colorspace, high profile 4.1, faststart
-  └─ YouTube Data API — upload, AI-content disclosure
+  ├─ OpenAI — topic selection, script, visual contract
+  ├─ ElevenLabs — TTS + alignment
+  │
+  └─ shorts-compose (Docker-internal HTTP, not the public proxy)
+       ├─ multi-source retrieval
+       │    Pexels / Pixabay / Unsplash / Wikipedia / Wikimedia /
+       │    Openverse / NASA
+       ├─ local semantic reranking
+       ├─ VLM verification against exact scene contracts
+       ├─ verified video-frame range materialization
+       ├─ deterministic Remotion proof templates when preferred/available
+       ├─ FFmpeg composition + captions + audio + BT.709 normalization
+       └─ final rendered-pixel QA
+            ├─ severe defect => explicit telemetry/warning
+            └─ softer aesthetic issue => telemetry/warning
+  │
+  └─ YouTube Data API — upload + metadata + AI-content disclosure
 ```
 
-All of this is self-hosted on a local Ubuntu server, exposed via a Cloudflare
-Tunnel, with `n8n` and `shorts-compose` running as Docker Compose services.
-Deploys are automated: a push to `main` triggers a self-hosted GitHub Actions
-runner that rebuilds `shorts-compose` and PUTs the workflow to the n8n API.
+The service still exposes a public Cloudflare-backed endpoint for external
+access, but production n8n-to-compose calls use `http://shorts-compose:4000`
+inside the Docker Compose network. This removes the reverse-proxy timeout from
+B-roll resolution and job polling.
 
-### Why the hybrid Remotion + FFmpeg approach
+## Visual correctness model
 
-FFmpeg is unbeatable for raw video processing (scaling, cropping, encoding,
-audio mixing, Ken Burns on stills), but its filter-graph compositing has severe
-limits for motion graphics: no easing curves, no spring physics, no proper
-typography control.
+Each non-outro scene receives an executable visual contract:
 
-Remotion renders React components to video frames via headless Chromium —
-giving full CSS animations, spring physics, SVG, and web fonts. The tradeoff is
-render time, but the async job-polling pattern already handles it.
+- `visual_claim`
+- `required_entities`
+- `required_actions`
+- `required_relationships`
+- `forbidden_visuals`
+- `acceptable_visuals`
+- `visual_proof_mode`
 
-The split:
-- **Remotion**: template scenes (stat_reveal, comparison, kinetic_text),
-  including the branded outro card
-- **FFmpeg**: stock video/image scenes, color grade, audio mixing, captions,
-  concatenation, and final encoding
+Real media is ranked against configured overall, semantic, entity, action and
+relationship quality targets. Those targets drive search retries, early
+acceptance and telemetry; they are **not publication eligibility gates**. If no
+real candidate clears the targets, the resolver prefers an allowed deterministic
+template fallback when one is available, otherwise it selects the highest-scoring
+technically usable real asset. A low model score therefore cannot fail a run by
+itself.
 
-### Why async job-polling
+`literal_video` remains a strong preference rather than an availability gate.
+Video candidates are downloaded locally before FFmpeg sampling, evaluated
+through a chronological contact sheet, and only the contiguous verified sample
+range is materialized. If no usable motion candidate survives, a still can be
+used as graceful degradation rather than failing the scheduled Short.
 
-Render time exceeds Cloudflare's 120s proxy timeout. `/compose` returns a
-`job_id` immediately; the caller polls `/compose-status/:jobId` until done.
+The resolver returns `ok:false` only when there is genuinely no technically
+usable media/template path left, not because an asset missed a quality score.
+
+## Clean verified-real frames
+
+`annotated_real` is retained as a compatibility name in the V4 schema, but its
+V5 behavior is now a **clean verified-real still**. Vision verification is used
+to decide whether the image proves the narration; internal model diagnostics are
+not audience-facing graphics.
+
+The final renderer therefore does **not** draw:
+
+- computer-vision bounding boxes,
+- object labels,
+- leader lines or dots,
+- coordinate-derived overlays,
+- diagnostic footers,
+- generated verification titles.
+
+The complete verified image is preserved with `objectFit: contain` and a blurred
+canvas-fill copy behind it for the 9:16 frame.
+
+## Final QA is telemetry-only
+
+Final QA runs against representative frames from the **completed video**, after
+crop, captions and branding. It evaluates:
+
+- semantic/entity/action/relationship correctness,
+- readability,
+- editorial cleanliness,
+- mobile safe-area usage,
+- caption integrity and collisions,
+- clipped/hidden critical evidence,
+- leaked debug or diagnostic UI.
+
+The QA subsystem still classifies severe findings in `hard_issues` and softer
+findings in `soft_issues`, but these are severity labels for diagnostics and
+learning signals only. `compose.js` logs them and continues. A model timeout,
+frame-sampling failure, low semantic score, debug-artifact judgement, clipping
+judgement or layout judgement cannot block an otherwise successfully rendered
+Short from reaching the upload path.
+
+Only genuine production failures — for example inability to produce the final
+MP4 or absence of any technically usable scene representation — stop the run.
+
+## Durable run budgets
+
+Paid vision limits and score-cache entries are persisted in the shared
+`shorts_data` volume instead of process-local JavaScript `Map`s. An atomic
+filesystem lock coordinates updates across processes using the same volume, so a
+service restart or multiple compose workers cannot silently reset the run-wide
+budget.
+
+Relevant settings include:
+
+```text
+BROLL_RUN_MAX_VISION_CALLS=28
+BROLL_FIRST_FRAME_MAX_VISION_CALLS=7
+BROLL_SUPPORT_BASE_VISION_CALLS=3
+BROLL_SUPPORT_BORROW_MAX_VISION_CALLS=7
+BROLL_BUDGET_STATE_PATH=/app/data/visual_budget_state.json
+BROLL_RESOLVE_DEADLINE_MS=135000
+```
+
+## One production build path
+
+CI and deployment no longer carry separate copies of the transformation order.
+Both call:
+
+```bash
+python3 scripts/build_production_artifacts.py --output-dir <dir>
+```
+
+The builder creates exactly three deployable artifacts plus a SHA-256 manifest:
+
+```text
+workflow.json
+compose.js
+brollResolver.js
+manifest.json
+```
+
+CI builds them twice and requires identical manifests. Deployment consumes the
+same artifact shape and does not reconstruct a different runtime through another
+shell transform chain. Legacy upgrade modules are still used as migration stages
+inside this single builder, but their order is centralized and final V5 policy is
+validated before an artifact is considered deployable.
+
+## Attribution
+
+Third-party and retrieved-media credits are automatic. Each selected scene keeps
+its `_attribution` metadata through the scene join. The production workflow
+builds one deduplicated `Sources / credits` section and appends it to the YouTube
+description.
+
+The description also always includes:
+
+```text
+Motion icon assets: useanimations.com (CC BY 4.0)
+```
+
+The later YouTube disclosure/update call reuses the same
+`publication_description`, so it cannot accidentally overwrite those credits.
+See `LICENSES.md` for bundled-asset details.
 
 ## Repo layout
 
+```text
+n8n/workflow.json
+    Human-readable base n8n workflow.
+
+scripts/build_production_artifacts.py
+    Authoritative production artifact builder used by both CI and deploy.
+
+scripts/resolver_v5_runtime.py
+    V5 resolver runtime finalization: video staging, adaptive verifier budget,
+    target-based early acceptance and best-available publication fallback.
+
+shorts-compose/
+    compose.js
+    brollResolver.js
+    visualContract.js
+    visualBudget.js
+    finalVisualQa.js
+    clipLibrary.js
+    semanticReranker.js
+    remotion/
+    motion-assets/
+    tests/
+
+.github/workflows/
+    quality-check.yml
+    deploy.yml
+    retrieval-recall-check.yml
+    retrieval-telemetry-check.yml
+    multiframe-phase3-check.yml
 ```
-n8n/workflow.json              - the full n8n workflow (import into n8n)
-shorts-compose/                - the video composition service
-  compose.js                     - main orchestration (async job API, pipeline)
-  Dockerfile
-  package.json
-  remotion/                      - Remotion project (studio motion graphics)
-    src/
-      index.ts                     - Remotion entry point
-      Root.tsx                     - composition registry
-      compositions/
-        StatReveal.tsx               - animated stat/number reveal
-        Comparison.tsx               - side-by-side comparison cards
-        KineticText.tsx              - word-by-word kinetic typography (+ outro)
-        CaptionOverlay.tsx           - per-word karaoke captions
-      lib/
-        easing.ts                    - spring, expo, back-out, cinematic easing
-        colors.ts                    - mood-based color schemes
-    render-bridge.mjs              - Node.js bridge (called from compose.js)
-  motion-assets/                 - real licensed assets
-    fonts/                         Inter (SIL Open Font License)
-    icons/                         useAnimations icon set (CC-BY 4.0)
-    sfx/                           synthesized riser/impact/whoosh SFX
-  music/                         - (optional) per-mood tracks; none committed,
-                                   so videos currently render without music
-docker-compose.yml             - deploys n8n + shorts-compose
-.github/workflows/deploy.yml   - CI: build + deploy on push to main
-```
 
-## Setup
+## Persistence
 
-### 1. Credentials (configure directly in n8n, not in this repo)
+Named Docker volumes are used for state and outputs:
 
-- OpenAI (GPT) API key
-- ElevenLabs API key + voice ID
-- Pexels API key (HTTP Header Auth in n8n)
-- YouTube Data API v3 (OAuth2 for upload)
+- `shorts_data`: topic history, durable visual budgets/cache, proven-clip
+  metadata, model cache.
+- `shorts_outputs`: rendered videos and verified-media cache.
+- `n8n_data`: n8n state.
 
-n8n stores credentials separately from the workflow file by design — none are
-included here. Reconnect each after importing the workflow.
+A Git clean/deployment cannot wipe these volumes.
 
-### 2. Environment (shorts-compose)
+## Development
 
-Set in the server environment / `.env`:
-
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `TOPIC_HISTORY_PATH` | `/app/data/topic_history.json` | Dedup state (persisted, see below). |
-| `OUTPUT_DIR` | `/app/outputs` | Rendered videos (persisted). |
-
-### 3. Deploy the stack
+Run JavaScript tests from the compose service:
 
 ```bash
-docker compose up -d --build
+cd shorts-compose
+npm install
+npm test
 ```
 
-The first build takes longer (installs Chromium + Remotion dependencies inside
-the container). Subsequent rebuilds use Docker layer caching. In production,
-pushing to `main` deploys automatically via the GitHub Actions runner.
-
-### 4. Persistence
-
-Topic history and outputs live in **named Docker volumes** (`shorts_data`,
-`shorts_outputs`), not bind mounts — so `git clean` on deploy can never wipe
-them. Anything you want version-controlled (e.g. music tracks) goes in the repo
-and is baked into the image via `COPY`.
-
-### 5. Import the workflow
-
-Import `n8n/workflow.json` into your n8n instance, then reconnect each
-credential.
-
-### 6. (Optional) Preview Remotion compositions locally
+Preview Remotion compositions:
 
 ```bash
 cd shorts-compose/remotion
@@ -141,72 +226,38 @@ npm install
 npx remotion studio
 ```
 
-## Content pipeline, briefly
+Build the exact production artifacts locally:
 
-1. **Topic generation** — one **surprising, counterintuitive fact** about an
-   **instantly recognizable** subject (the human body, space, well-known
-   animals, everyday objects, famous places, money, sport, common tech, big
-   historical events). Two hard bans: **no biographies/life stories** and **no
-   obscure subjects**. Hard exclusion on medical/health content. Anti-clustering
-   on both subject and category. History capped at 90 entries.
-2. **Stage 1 (draft) + Stage 2 (editorial rewrite)** — two-pass script
-   generation. **20–30s, ~60–90 words, 3–4 scenes**, with the fact landing in
-   the **first 3 seconds** and each beat carrying BUT/THEREFORE tension (never
-   and-then listing).
-3. **Titles** lead with **stakes and emotion**, not just the topic, while
-   withholding the resolution (no payoff numbers). ≤60 chars, front-loaded.
-4. **Engagement** — a one-tap comment question (yes/no or single word) is woven
-   into the narration around the two-thirds mark and mirrored on-screen
-   (`comment_hook`); the story **ends on its kicker**, then a short **spoken
-   outro** asks viewers to share. The outro is a real narrated scene over the
-   branded card — voiced by the same TTS, not silent.
-5. **Validation** — non-throwing check that triggers automatic retry with a
-   fresh topic on failure; injects the spoken outro scene.
-6. **Visual assembly** — each scene is either a **Pexels stock video/photo**
-   (videos processed directly, photos rendered with eased Ken Burns) or a
-   Remotion motion-graphics template, based on whether the beat is depictable
-   or a number/comparison.
-7. **Compose** — FFmpeg + Remotion assemble the scenes with split-tone color
-   grading, crossfade transitions, per-word karaoke captions, gapless
-   voiceover, (optional) ducked music, and a BT.709-flagged final encode.
+```bash
+python3 scripts/build_production_artifacts.py --output-dir /tmp/shorts-production
+python3 scripts/preprod-audit.py
+```
 
-## Editing / quality notes
+## Deployment
 
-| Area | Current approach |
-|------|------------------|
-| Cuts | **Crossfade transitions** (0.4s) between scenes via xfade |
-| Color grade | **Split-tone** per mood: warm highlights + cool shadows, shadow lift, highlight rolloff, cinematic vignette |
-| Motion | Stock video (direct) or **eased Ken Burns** on photos with sinusoidal motion |
-| Source | **Pexels** stock video (preferred) with automatic photo fallback |
-| Captions | Per-word ASS burn-in with active-word scale "pop"; gold/green highlight for keywords and numbers |
-| Sound design | Whoosh + sub-bass on every cut, impact + riser on template reveals |
-| Voice | **Gapless** rejoin of per-scene TTS (single loudnorm, no AAC-priming clicks at scene seams) |
-| Music | Gently ducked under the voice when a per-mood track exists (none committed by default) |
-| Encoding | CRF 16, high profile, BT.709 primaries/trc/colorspace, faststart, 1080×1920 @ 30fps |
+A push to `main` runs the self-hosted deployment workflow. It:
 
-## Posting schedule
+1. builds the exact production artifacts,
+2. executes the V5 pre-production audit,
+3. installs the generated `compose.js` and `brollResolver.js`,
+4. rebuilds/restarts `shorts-compose`,
+5. health-checks the service,
+6. deploys the generated workflow to n8n through its API.
 
-3×/day at **14:00 / 19:00 / 22:00 Europe/Berlin** — chosen to hit DE afternoon,
-the DE-evening + US-midday overlap, and US afternoon (top audiences: Germany and
-USA). Change the cron expressions in the workflow's Schedule Trigger to adjust.
+## External services
 
-## External paid APIs
+The pipeline can use OpenAI, ElevenLabs, Pexels, Pixabay and Unsplash API keys.
+Wikipedia/Wikimedia/Openverse/NASA retrieval paths do not require the same paid
+credentials. YouTube Data API/OAuth is used for publication.
 
-OpenAI (GPT), ElevenLabs (TTS), and Pexels (stock media) are the external
-APIs. Pexels is free for most use cases. YouTube Data API is free within quota.
+## Known limitations
 
-## Licensing notes for bundled assets
-
-See `LICENSES.md`. In short: Inter is SIL Open Font License (no attribution
-required). The icon set is CC-BY 4.0 (**attribution to useanimations.com is
-required** — a known open item). The SFX files are synthesized programmatically,
-no third-party licensing.
-
-## Known limitations / open items
-
-- No music tracks are committed, so videos render without a soundtrack until
-  per-mood files are added to `shorts-compose/music/`.
-- CC-BY attribution for the icon set is not yet added to the channel.
-- Remotion rendering adds render time and needs ~4–6GB RAM (Chromium + frame
-  buffer); docker-compose sets a 6GB memory limit accordingly.
-- Custom thumbnails are not set — YouTube falls back to an auto-frame.
+- Remotion/Chromium rendering is memory-intensive; the compose container is
+  configured with a 6 GB limit.
+- Music remains optional and depends on the tracks present in
+  `shorts-compose/music/`.
+- Custom YouTube thumbnails are not generated by this pipeline.
+- `annotated_real` remains the legacy schema name even though its production
+  semantics are now `verified_real`; renaming it would require a schema/version
+  migration and is intentionally deferred to avoid breaking existing episode
+  payloads.
