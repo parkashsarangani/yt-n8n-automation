@@ -19,7 +19,7 @@ services:
   # the configured hosted free-tier providers. The port is loopback-only so the
   # admin surface is never exposed publicly; use an SSH tunnel for setup.
   freellmapi:
-    image: ghcr.io/tashfeenahmed/freellmapi:v0.6.5
+    image: ghcr.io/tashfeenahmed/freellmapi:v0.9.5
     restart: unless-stopped
     ports:
       - "127.0.0.1:3001:3001"
