@@ -15,6 +15,55 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
 
+  # FreeLLMAPI runs only the local routing/dashboard layer. Inference stays on
+  # the configured hosted free-tier providers. The port is loopback-only so the
+  # admin surface is never exposed publicly; use an SSH tunnel for setup.
+  freellmapi:
+    image: ghcr.io/tashfeenahmed/freellmapi:v0.6.9
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - ENCRYPTION_KEY=${FREELLMAPI_ENCRYPTION_KEY:-}
+      - FREEAPI_CONFIG_JSON=${FREELLMAPI_CONFIG_JSON:-}
+    volumes:
+      - freellmapi_data:/app/server/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/ping').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # n8n sends every generated LLM request here. This one internal endpoint is
+  # the rollback boundary: LLM_ROUTER_MODE=direct bypasses FreeLLMAPI without a
+  # workflow/code revert, while free mode can fail open to the paid provider so
+  # scheduled publishing is not interrupted by a free-tier outage/quota limit.
+  llm-gateway:
+    build: ./shorts-compose
+    command: ["node", "llmGateway.js"]
+    restart: unless-stopped
+    environment:
+      - LLM_GATEWAY_PORT=3100
+      - LLM_ROUTER_MODE=${LLM_ROUTER_MODE:-freellmapi}
+      - LLM_ROUTER_FAIL_OPEN_TO_DIRECT=${LLM_ROUTER_FAIL_OPEN_TO_DIRECT:-true}
+      - LLM_ROUTER_TIMEOUT_MS=${LLM_ROUTER_TIMEOUT_MS:-120000}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-http://freellmapi:3001/v1}
+      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
+      - FREELLMAPI_TEXT_MODEL=${FREELLMAPI_TEXT_MODEL:-auto:smart}
+      - FREELLMAPI_VISION_MODEL=${FREELLMAPI_VISION_MODEL:-auto:smart}
+      - FREELLMAPI_ANTHROPIC_MODEL=${FREELLMAPI_ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      - OPENAI_KEY=${OPENAI_KEY:-}
+      - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
   shorts-compose:
     build: ./shorts-compose
     restart: unless-stopped
@@ -23,12 +72,25 @@ services:
     environment:
       - OUTPUT_DIR=/app/outputs
       - TOPIC_HISTORY_PATH=/app/data/topic_history.json
-      - NODE_OPTIONS=--max-old-space-size=4096
+      # Preload the routing shim so existing internal OpenAI/VLM calls are
+      # intercepted centrally without invasive rewrites in each module.
+      - NODE_OPTIONS=--max-old-space-size=4096 --require=/app/llmRouting.js
+      - LLM_ROUTER_MODE=${LLM_ROUTER_MODE:-freellmapi}
+      - LLM_ROUTER_FAIL_OPEN_TO_DIRECT=${LLM_ROUTER_FAIL_OPEN_TO_DIRECT:-true}
+      - LLM_ROUTER_TIMEOUT_MS=${LLM_ROUTER_TIMEOUT_MS:-120000}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL:-http://freellmapi:3001/v1}
+      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY:-}
+      - FREELLMAPI_TEXT_MODEL=${FREELLMAPI_TEXT_MODEL:-auto:smart}
+      - FREELLMAPI_VISION_MODEL=${FREELLMAPI_VISION_MODEL:-auto:smart}
+      - FREELLMAPI_ANTHROPIC_MODEL=${FREELLMAPI_ANTHROPIC_MODEL:-claude-sonnet-4-5}
       # V4 real-media sources. There is NO AI image/video generation.
       - PEXELS_KEY=${PEXELS_KEY:-}
       - UNSPLASH_KEY=${UNSPLASH_KEY:-}
       - PIXABAY_KEY=${PIXABAY_KEY:-}
+      # Paid keys remain available only as emergency fallbacks / one-switch
+      # rollback. They are not the primary route when LLM_ROUTER_MODE=freellmapi.
       - OPENAI_KEY=${OPENAI_KEY:-}
+      - ANTHROPIC_KEY=${ANTHROPIC_KEY:-}
 
       # Retrieval recall. The Visual Contract produces subject/action/relation
       # queries; Pexels, Pixabay, Unsplash, Wikipedia and Commons fan out before
@@ -137,3 +199,4 @@ volumes:
   n8n_data:
   shorts_data:
   shorts_outputs:
+  freellmapi_data:
