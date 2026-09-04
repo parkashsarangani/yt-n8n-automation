@@ -80,6 +80,7 @@ function freeHeaders(surface, headers = {}) {
   const out = normalizeHeaders(headers);
   out.Authorization = `Bearer ${FREELLMAPI_API_KEY}`;
   out["content-type"] = out["content-type"] || out["Content-Type"] || "application/json";
+  if (surface === "messages") out["anthropic-version"] = out["anthropic-version"] || "2023-06-01";
   if (String(process.env.FREELLMAPI_CACHE || "off").toLowerCase() === "on") out["X-FreeLLM-Cache"] = "on";
   return out;
 }
