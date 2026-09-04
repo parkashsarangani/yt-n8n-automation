@@ -245,8 +245,8 @@ def upgrade(text: str) -> str:
 '''
     text = replace_once(text, old_selection, new_selection, "always-publish best-available selection")
 
-    fail_anchor = '      best_candidate: summarizeCandidate(scored[0]),\n    recommended_visual_proof_mode: contract.visual_proof_mode,'
-    fail_new = '      best_candidate: summarizeCandidate(scored[0]),\n    vision_call_limit: state.scene_budget.limit,\n    failure_reasons: [...new Set(scored.filter((x) => x.rejected).map((x) => String(x.reason || "technical_candidate_failure").slice(0, 120)))].slice(0, 6),\n    recommended_visual_proof_mode: contract.visual_proof_mode,'
+    fail_anchor = '    best_candidate: summarizeCandidate(scored[0]),\n    recommended_visual_proof_mode: contract.visual_proof_mode,'
+    fail_new = '    best_candidate: summarizeCandidate(scored[0]),\n    vision_call_limit: state.scene_budget.limit,\n    failure_reasons: [...new Set(scored.filter((x) => x.rejected).map((x) => String(x.reason || "technical_candidate_failure").slice(0, 120)))].slice(0, 6),\n    recommended_visual_proof_mode: contract.visual_proof_mode,'
     text = replace_once(text, fail_anchor, fail_new, "technical failure telemetry")
 
     success_anchor = '    actual_video_verified: best.type === "video", library_hit: best.library_hit === true, recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget,'
