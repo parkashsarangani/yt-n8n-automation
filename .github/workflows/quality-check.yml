@@ -114,7 +114,7 @@ jobs:
           grep -q 'LLM_ROUTER_FAIL_OPEN_TO_DIRECT' shorts-compose/llmRouting.js
           grep -q 'auto:smart' shorts-compose/llmRouting.js
           grep -q 'requestViaRouter' shorts-compose/llmGateway.js
-          grep -q 'ghcr.io/tashfeenahmed/freellmapi:v0.6.9' docker-compose.yml
+          grep -q 'ghcr.io/tashfeenahmed/freellmapi:v0.6.5' docker-compose.yml
           grep -q 'NODE_OPTIONS=--max-old-space-size=4096 --require=/app/llmRouting.js' docker-compose.yml
           grep -q 'LLM_ROUTER_MODE=${LLM_ROUTER_MODE:-freellmapi}' docker-compose.yml
           grep -q 'LLM_ROUTER_FAIL_OPEN_TO_DIRECT=${LLM_ROUTER_FAIL_OPEN_TO_DIRECT:-true}' docker-compose.yml
