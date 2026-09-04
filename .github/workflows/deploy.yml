@@ -14,6 +14,10 @@ jobs:
     name: Deploy
     runs-on: self-hosted
     environment: production
+    env:
+      # Keep the Docker Compose project identity stable across self-hosted runner
+      # workspace/path changes so old service containers remain discoverable.
+      COMPOSE_PROJECT_NAME: yt-n8n-automation-shorts
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,6 +98,33 @@ jobs:
           else
             echo "WARNING: FREELLMAPI_ENCRYPTION_KEY is not configured; FreeLLMAPI container will not be started. Direct fail-open remains available."
           fi
+
+          echo "=== Preparing host port 4000 for shorts-compose ==="
+          # A self-hosted runner can retain a shorts-compose container from an
+          # older Compose project/workspace. Docker Compose may then recreate the
+          # current service successfully but fail at Start with
+          # 'Bind for 0.0.0.0:4000 failed: port is already allocated'. Remove
+          # only stale containers that identify themselves as the same Compose
+          # service. Never kill an unrelated process merely because it owns 4000.
+          mapfile -t PORT_4000_OWNERS < <(docker ps -q --filter publish=4000 || true)
+          for cid in "${PORT_4000_OWNERS[@]}"; do
+            [ -n "$cid" ] || continue
+            service="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$cid" 2>/dev/null || true)"
+            name="$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's#^/##')"
+            project="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$cid" 2>/dev/null || true)"
+            if [ "$service" = "shorts-compose" ]; then
+              echo "Removing stale shorts-compose container ${name:-$cid} (project=${project:-unknown}) holding host port 4000"
+              docker rm -f "$cid"
+            else
+              echo "ERROR: host port 4000 is owned by unrelated container ${name:-$cid}; refusing destructive cleanup"
+              docker ps --filter "id=$cid" --format 'ID={{.ID}} NAME={{.Names}} PORTS={{.Ports}}'
+              exit 1
+            fi
+          done
+
+          # Also clear any stopped/failed container for the canonical project so
+          # a previous partial deployment cannot poison the next retry.
+          docker compose rm -sf shorts-compose >/dev/null 2>&1 || true
 
           echo "=== Deploying LLM gateway and shorts-compose ==="
           docker compose up -d --no-deps llm-gateway shorts-compose
