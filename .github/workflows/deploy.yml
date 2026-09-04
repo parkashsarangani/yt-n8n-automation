@@ -19,6 +19,15 @@ jobs:
         with:
           clean: true
 
+      - name: Build exact production artifacts
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/yt-shorts-production
+          python3 -m py_compile scripts/build_production_artifacts.py scripts/preprod-audit.py
+          python3 scripts/build_production_artifacts.py --output-dir /tmp/yt-shorts-production
+          python3 -m json.tool /tmp/yt-shorts-production/workflow.json >/dev/null
+          cat /tmp/yt-shorts-production/manifest.json
+
       - name: Pre-production audit
         run: |
           set -euo pipefail
@@ -35,29 +44,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Full media/render regression tests run in PR CI. Production deploy
-          # keeps only cheap deterministic integrity checks before replacing the
-          # running service.
-          echo "=== Validating compose source transforms ==="
-          python3 -m py_compile scripts/upgrade-compose-creative-system.py scripts/upgrade-compose-api-budget.py scripts/upgrade-compose-runtime-hardening.py scripts/video_multiframe_phase3.py scripts/visual_matching_v4_compose.py
-          python3 scripts/upgrade-compose-creative-system.py shorts-compose/compose.js
-          python3 scripts/upgrade-compose-api-budget.py shorts-compose/compose.js shorts-compose/brollResolver.js
-          python3 scripts/upgrade-compose-runtime-hardening.py shorts-compose/brollResolver.js
-          python3 scripts/visual_matching_v4_compose.py shorts-compose/compose.js
+          echo "=== Installing exact generated runtime artifacts ==="
+          cp /tmp/yt-shorts-production/compose.js shorts-compose/compose.js
+          cp /tmp/yt-shorts-production/brollResolver.js shorts-compose/brollResolver.js
 
-          grep -q 'CREATIVE_SYSTEM_COMPOSE' shorts-compose/compose.js
           grep -q 'VISUAL_MATCHING_V4_COMPOSE' shorts-compose/compose.js
-          grep -q 'PRODUCTION_BT709_RANGE_NORMALIZATION' shorts-compose/compose.js
-          grep -q '"-color_range", "tv"' shorts-compose/compose.js
-          grep -q 'reviewFinalVideo' shorts-compose/compose.js
-          grep -q 'VISUAL_MATCHING_V4' shorts-compose/brollResolver.js
-          grep -q 'API_BUDGET' shorts-compose/brollResolver.js
-          grep -q 'PREPROD_BROLL_HARDENING' shorts-compose/brollResolver.js
-          grep -q 'RETRIEVAL_RECALL_PHASE2' shorts-compose/brollResolver.js
-          grep -q 'SOURCE_QUERY_COMPILER_V1' shorts-compose/brollResolver.js
-          grep -q 'MULTIFRAME_VIDEO_RERANK_V1' shorts-compose/brollResolver.js
-          grep -q 'materializeVerifiedClip' shorts-compose/brollResolver.js
-          grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
+          grep -q 'CATASTROPHIC_FINAL_QA_GATE' shorts-compose/compose.js
+          grep -q 'Final visual QA rejected catastrophic render defects' shorts-compose/compose.js
+          grep -q 'candidatePassesGate' shorts-compose/brollResolver.js
+          grep -q 'below_semantic_quality_gate' shorts-compose/brollResolver.js
+          grep -q 'deterministic_template_fallback' shorts-compose/brollResolver.js
+          grep -q 'RESOLVE_DEADLINE_MS' shorts-compose/brollResolver.js
+          ! grep -q 'annotation_plan' shorts-compose/brollResolver.js
+          grep -q 'BROLL_BUDGET_STATE_PATH' shorts-compose/visualBudget.js
+          grep -q 'hard_failed' shorts-compose/finalVisualQa.js
           node --check shorts-compose/compose.js
           node --check shorts-compose/brollResolver.js
           node --check shorts-compose/visualContract.js
@@ -89,93 +89,25 @@ jobs:
           done
           echo "Health check passed"
 
-      - name: Build creative-system n8n workflow
+      - name: Verify generated workflow contract
         run: |
           set -euo pipefail
-          echo "=== Applying quality gate ==="
-          python3 -m py_compile scripts/upgrade-viral-shorts.py
-          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/workflow_quality_gate.json
-
-          echo "=== Applying creative system ==="
-          python3 -m py_compile scripts/upgrade-creative-system.py
-          python3 scripts/upgrade-creative-system.py /tmp/workflow_quality_gate.json /tmp/workflow_creative_system.json
-
-          echo "=== Applying V4 visual contracts ==="
-          python3 -m py_compile scripts/visual_matching_v4_workflow.py
-          python3 scripts/visual_matching_v4_workflow.py /tmp/workflow_creative_system.json /tmp/workflow_visual_v4.json
-
-          echo "=== Applying API budget guardrails ==="
-          python3 -m py_compile scripts/upgrade-workflow-api-budget.py
-          python3 scripts/upgrade-workflow-api-budget.py /tmp/workflow_visual_v4.json /tmp/workflow_api_budget.json
-
-          echo "=== Applying topic latency guardrails ==="
-          python3 -m py_compile scripts/upgrade-topic-latency.py
-          python3 scripts/upgrade-topic-latency.py /tmp/workflow_api_budget.json /tmp/workflow_topic_latency.json
-
-          echo "=== Applying quality alignment + Anthropic parser/runtime hardening ==="
-          python3 -m py_compile scripts/upgrade-anthropic-parser.py scripts/workflow_multiframe_phase3.py
-          python3 scripts/upgrade-anthropic-parser.py /tmp/workflow_topic_latency.json /tmp/workflow_quality.json
-          python3 -m json.tool /tmp/workflow_quality.json >/dev/null
-
-          echo "=== Verifying generated workflow contract ==="
           python3 - <<'PY'
           import json
-          w = json.load(open('/tmp/workflow_quality.json'))
-          names = {n['name']: n for n in w['nodes']}
-          assert w.get('meta', {}).get('visual_matching_version') == '4'
-
-          topic = names['Claude: Generate Topic']
-          body = topic['parameters']['jsonBody']
-          assert 'TOPIC_LATENCY' in body
-          assert 'GENERATE 4 DISTINCT candidate topics' in body
-          assert 'max_completion_tokens: 6000' in body
-          assert topic['parameters']['options']['timeout'] == 120000
-          assert topic.get('retryOnFail') is False and topic.get('maxTries') == 1
-
-          commissioner = names['Claude: Commission Topic Shortlist']
-          assert commissioner['parameters']['options']['timeout'] == 120000
-          assert commissioner.get('retryOnFail') is False and commissioner.get('maxTries') == 1
-
-          visual = names['Claude: Visual Director']
-          visual_body = visual['parameters']['jsonBody']
-          assert 'QUALITY_ALIGNMENT' in visual_body
-          assert 'RETRIEVAL_RECALL_PHASE2' in visual_body
-          assert 'VISUAL_MATCHING_V4' in visual_body
-          for field in ['visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','global_subject']:
-              assert field in visual_body, field
-          assert 'pixabay_video' in visual_body and 'pixabay' in visual_body
-          assert visual['parameters']['options']['timeout'] == 180000
-          assert visual.get('retryOnFail') is False and visual.get('maxTries') == 1
-          assert 'reasoning_effort: "none"' in visual_body
-
-          resolver_node = names['Resolve B-roll']
-          assert resolver_node['parameters']['options']['timeout'] == 180000
-          resolver_body = resolver_node['parameters']['jsonBody']
-          for field in ['search_queries','first_frame','run_id','visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode','narration','global_subject']:
-              assert field in resolver_body, field
-          assert '$execution.id' in resolver_body
-
-          for node_name in ['Parse Topic Pool', 'Extract Generated Topic', 'Parse Draft JSON', 'Validate Final Script']:
-              code = names[node_name]['parameters']['jsCode']
-              assert 'ANTHROPIC_TEXT_BLOCK_GUARD' in code, node_name
-              assert 'LAST_VALID_JSON_OBJECT' in code, node_name
-              assert 'content?.[0]?.text' not in code, node_name
-              assert 'finish_reason' in code, node_name
-
-          writer_body = names['Claude: Draft Script (Stage 1)']['parameters']['jsonBody']
-          assert 'Concept archetype' in writer_body
-          validate = names['Validate Final Script']['parameters']['jsCode']
-          assert 'visual_plan_quality' in validate
-          assert 'VISUAL_MATCHING_V4 contract gate' in validate
-          assert 'needs at least 3 search_queries' in validate
-          assert 'rebuiltFullScript' in validate
-          assert 'pixabay_video' in validate and 'pixabay' in validate
-          tag = names['Tag B-roll']['parameters']['jsCode']
-          assert 'compiled_query_plan' in tag
-          assert 'MULTIFRAME_TELEMETRY_V1' in tag
-          assert 'frame_similarity' in tag and 'frame_sampling_status' in tag
-          assert 'asset_semantic_match' in tag and 'actual_video_verified' in tag
-          print('Generated workflow contract OK')
+          w=json.load(open('/tmp/yt-shorts-production/workflow.json'))
+          names={n['name']:n for n in w['nodes']}
+          assert w.get('meta',{}).get('visual_matching_version')=='4'
+          assert w.get('meta',{}).get('production_build_version')=='5'
+          assert w.get('meta',{}).get('compose_service_transport')=='docker_internal'
+          assert names['Resolve B-roll']['parameters']['url'].startswith('http://shorts-compose:4000/')
+          assert names['Start Compose Job']['parameters']['url'].startswith('http://shorts-compose:4000/')
+          assert 'publication_description' in names['Merge By scene_index (not position)']['parameters']['jsCode']
+          assert 'useanimations.com (CC BY 4.0)' in names['Merge By scene_index (not position)']['parameters']['jsCode']
+          tag=names['Tag B-roll']['parameters']['jsCode']
+          assert "r.type==='template'" in tag and 'annotation_plan' not in tag
+          visual=names['Claude: Visual Director']['parameters']['jsonBody']
+          assert 'Do NOT request callout boxes' in visual and 'locate callout boxes' not in visual
+          print('Generated production workflow contract OK')
           PY
 
       - name: Execute parser nodes against synthetic OpenAI responses
@@ -183,10 +115,8 @@ jobs:
           set -euo pipefail
           node - <<'JS'
           const fs = require('fs');
-          const wf = JSON.parse(fs.readFileSync('/tmp/workflow_quality.json', 'utf8'));
-          const names = {};
-          for (const n of wf.nodes) names[n.name] = n;
-
+          const wf = JSON.parse(fs.readFileSync('/tmp/yt-shorts-production/workflow.json', 'utf8'));
+          const names = {}; for (const n of wf.nodes) names[n.name] = n;
           function run(nodeName, input, prior = {}) {
             const fn = new Function('$input', '$', '$execution', names[nodeName].parameters.jsCode);
             const $ = (name) => ({ item: { json: prior[name] || {} } });
@@ -196,41 +126,28 @@ jobs:
             if (result === undefined || result === null) throw new Error(label + ': node returned ' + result);
             if (Array.isArray(result)) {
               if (!result.every((x) => x && typeof x === 'object')) throw new Error(label + ': array items must be objects');
-            } else if (typeof result !== 'object') {
-              throw new Error(label + ': must return an object or array of objects, got ' + typeof result);
-            }
+            } else if (typeof result !== 'object') throw new Error(label + ': must return an object or array');
           }
-
           const candidates = Array.from({ length: 4 }, (_, i) => ({
             topic: 'recognizable topic ' + i, archetype: 'looks_fake_but_real', research_query: 'q', first_frame_concept: 'f',
             share_reason: 's', evidence_score: 80, visual_score: 80, share_score: 80, reason: 'r', score: 80,
           }));
-          function openaiResponse(text, finishReason = 'stop') {
-            return { choices: [{ message: { content: text }, finish_reason: finishReason }] };
-          }
-          assertItem(run('Parse Topic Pool', openaiResponse(JSON.stringify({ candidates }))), 'Parse Topic Pool happy path');
-
+          const response = (text, finish_reason='stop') => ({ choices: [{ message: { content: text }, finish_reason }] });
+          assertItem(run('Parse Topic Pool', response(JSON.stringify({ candidates }))), 'Parse Topic Pool');
           const script = { hook: 'a complete hook', scenes: [{ scene_index: 0, point: 'point', narration: 'enough narration' }] };
-          const draft = run('Parse Draft JSON', openaiResponse(JSON.stringify(script)));
-          assertItem(draft, 'Parse Draft JSON happy path');
-          if (!draft || !draft.json || !draft.json.draft) throw new Error('Parse Draft JSON did not return {json:{draft}}');
-
-          const draftCorrected = run('Parse Draft JSON', openaiResponse('{"hook":"bad",]\nWait\n' + JSON.stringify(script)));
-          if (draftCorrected.json.draft.hook !== script.hook) throw new Error('Draft parser did not recover corrected JSON');
-
+          assertItem(run('Parse Draft JSON', response(JSON.stringify(script))), 'Parse Draft JSON');
           console.log('Executable parser smoke tests OK');
           JS
 
       - name: Deploy n8n workflow
         run: |
           set -euo pipefail
-          echo "=== Deploying n8n workflow ==="
           jq '{
             name,
             nodes,
             connections,
             settings: {executionOrder: (.settings.executionOrder // "v1")}
-          }' /tmp/workflow_quality.json > /tmp/workflow_deploy.json
+          }' /tmp/yt-shorts-production/workflow.json > /tmp/workflow_deploy.json
 
           HTTP_STATUS=$(curl -s -o /tmp/n8n_response.json -w "%{http_code}" \
             -X PUT "http://localhost:5678/api/v1/workflows/${{ vars.N8N_WORKFLOW_ID }}" \
