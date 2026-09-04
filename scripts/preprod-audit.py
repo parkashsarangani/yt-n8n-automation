@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Pre-production audit for the V5 Shorts pipeline.
 
-This audit validates the *same generated artifacts that deploy consumes* instead
-of rebuilding an older transform chain with contradictory assumptions. It is
-intentionally fail-closed on publication safety, semantic visual gates,
-annotation leakage, attribution, durable budgets, and internal service routing.
+This audit validates the same generated artifacts that deploy consumes instead
+of rebuilding an older transform chain with contradictory assumptions. It
+protects the explicit production policy that quality scores and rendered-pixel
+QA are advisory: they improve ranking, retries and telemetry but never block an
+otherwise renderable scheduled Short.
 """
 from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -46,7 +46,7 @@ def require(text: str, markers: list[str], label: str) -> None:
 def forbid(text: str, markers: list[str], label: str) -> None:
     present = [m for m in markers if m in text]
     if present:
-        die(f"{label} contains forbidden legacy behavior: {', '.join(present)}")
+        die(f"{label} contains forbidden behavior: {', '.join(present)}")
 
 
 def audit_workflow(path: Path) -> None:
@@ -87,7 +87,7 @@ def audit_workflow(path: Path) -> None:
     require(tag, [
         "asset_semantic_match", "asset_entity_match", "asset_action_match", "asset_relationship_match",
         "verified_frame_indices", "actual_video_verified", "verified-real scene",
-        "deterministic fallback", "r.type==='template'",
+        "deterministic fallback", "r.type==='template'", "quality_gate_passed", "selection_reason",
     ], "Tag B-roll")
     forbid(tag, ["annotation_plan", "annotations:"], "Tag B-roll")
 
@@ -100,8 +100,6 @@ def audit_workflow(path: Path) -> None:
     if "publication_description" not in disclosure:
         die("post-upload disclosure step would overwrite source credits")
 
-    # Every call to this project-owned compose service must stay on the private
-    # Docker network. This includes compose, polling, history and feedback APIs.
     for node in workflow.get("nodes", []):
         url = node.get("parameters", {}).get("url")
         if isinstance(url, str) and "shorts.interviewbuddy.cloud" in url:
@@ -114,17 +112,18 @@ def audit_resolver(path: Path) -> None:
         "VISUAL_MATCHING_V4", "RETRIEVAL_RECALL_PHASE2", "SOURCE_QUERY_COMPILER_V1",
         "MULTIFRAME_VIDEO_RERANK_V1", "localSemanticRerank", "diversifyCandidates",
         "fromPexelsVideos", "fromPixabayVideos", "fromPixabayPhotos", "fromWikimediaCommons",
-        "candidatePassesGate", "passesSemanticGate", "below_semantic_quality_gate",
-        "deterministic_template_fallback", "RESOLVE_DEADLINE_MS", "RESOLVER_V5_RUNTIME",
-        "V5_PROOF_MEDIA_TYPE_FILTER", "V5_VIDEO_VERIFY_USES_SCENE_BUDGET",
-        "V5_VIDEO_SAMPLE_STAGING", "V5_FULL_GATE_EARLY_ACCEPT", "downloadVideoSample",
+        "candidatePassesGate", "passesSemanticGate", "deterministic_template_fallback",
+        "RESOLVE_DEADLINE_MS", "RESOLVER_V5_RUNTIME", "V5_VIDEO_VERIFY_USES_SCENE_BUDGET",
+        "V5_VIDEO_SAMPLE_STAGING", "V5_FULL_GATE_EARLY_ACCEPT", "V5_ALWAYS_PUBLISH_BEST_AVAILABLE",
+        "best_available_below_quality_target", "no_technically_usable_candidate", "downloadVideoSample",
         "video_contact_sheet_ffmpeg_failed", "materializeVerifiedClip", "verifiedRangeFromFrameIndices",
-        "vision_call_limit", "failure_reasons",
+        "vision_call_limit", "failure_reasons", "quality_gate_passed", "selection_reason",
     ], "production resolver")
     forbid(text, [
         "normalizeAnnotationPlan", "annotation_plan", "return annotations as an array",
         "annotated_real_missing_grounded_callouts", "const target = subj ||",
-        "best_start_sec", "best_end_sec",
+        "best_start_sec", "best_end_sec", "V5_PROOF_MEDIA_TYPE_FILTER",
+        'reason: state.budget_exhausted || "below_semantic_quality_gate"',
     ], "production resolver")
     run(["node", "--check", str(path)])
 
@@ -132,12 +131,11 @@ def audit_resolver(path: Path) -> None:
 def audit_compose(path: Path) -> None:
     text = path.read_text()
     require(text, [
-        "VISUAL_MATCHING_V4_COMPOSE", "reviewFinalVideo", "CATASTROPHIC_FINAL_QA_GATE",
-        "Final visual QA rejected catastrophic render defects",
-        "PRODUCTION_BT709_RANGE_NORMALIZATION", '"-color_range", "tv"',
+        "VISUAL_MATCHING_V4_COMPOSE", "reviewFinalVideo", "NON_BLOCKING_FINAL_QA",
+        "publishing anyway", "PRODUCTION_BT709_RANGE_NORMALIZATION", '"-color_range", "tv"',
         "MapVisual", "TimelineVisual", "DiagramVisual", "AnnotatedReal",
     ], "production compose")
-    forbid(text, ["publishing anyway", "NON_BLOCKING_FINAL_QA"], "production compose")
+    forbid(text, ["Final visual QA rejected catastrophic render defects", "CATASTROPHIC_FINAL_QA_GATE"], "production compose")
     run(["node", "--check", str(path)])
 
 
@@ -154,7 +152,7 @@ def audit_static_runtime() -> None:
     require(final_qa, [
         "debug_artifact", "critical_content_clipped", "editorial_cleanliness",
         "safe_area", "caption_integrity", "hard_failed", "hard_issues", "soft_issues",
-    ], "final rendered QA")
+    ], "final rendered QA telemetry")
     run(["node", "--check", str(ROOT / "shorts-compose/finalVisualQa.js")])
 
     annotated = (ROOT / "shorts-compose/remotion/src/compositions/AnnotatedReal.tsx").read_text()
@@ -201,7 +199,7 @@ def audit() -> None:
 
     audit_static_runtime()
     audit_build_wiring()
-    print("PREPROD AUDIT PASSED: V5 hard semantic gates, clean verified-real rendering, tiered final QA, attribution, durable budgets, internal transport, and deterministic build wiring are consistent")
+    print("PREPROD AUDIT PASSED: V5 best-available publishing, non-blocking rendered QA, clean verified-real rendering, attribution, durable budgets, internal transport, and deterministic build wiring are consistent")
 
 
 if __name__ == "__main__":
