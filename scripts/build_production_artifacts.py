@@ -62,17 +62,15 @@ def clean_visual_director_annotation_contract(workflow: dict) -> None:
     )
     if legacy in body:
         body = body.replace(legacy, replacement, 1)
-    # Also catch older wording variants without weakening the proof-mode name.
-    body = body.replace("visually locate callout boxes on those pixels, then convert it into the annotated_real Remotion composition", "visually verify those pixels, then render the real image cleanly without diagnostic overlays")
+    body = body.replace(
+        "visually locate callout boxes on those pixels, then convert it into the annotated_real Remotion composition",
+        "visually verify those pixels, then render the real image cleanly without diagnostic overlays",
+    )
     visual["parameters"]["jsonBody"] = body
 
 
 def clean_tag_broll(workflow: dict) -> None:
-    """Consume verified-real images and deterministic fallback templates.
-
-    VLM annotation coordinates are resolver diagnostics, not editorial graphics.
-    They are intentionally absent from this production contract.
-    """
+    """Consume verified-real images and deterministic fallback templates."""
     tag = node_by_name(workflow, "Tag B-roll")
     tag["parameters"]["jsCode"] = r'''const r=$json;const s=$('Split Out Scenes').item.json;const sceneIndex=s.scene_index;
 if(!r||r.ok!==true)throw new Error('B-roll commissioning rejected scene '+sceneIndex+': '+(r?.reason||'no acceptable asset')+' best_score='+(r?.best_score??r?.score??'n/a')+' threshold='+(r?.threshold??'n/a')+' proof_mode='+(r?.recommended_visual_proof_mode||s.visual_proof_mode||'n/a'));
@@ -119,7 +117,6 @@ return {json:{hook:$('Validate Final Script').item.json.hook,comment_hook:$('Val
 def patch_publication_metadata(workflow: dict) -> None:
     upload = node_by_name(workflow, "YouTube: Upload Draft")
     upload.setdefault("parameters", {}).setdefault("options", {})["description"] = "={{ $('Merge By scene_index (not position)').item.json.publication_description }}"
-
     disclosure = node_by_name(workflow, "Disclose AI-Generated Content")
     disclosure["parameters"]["jsonBody"] = r'''={{ JSON.stringify({ id: $json.uploadId || $json.id, status: { privacyStatus: $json.status?.privacyStatus || 'public', selfDeclaredMadeForKids: $json.status?.selfDeclaredMadeForKids ?? false, containsSyntheticMedia: true }, snippet: { title: (($('Validate Final Script').item.json.title || $('Validate Final Script').item.json.hook) || '').slice(0, 50), categoryId: '22', description: ($('Merge By scene_index (not position)').item.json.publication_description || ''), tags: ($('Validate Final Script').item.json.tags || []), defaultLanguage: 'en', defaultAudioLanguage: 'en' } }) }}'''
 
@@ -150,7 +147,7 @@ def postprocess_workflow(path: Path) -> None:
 def build(root: Path, output: Path) -> dict:
     output.mkdir(parents=True, exist_ok=True)
 
-    # Workflow migration pipeline: single authoritative order.
+    # Workflow migration pipeline: one authoritative order.
     w0 = root / "n8n" / "workflow.json"
     stages = [output / f"workflow-stage-{i}.json" for i in range(1, 7)]
     run("scripts/upgrade-viral-shorts.py", str(w0), str(stages[0]), cwd=root)
@@ -163,17 +160,18 @@ def build(root: Path, output: Path) -> dict:
     shutil.copy2(stages[5], workflow_out)
     postprocess_workflow(workflow_out)
 
-    # Compose/resolver migration pipeline: again, one authoritative order.
+    # Compose/resolver pipeline. Legacy runtime-hardening rewrites are no longer
+    # re-applied to the V5 resolver; resolver_v5_runtime owns the small runtime
+    # mechanics while semantic policy stays in the checked-in resolver.
     compose_out = output / "compose.js"
     resolver_out = output / "brollResolver.js"
     shutil.copy2(root / "shorts-compose" / "compose.js", compose_out)
     shutil.copy2(root / "shorts-compose" / "brollResolver.js", resolver_out)
     run("scripts/upgrade-compose-creative-system.py", str(compose_out), cwd=root)
     run("scripts/upgrade-compose-api-budget.py", str(compose_out), str(resolver_out), cwd=root)
-    run("scripts/upgrade-compose-runtime-hardening.py", str(resolver_out), cwd=root)
+    run("scripts/resolver_v5_runtime.py", str(resolver_out), cwd=root)
     run("scripts/visual_matching_v4_compose.py", str(compose_out), cwd=root)
 
-    # Fail the build if the policies this project depends on disappeared.
     workflow = json.loads(workflow_out.read_text())
     tag_code = node_by_name(workflow, "Tag B-roll")["parameters"]["jsCode"]
     merge_code = node_by_name(workflow, "Merge By scene_index (not position)")["parameters"]["jsCode"]
@@ -181,7 +179,7 @@ def build(root: Path, output: Path) -> dict:
     visual_body = str(node_by_name(workflow, "Claude: Visual Director")["parameters"].get("jsonBody", ""))
     if "annotation_plan" in tag_code or "annotations:" in tag_code:
         raise RuntimeError("production Tag B-roll still exposes legacy VLM annotations")
-    if "callout boxes" in visual_body or "locate callout" in visual_body:
+    if "visually locate callout boxes" in visual_body or "locate callout boxes on those pixels" in visual_body:
         raise RuntimeError("production Visual Director still requests CV callout geometry")
     if "Do NOT request callout boxes" not in visual_body:
         raise RuntimeError("verified-real clean-frame contract missing from Visual Director")
@@ -194,10 +192,10 @@ def build(root: Path, output: Path) -> dict:
 
     compose_text = compose_out.read_text()
     resolver_text = resolver_out.read_text()
-    for marker in ("VISUAL_MATCHING_V4_COMPOSE", "CATASTROPHIC_FINAL_QA_GATE", "reviewFinalVideo"):
+    for marker in ("VISUAL_MATCHING_V4_COMPOSE", "CATASTROPHIC_FINAL_QA_GATE", "PRODUCTION_BT709_RANGE_NORMALIZATION", "reviewFinalVideo"):
         if marker not in compose_text:
             raise RuntimeError(f"compose artifact missing {marker}")
-    for marker in ("candidatePassesGate", "below_semantic_quality_gate", "deterministic_template_fallback", "RESOLVE_DEADLINE_MS"):
+    for marker in ("candidatePassesGate", "below_semantic_quality_gate", "deterministic_template_fallback", "RESOLVE_DEADLINE_MS", "RESOLVER_V5_RUNTIME", "V5_VIDEO_SAMPLE_STAGING", "V5_PROOF_MEDIA_TYPE_FILTER"):
         if marker not in resolver_text:
             raise RuntimeError(f"resolver artifact missing {marker}")
     if "normalizeAnnotationPlan" in resolver_text or "return annotations as an array" in resolver_text or "annotation_plan" in resolver_text:
@@ -209,10 +207,7 @@ def build(root: Path, output: Path) -> dict:
     artifact_paths = [workflow_out, compose_out, resolver_out]
     manifest = {
         "build_version": BUILD_VERSION,
-        "artifacts": {
-            p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in artifact_paths
-        },
+        "artifacts": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in artifact_paths},
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return manifest
