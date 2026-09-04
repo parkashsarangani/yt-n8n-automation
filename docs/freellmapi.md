@@ -47,8 +47,10 @@ those modules.
 2. Add it as the GitHub Actions secret `FREELLMAPI_ENCRYPTION_KEY`.
 
 3. Deploy/re-run the production workflow. Deployment pulls the pinned
-   `ghcr.io/tashfeenahmed/freellmapi:v0.6.9` image and exposes its dashboard
-   only at `127.0.0.1:3001` on the server.
+   `ghcr.io/tashfeenahmed/freellmapi:v0.6.5` image and exposes its dashboard
+   only at `127.0.0.1:3001` on the server. `v0.6.5` is the current published
+   0.6.x release verified when this integration was implemented; update the pin
+   deliberately through a PR after validating a newer release.
 
 4. Reach the dashboard with an SSH tunnel rather than exposing it publicly:
 
@@ -90,6 +92,10 @@ are detected from OpenAI-compatible image content and can be routed separately
 with `FREELLMAPI_VISION_MODEL`. Once a stable model/profile has been benchmarked,
 pin either variable to that model/profile for more consistent scoring.
 
+Anthropic-compatible requests keep a Claude-family model name because
+FreeLLMAPI maps Claude families to its free pool by default. Direct fallback
+retains the original provider/model payload rather than the FreeLLMAPI rewrite.
+
 ## Immediate rollback
 
 No code revert and no n8n workflow edit is required.
@@ -129,7 +135,7 @@ changing provider-specific code.
 
 ## Security
 
-- FreeLLMAPI is bound to server loopback only (`127.0.0.1:3001`).
+- FreeLLMAPI is bound to server loopback only (`127.0.0.1:3001`) for host access.
 - n8n talks only to `llm-gateway` on the private Docker network.
 - Provider keys and the FreeLLMAPI unified key are never embedded in generated
   n8n workflow JSON.
