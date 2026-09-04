@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """Build the exact production workflow + compose artifacts in one deterministic pass.
 
-Historically CI and deploy each reimplemented a long, mutable sequence of string
-transforms. That allowed the two paths to drift and made the checked-in source a
-poor predictor of what actually ran. This script is now the single production
-build entrypoint. Both CI and deploy call it, consume its outputs, and verify the
-same manifest.
-
-The older upgrade modules remain as migration stages for now, but ordering lives
-in exactly one place and final workflow policy changes are applied structurally
-against parsed JSON rather than through another shell/string-patch chain.
+CI and deploy both consume the artifacts emitted here. The build also rewrites
+all external LLM HTTP nodes to the Docker-internal llm-gateway. Provider choice
+is then a runtime policy (FreeLLMAPI by default, direct providers as rollback),
+so changing providers never requires editing the n8n workflow itself.
 """
 from __future__ import annotations
 
@@ -24,6 +19,7 @@ from pathlib import Path
 BUILD_VERSION = "5"
 INTERNAL_SERVICE_ORIGIN = "http://shorts-compose:4000"
 PUBLIC_SERVICE_ORIGIN = "https://shorts.interviewbuddy.cloud"
+LLM_GATEWAY_ORIGIN = "http://llm-gateway:3100"
 
 
 def run(*args: str, cwd: Path) -> None:
@@ -44,6 +40,52 @@ def internalize_compose_service_urls(workflow: dict) -> None:
         value = params.get("url")
         if isinstance(value, str) and PUBLIC_SERVICE_ORIGIN in value:
             params["url"] = value.replace(PUBLIC_SERVICE_ORIGIN, INTERNAL_SERVICE_ORIGIN)
+
+
+def route_llm_http_nodes(workflow: dict) -> int:
+    """Route every first-party LLM HTTP request through our reversible gateway.
+
+    The gateway owns credentials and provider selection. n8n therefore never
+    needs FreeLLMAPI/provider keys and can switch between free-first and direct
+    mode by changing one runtime env var on the gateway/compose services.
+    """
+    routed = 0
+    targets = (
+        ("https://api.openai.com/v1/chat/completions", f"{LLM_GATEWAY_ORIGIN}/v1/chat/completions"),
+        ("https://api.openai.com/v1/responses", f"{LLM_GATEWAY_ORIGIN}/v1/responses"),
+        ("https://api.anthropic.com/v1/messages", f"{LLM_GATEWAY_ORIGIN}/v1/messages"),
+    )
+    for node in workflow.get("nodes", []):
+        params = node.get("parameters", {})
+        value = params.get("url")
+        if not isinstance(value, str):
+            continue
+        replacement = None
+        for external, internal in targets:
+            if value.startswith(external):
+                replacement = value.replace(external, internal, 1)
+                break
+        if replacement is None:
+            continue
+
+        params["url"] = replacement
+        params.pop("authentication", None)
+        params.pop("genericAuthType", None)
+        node.pop("credentials", None)
+
+        # Preserve content-type and any non-secret functional headers while
+        # making sure provider credentials cannot leak to the local gateway.
+        hp = params.get("headerParameters", {}).get("parameters", [])
+        if isinstance(hp, list):
+            params.setdefault("headerParameters", {})["parameters"] = [
+                h for h in hp
+                if str(h.get("name", "")).lower() not in {"authorization", "x-api-key"}
+            ]
+        routed += 1
+
+    workflow.setdefault("meta", {})["llm_gateway_transport"] = "docker_internal"
+    workflow["meta"]["llm_gateway_routed_nodes"] = routed
+    return routed
 
 
 def clean_visual_director_annotation_contract(workflow: dict) -> None:
@@ -139,6 +181,9 @@ def postprocess_workflow(path: Path) -> None:
     replace_merge_node(workflow)
     patch_publication_metadata(workflow)
     add_resolver_topology(workflow)
+    routed = route_llm_http_nodes(workflow)
+    if routed < 1:
+        raise RuntimeError("production workflow contains no routed LLM nodes; provider routing contract was lost")
     workflow.setdefault("meta", {})["production_build_version"] = BUILD_VERSION
     workflow["meta"]["compose_service_transport"] = "docker_internal"
     path.write_text(json.dumps(workflow, indent=2) + "\n")
@@ -191,6 +236,20 @@ def build(root: Path, output: Path) -> dict:
         raise RuntimeError("publication attribution propagation missing")
     if not resolver_url.startswith(INTERNAL_SERVICE_ORIGIN):
         raise RuntimeError(f"resolver still traverses public proxy: {resolver_url}")
+
+    routed_llm_nodes = 0
+    for node in workflow.get("nodes", []):
+        url = node.get("parameters", {}).get("url")
+        if not isinstance(url, str):
+            continue
+        if "api.openai.com" in url or "api.anthropic.com" in url:
+            raise RuntimeError(f"generated workflow bypasses internal LLM gateway: {node.get('name')} -> {url}")
+        if url.startswith(f"{LLM_GATEWAY_ORIGIN}/v1/"):
+            routed_llm_nodes += 1
+            if node.get("credentials"):
+                raise RuntimeError(f"provider credential leaked into gateway-routed node: {node.get('name')}")
+    if routed_llm_nodes != int(workflow.get("meta", {}).get("llm_gateway_routed_nodes", -1)) or routed_llm_nodes < 1:
+        raise RuntimeError("generated workflow LLM gateway routing count is inconsistent")
 
     compose_text = compose_out.read_text()
     resolver_text = resolver_out.read_text()
