@@ -49,10 +49,14 @@ jobs:
           cp /tmp/yt-shorts-production/brollResolver.js shorts-compose/brollResolver.js
 
           grep -q 'VISUAL_MATCHING_V4_COMPOSE' shorts-compose/compose.js
-          grep -q 'CATASTROPHIC_FINAL_QA_GATE' shorts-compose/compose.js
-          grep -q 'Final visual QA rejected catastrophic render defects' shorts-compose/compose.js
-          grep -q 'candidatePassesGate' shorts-compose/brollResolver.js
-          grep -q 'below_semantic_quality_gate' shorts-compose/brollResolver.js
+          grep -q 'NON_BLOCKING_FINAL_QA' shorts-compose/compose.js
+          grep -q 'publishing anyway' shorts-compose/compose.js
+          ! grep -q 'Final visual QA rejected catastrophic render defects' shorts-compose/compose.js
+          grep -q 'V5_ALWAYS_PUBLISH_BEST_AVAILABLE' shorts-compose/brollResolver.js
+          grep -q 'best_available_below_quality_target' shorts-compose/brollResolver.js
+          grep -q 'no_technically_usable_candidate' shorts-compose/brollResolver.js
+          ! grep -q 'V5_PROOF_MEDIA_TYPE_FILTER' shorts-compose/brollResolver.js
+          ! grep -q 'reason: state.budget_exhausted || "below_semantic_quality_gate"' shorts-compose/brollResolver.js
           grep -q 'deterministic_template_fallback' shorts-compose/brollResolver.js
           grep -q 'RESOLVE_DEADLINE_MS' shorts-compose/brollResolver.js
           ! grep -q 'annotation_plan' shorts-compose/brollResolver.js
@@ -105,6 +109,7 @@ jobs:
           assert 'useanimations.com (CC BY 4.0)' in names['Merge By scene_index (not position)']['parameters']['jsCode']
           tag=names['Tag B-roll']['parameters']['jsCode']
           assert "r.type==='template'" in tag and 'annotation_plan' not in tag
+          assert 'quality_gate_passed' in tag and 'selection_reason' in tag
           visual=names['Claude: Visual Director']['parameters']['jsonBody']
           assert 'Do NOT request callout boxes' in visual and 'locate callout boxes' not in visual
           print('Generated production workflow contract OK')
