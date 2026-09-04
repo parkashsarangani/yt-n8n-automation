@@ -49,9 +49,10 @@ services:
       - BROLL_LOCAL_RERANK_TIMEOUT_MS=${BROLL_LOCAL_RERANK_TIMEOUT_MS:-18000}
       - HF_CACHE_DIR=${HF_CACHE_DIR:-/app/data/hf-cache}
 
-      # V4 semantic gates are actual acceptance gates. If no real candidate
-      # clears them, one deterministic template fallback may be used (never the
-      # first frame); otherwise the run fails instead of publishing wrong stock.
+      # V4 quality targets. These thresholds drive ranking, retries, early
+      # acceptance and telemetry only. Missing the targets never makes a usable
+      # asset ineligible for publication; production falls back to a valid
+      # deterministic template or the best technically usable real asset.
       - BROLL_SCORE_THRESHOLD=${BROLL_SCORE_THRESHOLD:-72}
       - BROLL_FIRST_FRAME_THRESHOLD=${BROLL_FIRST_FRAME_THRESHOLD:-78}
       - BROLL_SEMANTIC_THRESHOLD=${BROLL_SEMANTIC_THRESHOLD:-82}
@@ -64,7 +65,9 @@ services:
 
       # Actual-video verification. V4 samples a chronological contact sheet from
       # shortlisted clips, asks vision for the visible matching interval, then
-      # materializes only that verified in/out range for composition.
+      # materializes only that verified in/out range for composition. For
+      # literal_video scenes, video is preferred but stills remain a graceful
+      # degradation path when no usable motion asset survives.
       - BROLL_VIDEO_VERIFY_TOP_N=${BROLL_VIDEO_VERIFY_TOP_N:-4}
       - BROLL_VIDEO_SAMPLE_FRAMES=${BROLL_VIDEO_SAMPLE_FRAMES:-12}
       - BROLL_MULTIFRAME_ENABLED=${BROLL_MULTIFRAME_ENABLED:-true}
@@ -93,9 +96,10 @@ services:
       - BROLL_VERIFIED_CACHE_DIR=${BROLL_VERIFIED_CACHE_DIR:-/app/outputs/broll-cache}
       - BROLL_CACHE_MAX_AGE_HOURS=${BROLL_CACHE_MAX_AGE_HOURS:-72}
 
-      # Tiered rendered-pixel QA after crop/captions/branding. Wrong/missing
-      # visuals, leaked debug UI, severe clipping or unreadable captions block
-      # publication. Mild aesthetic misses are logged as soft warnings.
+      # Tiered rendered-pixel QA after crop/captions/branding. Severe findings
+      # (wrong/missing visuals, leaked debug UI, clipping, unreadable captions)
+      # remain explicitly classified and logged, but QA is telemetry-only and
+      # never blocks an otherwise valid rendered Short from publishing.
       - BROLL_FINAL_QA_ENABLED=${BROLL_FINAL_QA_ENABLED:-true}
       - BROLL_FINAL_QA_REQUIRE_KEY=${BROLL_FINAL_QA_REQUIRE_KEY:-true}
       - BROLL_FINAL_QA_MIN_SCORE=${BROLL_FINAL_QA_MIN_SCORE:-78}
