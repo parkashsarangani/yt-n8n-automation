@@ -15,6 +15,7 @@ const DIRECT_OPENAI_ORIGIN = "https://api.openai.com/v1";
 const DIRECT_ANTHROPIC_ORIGIN = "https://api.anthropic.com/v1";
 const rawAxios = axios.create();
 let installed = false;
+let warnedMissingFreeKey = false;
 
 function isFreeMode() {
   return ROUTER_MODE !== "direct";
@@ -156,7 +157,13 @@ function installAxiosRouting() {
 
     const body = parseBody(config.data);
     if (!FREELLMAPI_API_KEY) {
-      if (FAIL_OPEN_TO_DIRECT) return config;
+      if (FAIL_OPEN_TO_DIRECT) {
+        if (!warnedMissingFreeKey) {
+          warnedMissingFreeKey = true;
+          console.warn("[llm-routing] FreeLLMAPI mode is enabled but FREELLMAPI_API_KEY is missing; paid direct fail-open is active until FreeLLMAPI is configured");
+        }
+        return config;
+      }
       throw new Error("FREELLMAPI_API_KEY is not configured and fail-open is disabled");
     }
 
