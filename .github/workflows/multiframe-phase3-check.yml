@@ -8,6 +8,7 @@ on:
       - 'shorts-compose/semanticReranker.js'
       - 'shorts-compose/visualBudget.js'
       - 'shorts-compose/tests/visual-matching.test.js'
+      - 'shorts-compose/tests/resolver-hard-gate.test.js'
       - 'scripts/build_production_artifacts.py'
       - 'scripts/resolver_v5_runtime.py'
       - 'scripts/visual_matching_v4_workflow.py'
@@ -45,7 +46,8 @@ jobs:
           grep -q 'verified_frame_indices' "$B"
           grep -q 'materializeVerifiedClip' "$B"
           grep -q 'actual_video_verified' "$B"
-          grep -q 'V5_PROOF_MEDIA_TYPE_FILTER' "$B"
+          grep -q 'V5_ALWAYS_PUBLISH_BEST_AVAILABLE' "$B"
+          ! grep -q 'V5_PROOF_MEDIA_TYPE_FILTER' "$B"
           if grep -q 'best_start_sec' "$B" || grep -q 'best_end_sec' "$B"; then
             echo 'free-form model trim timestamps reintroduced' >&2
             exit 1
@@ -59,7 +61,7 @@ jobs:
           import json
           w=json.load(open('/tmp/multiframe-production/workflow.json')); names={n['name']:n for n in w['nodes']}
           tag=names['Tag B-roll']['parameters']['jsCode']
-          for marker in ['frame_similarity','actual_video_verified','in_point_sec','out_point_sec','verified_frame_indices','asset_semantic_match']:
+          for marker in ['frame_similarity','actual_video_verified','in_point_sec','out_point_sec','verified_frame_indices','asset_semantic_match','quality_gate_passed','selection_reason']:
               assert marker in tag,marker
           resolver=names['Resolve B-roll']['parameters']['jsonBody']
           for marker in ['visual_claim','required_actions','retrieval_scene_count','retrieval_scene_position']:
@@ -68,7 +70,7 @@ jobs:
           print('V5 sampled-frame verification telemetry OK')
           PY
 
-      - name: Exercise sampled-frame range unit tests against production resolver
+      - name: Exercise sampled-frame range and publish-policy tests against production resolver
         run: |
           set -euo pipefail
           cp /tmp/multiframe-production/brollResolver.js shorts-compose/brollResolver.js
