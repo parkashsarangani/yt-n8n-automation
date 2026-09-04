@@ -20,6 +20,7 @@ BUILD_VERSION = "5"
 INTERNAL_SERVICE_ORIGIN = "http://shorts-compose:4000"
 PUBLIC_SERVICE_ORIGIN = "https://shorts.interviewbuddy.cloud"
 LLM_GATEWAY_ORIGIN = "http://llm-gateway:3100"
+REAL_MEDIA_MIX_GUARD = "V5_REAL_MEDIA_MIX_GUARD"
 
 
 def run(*args: str, cwd: Path) -> None:
@@ -111,6 +112,109 @@ def clean_visual_director_annotation_contract(workflow: dict) -> None:
     visual["parameters"]["jsonBody"] = body
 
 
+def enforce_real_media_mix(workflow: dict) -> None:
+    """Make real footage/imagery an episode invariant, independent of LLM quality.
+
+    FreeLLMAPI can route planning to different model families. A weaker planner
+    may ignore the prompt-level one-template cap and mark every scene as
+    kinetic_text/timeline/etc. The final validator therefore repairs that model
+    output deterministically before its existing contract checks run:
+
+    * the opening content scene is always real-media retrieval;
+    * at most one non-outro scene may remain a deterministic template;
+    * excess template scenes are converted to literal video when they require a
+      visible action, otherwise literal imagery;
+    * converted scenes get deterministic 2-5-word retrieval queries so the
+      existing stock-search validator cannot bounce them back to the model;
+    * the original graphic is retained only as a resolver fallback candidate,
+      subject to the existing one-fallback/never-scene-0 budget policy.
+    """
+    visual = node_by_name(workflow, "Claude: Visual Director")
+    body = str(visual.get("parameters", {}).get("jsonBody", ""))
+    prompt_anchor = (
+        "REMOTION TEMPLATE CAP: across the non-outro video, at most ONE scene may use visual_source=template "
+        "or a deterministic Remotion proof mode, and it must NEVER be scene_index 0. Scene 0 must be real/archive footage or imagery. "
+    )
+    real_media_rule = (
+        "REAL-MEDIA MAJORITY: scene 0 and all but at most ONE non-outro content scene MUST use real/archive retrieval. "
+        "Never use kinetic_text, timeline, map, diagram, comparison, or number_visualization merely as a convenient substitute when a real photo/video can carry the beat. "
+        "Famous or historical people, places, objects, and events should default to real/archive retrieval. "
+    )
+    if real_media_rule not in body:
+        if prompt_anchor not in body:
+            raise RuntimeError("Visual Director template-cap anchor missing; cannot install real-media majority rule")
+        body = body.replace(prompt_anchor, prompt_anchor + real_media_rule, 1)
+    visual["parameters"]["jsonBody"] = body
+
+    validator = node_by_name(workflow, "Validate Final Script")
+    code = str(validator.get("parameters", {}).get("jsCode", ""))
+    if REAL_MEDIA_MIX_GUARD not in code:
+        anchor = "// VISUAL_MATCHING_V4 contract gate."
+        if anchor not in code:
+            raise RuntimeError("final validator lost VISUAL_MATCHING_V4 gate; cannot install real-media mix guard")
+        guard = r'''// V5_REAL_MEDIA_MIX_GUARD: the episode visual mix is a deterministic runtime contract, not an LLM suggestion.
+const _vmTemplateModes=new Set(['comparison','number_visualization','kinetic_text','diagram','timeline','map']);
+const _vmTemplateNames=new Set(['comparison','stat_reveal','kinetic_text','diagram','timeline','map']);
+const _vmTemplatePriority={timeline:60,map:55,diagram:50,comparison:45,number_visualization:40,kinetic_text:20};
+const _vmIsOutro=(s)=>Boolean(s?.template_data?.is_outro);
+const _vmIsTemplate=(s)=>Boolean(s&&!_vmIsOutro(s)&&(s.visual_source==='template'||_vmTemplateModes.has(String(s.visual_proof_mode||''))));
+const _vmQuery=(value)=>String(value||'').toLowerCase().replace(/[^a-z0-9' -]+/g,' ').replace(/\s+/g,' ').trim().split(' ').filter(Boolean).slice(0,5).join(' ');
+const _vmEnsureQueries=(s)=>{
+  const queries=[];const seen=new Set();
+  const add=(value)=>{const q=_vmQuery(value);const words=q.split(/\s+/).filter(Boolean);if(words.length<2||words.length>5||seen.has(q))return;seen.add(q);queries.push(q);};
+  (Array.isArray(s.search_queries)?s.search_queries:[]).forEach(add);
+  add(s.stock_search_query);
+  const subject=String(s.named_subject||s.global_subject||s.point||'').trim();
+  const action=Array.isArray(s.required_actions)&&s.required_actions.length?String(s.required_actions[0]||'').trim():'';
+  const entity=Array.isArray(s.required_entities)&&s.required_entities.length?String(s.required_entities[0]||'').trim():'';
+  add([subject,action].filter(Boolean).join(' '));
+  add([subject,entity].filter(Boolean).join(' '));
+  add(s.visual_claim);
+  add(s.narration);
+  add(`${subject||'subject'} real footage`);
+  add(`${subject||'subject'} archival image`);
+  add(`${subject||'subject'} documentary view`);
+  s.search_queries=queries.slice(0,4);
+  if(s.search_queries.length<3){
+    ['real world footage','authentic archival image','documentary close view'].forEach(add);
+    s.search_queries=queries.slice(0,4);
+  }
+  s.stock_search_query=s.search_queries[0]||_vmQuery(`${subject||'subject'} real footage`);
+  if(!String(s.visual_prompt||'').trim())s.visual_prompt=String(s.visual_claim||s.stock_search_query||subject).trim();
+};
+const _vmDemote=(s,reason)=>{
+  const oldName=String(s?.template_name||'').trim();
+  const oldData=s?.template_data&&typeof s.template_data==='object'&&!s.template_data.is_outro?s.template_data:null;
+  if(oldName&&_vmTemplateNames.has(oldName)&&oldData&&!s.template_fallback)s.template_fallback={template_name:oldName,template_data:oldData};
+  const needsMotion=Array.isArray(s?.required_actions)&&s.required_actions.length>0;
+  s.visual_proof_mode=needsMotion?'literal_video':'literal_image';
+  s.visual_source='stock';s.visual_type='real';s.visual_mode=String(s.named_subject||'').trim()?'exact_real':'context_real';
+  delete s.template_name;delete s.template_data;
+  s.visual_mix_repair_reason=reason;
+  _vmEnsureQueries(s);
+};
+if(Array.isArray(parsed.scenes)){
+  const _vmContent=parsed.scenes.filter(s=>s&&!_vmIsOutro(s)).sort((a,b)=>Number(a?.scene_index??9999)-Number(b?.scene_index??9999));
+  // Any template with an invalid/non-deterministic proof mode is safer as real media.
+  _vmContent.filter(s=>s?.visual_source==='template'&&!_vmTemplateModes.has(String(s?.visual_proof_mode||''))).forEach(s=>_vmDemote(s,'invalid_template_mode_forced_real_media'));
+  const _vmOpening=_vmContent.find(s=>Number(s?.scene_index)===0)||_vmContent[0];
+  if(_vmOpening&&_vmIsTemplate(_vmOpening))_vmDemote(_vmOpening,'opening_scene_forced_real_media');
+  let _vmTemplates=_vmContent.filter(_vmIsTemplate);
+  if(_vmTemplates.length>1){
+    _vmTemplates.sort((a,b)=>(_vmTemplatePriority[String(b?.visual_proof_mode||'')]||0)-(_vmTemplatePriority[String(a?.visual_proof_mode||'')]||0)||Number(a?.scene_index??9999)-Number(b?.scene_index??9999));
+    const _vmKeep=_vmTemplates[0];
+    _vmTemplates.slice(1).forEach(s=>_vmDemote(s,`episode_template_cap_keep_scene_${Number(_vmKeep?.scene_index)}`));
+  }
+  _vmTemplates=_vmContent.filter(_vmIsTemplate);
+  const _vmReal=_vmContent.filter(s=>!_vmIsTemplate(s));
+  parsed.visual_mix_guard={version:'1',planned_template_count:_vmTemplates.length,planned_real_media_count:_vmReal.length,repaired_scene_indexes:_vmContent.filter(s=>s.visual_mix_repair_reason).map(s=>Number(s.scene_index))};
+}
+'''
+        code = code.replace(anchor, guard + "\n" + anchor, 1)
+    validator["parameters"]["jsCode"] = code
+    workflow.setdefault("meta", {})["real_media_mix_guard"] = "1"
+
+
 def clean_tag_broll(workflow: dict) -> None:
     """Consume verified-real images and deterministic fallback templates."""
     tag = node_by_name(workflow, "Tag B-roll")
@@ -177,6 +281,7 @@ def postprocess_workflow(path: Path) -> None:
     workflow = json.loads(path.read_text())
     internalize_compose_service_urls(workflow)
     clean_visual_director_annotation_contract(workflow)
+    enforce_real_media_mix(workflow)
     clean_tag_broll(workflow)
     replace_merge_node(workflow)
     patch_publication_metadata(workflow)
@@ -222,6 +327,14 @@ def build(root: Path, output: Path) -> dict:
     merge_code = node_by_name(workflow, "Merge By scene_index (not position)")["parameters"]["jsCode"]
     resolver_url = str(node_by_name(workflow, "Resolve B-roll")["parameters"].get("url", ""))
     visual_body = str(node_by_name(workflow, "Claude: Visual Director")["parameters"].get("jsonBody", ""))
+    validator_code = str(node_by_name(workflow, "Validate Final Script")["parameters"].get("jsCode", ""))
+    if workflow.get("meta", {}).get("real_media_mix_guard") != "1":
+        raise RuntimeError("generated workflow lost real-media mix guard metadata")
+    for marker in (REAL_MEDIA_MIX_GUARD, "opening_scene_forced_real_media", "episode_template_cap_keep_scene_", "planned_real_media_count", "_vmEnsureQueries"):
+        if marker not in validator_code:
+            raise RuntimeError(f"final validator missing real-media mix guard marker: {marker}")
+    if "REAL-MEDIA MAJORITY" not in visual_body:
+        raise RuntimeError("Visual Director lost explicit real-media majority instruction")
     if "annotation_plan" in tag_code or "annotations:" in tag_code:
         raise RuntimeError("production Tag B-roll still exposes legacy VLM annotations")
     if "visually locate callout boxes" in visual_body or "locate callout boxes on those pixels" in visual_body:
