@@ -19,12 +19,11 @@ n8n
        ├─ local semantic reranking
        ├─ VLM verification against exact scene contracts
        ├─ verified video-frame range materialization
-       ├─ deterministic Remotion proof templates when real media cannot
-       │    satisfy a support scene
+       ├─ deterministic Remotion proof templates when preferred/available
        ├─ FFmpeg composition + captions + audio + BT.709 normalization
        └─ final rendered-pixel QA
-            ├─ catastrophic defect => compose job FAILS, no upload
-            └─ soft aesthetic issue => warning/telemetry only
+            ├─ severe defect => explicit telemetry/warning
+            └─ softer aesthetic issue => telemetry/warning
   │
   └─ YouTube Data API — upload + metadata + AI-content disclosure
 ```
@@ -46,17 +45,22 @@ Each non-outro scene receives an executable visual contract:
 - `acceptable_visuals`
 - `visual_proof_mode`
 
-Real media is not accepted merely because it is topically related. A candidate
-must pass the configured overall, semantic, entity, action and relationship
-gates. If no real candidate clears those gates, a non-first-frame scene may use
-one deterministic template fallback for the entire Short. If neither acceptable
-real media nor an allowed fallback exists, the run fails instead of publishing a
-misleading visual.
+Real media is ranked against configured overall, semantic, entity, action and
+relationship quality targets. Those targets drive search retries, early
+acceptance and telemetry; they are **not publication eligibility gates**. If no
+real candidate clears the targets, the resolver prefers an allowed deterministic
+template fallback when one is available, otherwise it selects the highest-scoring
+technically usable real asset. A low model score therefore cannot fail a run by
+itself.
 
-`literal_video` proof modes are verified only against video candidates. Video
-candidates are downloaded locally before FFmpeg sampling, evaluated through a
-chronological contact sheet, and only the contiguous verified sample range is
-materialized into the final video.
+`literal_video` remains a strong preference rather than an availability gate.
+Video candidates are downloaded locally before FFmpeg sampling, evaluated
+through a chronological contact sheet, and only the contiguous verified sample
+range is materialized. If no usable motion candidate survives, a still can be
+used as graceful degradation rather than failing the scheduled Short.
+
+The resolver returns `ok:false` only when there is genuinely no technically
+usable media/template path left, not because an asset missed a quality score.
 
 ## Clean verified-real frames
 
@@ -77,7 +81,7 @@ The final renderer therefore does **not** draw:
 The complete verified image is preserved with `objectFit: contain` and a blurred
 canvas-fill copy behind it for the 9:16 frame.
 
-## Final QA and publication gate
+## Final QA is telemetry-only
 
 Final QA runs against representative frames from the **completed video**, after
 crop, captions and branding. It evaluates:
@@ -90,9 +94,15 @@ crop, captions and branding. It evaluates:
 - clipped/hidden critical evidence,
 - leaked debug or diagnostic UI.
 
-Catastrophic failures set `hard_failed=true`; `compose.js` throws and the n8n
-upload path is never reached. Lower-grade aesthetic findings remain soft warnings
-so a usable Short is not blocked merely for missing a polish target.
+The QA subsystem still classifies severe findings in `hard_issues` and softer
+findings in `soft_issues`, but these are severity labels for diagnostics and
+learning signals only. `compose.js` logs them and continues. A model timeout,
+frame-sampling failure, low semantic score, debug-artifact judgement, clipping
+judgement or layout judgement cannot block an otherwise successfully rendered
+Short from reaching the upload path.
+
+Only genuine production failures — for example inability to produce the final
+MP4 or absence of any technically usable scene representation — stop the run.
 
 ## Durable run budgets
 
@@ -164,8 +174,8 @@ scripts/build_production_artifacts.py
     Authoritative production artifact builder used by both CI and deploy.
 
 scripts/resolver_v5_runtime.py
-    V5 resolver runtime finalization: media-type filtering, video staging,
-    adaptive verifier budget and full-gate early acceptance.
+    V5 resolver runtime finalization: video staging, adaptive verifier budget,
+    target-based early acceptance and best-available publication fallback.
 
 shorts-compose/
     compose.js
