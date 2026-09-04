@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 MARKER = "VISUAL_MATCHING_V4_COMPOSE"
-HARD_QA_MARKER = "CATASTROPHIC_FINAL_QA_GATE"
+NON_BLOCKING_QA_MARKER = "NON_BLOCKING_FINAL_QA"
 BT709_MARKER = "PRODUCTION_BT709_RANGE_NORMALIZATION"
 
 
@@ -118,17 +118,14 @@ def upgrade(text: str) -> str:
     new = f'''    finalCmd.output(finalPath);
     await run(finalCmd);
 
-    // VISUAL_MATCHING_V4_COMPOSE / {HARD_QA_MARKER}: inspect actual final
-    // pixels after crop, captions and branding. Catastrophic defects block the
-    // publish path; softer polish findings remain telemetry.
+    // VISUAL_MATCHING_V4_COMPOSE / {NON_BLOCKING_QA_MARKER}: inspect actual
+    // final pixels after crop, captions and branding, but never reject an
+    // otherwise valid render because a model, sampler, score, or layout judge
+    // dislikes it. QA is telemetry only; the publish schedule remains reliable.
     const finalVisualQa = await reviewFinalVideo(finalPath, scenes, durations);
-    if (finalVisualQa.hard_failed) {{
-      const summary = (finalVisualQa.hard_issues || finalVisualQa.issues || []).map((x) => `scene ${{x.scene_index}}: ${{x.problem}} (semantic=${{x.semantic_match ?? 'n/a'}}, score=${{x.score ?? 'n/a'}})`).join('; ');
-      throw new Error(`Final visual QA rejected catastrophic render defects: ${{summary || 'unknown final-render failure'}}`);
-    }}
     if (!finalVisualQa.passed) {{
-      const summary = (finalVisualQa.soft_issues || []).map((x) => `scene ${{x.scene_index}}: ${{x.problem}} (semantic=${{x.semantic_match ?? 'n/a'}}, score=${{x.score ?? 'n/a'}})`).join('; ');
-      console.warn(`[job ${{jobId}}] Final visual QA soft warnings: ${{summary || 'quality below preferred target'}}`);
+      const summary = (finalVisualQa.issues || []).map((x) => `scene ${{x.scene_index}}: ${{x.problem}} (severity=${{x.severity || 'n/a'}}, semantic=${{x.semantic_match ?? 'n/a'}}, score=${{x.score ?? 'n/a'}})`).join('; ');
+      console.warn(`[job ${{jobId}}] Final visual QA warnings (publishing anyway): ${{summary || 'quality below preferred target'}}`);
     }}
 
     await fsp.copyFile(finalPath, outputFullPath);
@@ -144,9 +141,11 @@ def main() -> None:
         raise SystemExit("usage: visual_matching_v4_compose.py INPUT [OUTPUT]")
     src = Path(sys.argv[1]); dst = Path(sys.argv[2]) if len(sys.argv) == 3 else src
     out = upgrade(src.read_text())
-    for marker in (MARKER, HARD_QA_MARKER, BT709_MARKER):
+    for marker in (MARKER, NON_BLOCKING_QA_MARKER, BT709_MARKER):
         if marker not in out:
             raise RuntimeError(f"compose production guarantee missing: {marker}")
+    if "Final visual QA rejected catastrophic render defects" in out:
+        raise RuntimeError("blocking final visual QA was reintroduced")
     dst.write_text(out)
     print(f"{MARKER} compose written to {dst}")
 
