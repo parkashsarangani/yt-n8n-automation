@@ -41,10 +41,30 @@ def internalize_compose_service_urls(workflow: dict) -> None:
     """Keep n8n->compose traffic on the Docker network, never the public proxy."""
     for node in workflow.get("nodes", []):
         params = node.get("parameters", {})
-        for key in ("url",):
-            value = params.get(key)
-            if isinstance(value, str) and PUBLIC_SERVICE_ORIGIN in value:
-                params[key] = value.replace(PUBLIC_SERVICE_ORIGIN, INTERNAL_SERVICE_ORIGIN)
+        value = params.get("url")
+        if isinstance(value, str) and PUBLIC_SERVICE_ORIGIN in value:
+            params["url"] = value.replace(PUBLIC_SERVICE_ORIGIN, INTERNAL_SERVICE_ORIGIN)
+
+
+def clean_visual_director_annotation_contract(workflow: dict) -> None:
+    """Redefine annotated_real as a clean verified still, not a CV overlay task."""
+    visual = node_by_name(workflow, "Claude: Visual Director")
+    body = str(visual.get("parameters", {}).get("jsonBody", ""))
+    legacy = (
+        "annotated_real MUST remain a real-media retrieval scene, not a template at planning time: "
+        "the resolver will select the exact real image, visually locate callout boxes on those pixels, "
+        "then convert it into the annotated_real Remotion composition."
+    )
+    replacement = (
+        "annotated_real MUST remain a real-media retrieval scene, not a template at planning time: "
+        "the resolver selects and visually verifies the exact real image, then the renderer presents that verified image cleanly. "
+        "Do NOT request callout boxes, labels, coordinates, arrows, diagnostic overlays, or explanatory UI for annotated_real."
+    )
+    if legacy in body:
+        body = body.replace(legacy, replacement, 1)
+    # Also catch older wording variants without weakening the proof-mode name.
+    body = body.replace("visually locate callout boxes on those pixels, then convert it into the annotated_real Remotion composition", "visually verify those pixels, then render the real image cleanly without diagnostic overlays")
+    visual["parameters"]["jsonBody"] = body
 
 
 def clean_tag_broll(workflow: dict) -> None:
@@ -117,6 +137,7 @@ def add_resolver_topology(workflow: dict) -> None:
 def postprocess_workflow(path: Path) -> None:
     workflow = json.loads(path.read_text())
     internalize_compose_service_urls(workflow)
+    clean_visual_director_annotation_contract(workflow)
     clean_tag_broll(workflow)
     replace_merge_node(workflow)
     patch_publication_metadata(workflow)
@@ -157,8 +178,13 @@ def build(root: Path, output: Path) -> dict:
     tag_code = node_by_name(workflow, "Tag B-roll")["parameters"]["jsCode"]
     merge_code = node_by_name(workflow, "Merge By scene_index (not position)")["parameters"]["jsCode"]
     resolver_url = str(node_by_name(workflow, "Resolve B-roll")["parameters"].get("url", ""))
+    visual_body = str(node_by_name(workflow, "Claude: Visual Director")["parameters"].get("jsonBody", ""))
     if "annotation_plan" in tag_code or "annotations:" in tag_code:
         raise RuntimeError("production Tag B-roll still exposes legacy VLM annotations")
+    if "callout boxes" in visual_body or "locate callout" in visual_body:
+        raise RuntimeError("production Visual Director still requests CV callout geometry")
+    if "Do NOT request callout boxes" not in visual_body:
+        raise RuntimeError("verified-real clean-frame contract missing from Visual Director")
     if "deterministic fallback" not in tag_code or "r.type==='template'" not in tag_code:
         raise RuntimeError("production Tag B-roll does not consume deterministic resolver fallback")
     if "publication_description" not in merge_code or "_attribution" not in merge_code:
@@ -174,10 +200,9 @@ def build(root: Path, output: Path) -> dict:
     for marker in ("candidatePassesGate", "below_semantic_quality_gate", "deterministic_template_fallback", "RESOLVE_DEADLINE_MS"):
         if marker not in resolver_text:
             raise RuntimeError(f"resolver artifact missing {marker}")
-    if "normalizeAnnotationPlan" in resolver_text or "return annotations as an array" in resolver_text:
+    if "normalizeAnnotationPlan" in resolver_text or "return annotations as an array" in resolver_text or "annotation_plan" in resolver_text:
         raise RuntimeError("resolver artifact still generates annotation geometry")
 
-    # Intermediate files are intentionally not deployable artifacts.
     for stage in stages:
         stage.unlink(missing_ok=True)
 
