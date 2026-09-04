@@ -1,4 +1,4 @@
-name: Validate Retrieval Recall V4
+name: Validate Retrieval Recall V5
 
 on:
   pull_request:
@@ -6,8 +6,10 @@ on:
       - 'shorts-compose/brollResolver.js'
       - 'shorts-compose/semanticReranker.js'
       - 'shorts-compose/clipLibrary.js'
+      - 'shorts-compose/visualBudget.js'
+      - 'scripts/build_production_artifacts.py'
+      - 'scripts/resolver_v5_runtime.py'
       - 'scripts/visual_matching_v4_workflow.py'
-      - 'scripts/upgrade-compose-runtime-hardening.py'
       - 'docker-compose.yml'
       - '.github/workflows/deploy.yml'
       - '.github/workflows/retrieval-recall-check.yml'
@@ -20,37 +22,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify generated workflow semantic source contract
+      - name: Build authoritative production artifacts
         run: |
           set -euo pipefail
-          python3 scripts/upgrade-viral-shorts.py n8n/workflow.json /tmp/t1.json
-          python3 scripts/upgrade-creative-system.py /tmp/t1.json /tmp/t2.json
-          python3 scripts/visual_matching_v4_workflow.py /tmp/t2.json /tmp/t2v4.json
-          python3 scripts/upgrade-workflow-api-budget.py /tmp/t2v4.json /tmp/t3.json
-          python3 scripts/upgrade-topic-latency.py /tmp/t3.json /tmp/t4.json
-          python3 scripts/upgrade-anthropic-parser.py /tmp/t4.json /tmp/final.json
+          rm -rf /tmp/retrieval-production
+          python3 scripts/build_production_artifacts.py --output-dir /tmp/retrieval-production
+
+      - name: Verify generated workflow semantic source contract
+        run: |
           python3 - <<'PY'
           import json
-          w=json.load(open('/tmp/final.json')); names={n['name']:n for n in w['nodes']}
+          w=json.load(open('/tmp/retrieval-production/workflow.json')); names={n['name']:n for n in w['nodes']}
           visual=names['Claude: Visual Director']['parameters']['jsonBody']; validator=names['Validate Final Script']['parameters']['jsCode']; resolver=names['Resolve B-roll']['parameters']['jsonBody']
           assert 'VISUAL_MATCHING_V4' in visual
           for f in ['visual_claim','required_entities','required_actions','required_relationships','forbidden_visuals','visual_proof_mode']:
               assert f in visual and f in resolver,f
           assert 'VISUAL_MATCHING_V4 contract gate' in validator
-          print('V4 workflow source contract OK')
+          assert 'Do NOT request callout boxes' in visual
+          assert names['Resolve B-roll']['parameters']['url'].startswith('http://shorts-compose:4000/')
+          print('V5 workflow source contract OK')
           PY
 
-      - name: Verify bounded multi-source resolver
+      - name: Verify bounded multi-source hard-gated resolver
         run: |
           set -euo pipefail
-          cp shorts-compose/compose.js /tmp/compose.js
-          cp shorts-compose/brollResolver.js /tmp/broll.js
-          python3 scripts/upgrade-compose-creative-system.py /tmp/compose.js
-          python3 scripts/upgrade-compose-api-budget.py /tmp/compose.js /tmp/broll.js
-          python3 scripts/upgrade-compose-runtime-hardening.py /tmp/broll.js
-          for marker in VISUAL_MATCHING_V4 RETRIEVAL_RECALL_PHASE2 SOURCE_QUERY_COMPILER_V1 fromPexelsVideos fromPixabayVideos fromPixabayPhotos fromWikimediaCommons CANDIDATE_POOL_MAX localSemanticRerank diversifyCandidates; do grep -q "$marker" /tmp/broll.js; done
+          B=/tmp/retrieval-production/brollResolver.js
+          for marker in VISUAL_MATCHING_V4 RETRIEVAL_RECALL_PHASE2 SOURCE_QUERY_COMPILER_V1 fromPexelsVideos fromPixabayVideos fromPixabayPhotos fromWikimediaCommons CANDIDATE_POOL_MAX localSemanticRerank diversifyCandidates candidatePassesGate below_semantic_quality_gate deterministic_template_fallback RESOLVER_V5_RUNTIME V5_VIDEO_SAMPLE_STAGING V5_PROOF_MEDIA_TYPE_FILTER; do grep -q "$marker" "$B"; done
+          ! grep -q 'annotation_plan' "$B"
           grep -q 'BROLL_RUN_MAX_VISION_CALLS || 28' shorts-compose/visualBudget.js
-          node --check /tmp/broll.js
+          grep -q 'durable_state: true' shorts-compose/visualBudget.js
+          node --check "$B"
           node --check shorts-compose/semanticReranker.js
           node --check shorts-compose/clipLibrary.js
 
@@ -59,9 +60,8 @@ jobs:
           set -euo pipefail
           grep -q 'PIXABAY_KEY=${PIXABAY_KEY:-}' docker-compose.yml
           grep -q 'BROLL_RUN_MAX_VISION_CALLS=${BROLL_RUN_MAX_VISION_CALLS:-28}' docker-compose.yml
+          grep -q 'BROLL_BUDGET_STATE_PATH=${BROLL_BUDGET_STATE_PATH:-/app/data/visual_budget_state.json}' docker-compose.yml
           grep -q 'PIXABAY_KEY: ${{ secrets.PIXABAY_KEY }}' .github/workflows/deploy.yml
 
       - name: Run full production preflight
-        run: |
-          set -euo pipefail
-          python3 scripts/preprod-audit.py
+        run: python3 scripts/preprod-audit.py
