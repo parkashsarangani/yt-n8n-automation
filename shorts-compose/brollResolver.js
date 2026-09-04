@@ -21,6 +21,7 @@ const {
   buildVisualContract,
   buildScoringTarget,
   shouldPreferTemplate,
+  passesSemanticGate,
 } = require("./visualContract");
 const { localSemanticRerank, diversifyCandidates } = require("./semanticReranker");
 const library = require("./clipLibrary");
@@ -54,18 +55,16 @@ const INITIAL_SEARCH_QUERIES = Math.max(1, Number(process.env.BROLL_INITIAL_SEAR
 const MAX_SEARCH_QUERIES = Math.max(INITIAL_SEARCH_QUERIES, Number(process.env.BROLL_MAX_SEARCH_QUERIES || 5));
 const CANDIDATE_POOL_MAX = Math.max(20, Number(process.env.BROLL_CANDIDATE_POOL_MAX || 80));
 const MAX_RELEVANCE_RETRY_ROUNDS = Math.max(0, Number(process.env.BROLL_MAX_RELEVANCE_RETRY_ROUNDS || 2));
-// The public endpoint sits behind a proxy/tunnel with its own timeout
-// (commonly ~100s for a Cloudflare-fronted domain) shorter than n8n's own
-// 180s node-level timeout. A retry round that runs candidate search + paid
-// vision scoring can genuinely take tens of seconds, so a hard round count
-// alone isn't enough - a wall-clock budget keeps a single resolveBroll call
-// from ever running long enough to get its connection reset by an
-// intermediary that was never told about the retry loop.
 const RELEVANCE_RETRY_WALL_CLOCK_MS = Math.max(10000, Number(process.env.BROLL_RELEVANCE_RETRY_WALL_CLOCK_MS || 65000));
+// n8n now calls this service over the Docker network rather than through the
+// public reverse proxy, but the resolver still has an absolute deadline so a
+// slow external source/model can never pin a workflow indefinitely.
+const RESOLVE_DEADLINE_MS = Math.max(30000, Number(process.env.BROLL_RESOLVE_DEADLINE_MS || 135000));
 const OUTPUT_DIR = process.env.OUTPUT_DIR || "/outputs";
 const VERIFIED_CACHE_DIR = process.env.BROLL_VERIFIED_CACHE_DIR || path.join(OUTPUT_DIR, "broll-cache");
 const VERIFIED_PUBLIC_BASE = String(process.env.BROLL_PUBLIC_BASE_URL || "http://127.0.0.1:4000/outputs").replace(/\/$/, "");
 const VERIFIED_CACHE_MAX_AGE_HOURS = Number(process.env.BROLL_CACHE_MAX_AGE_HOURS || 72);
+const ALLOWED_FALLBACK_TEMPLATES = new Set(["stat_reveal", "comparison", "kinetic_text", "map", "timeline", "diagram"]);
 
 async function safeGet(url, config = {}, timeout = 15000) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -188,11 +187,6 @@ async function fromUnsplash(query) {
 
 function stripHtml(v) { return String(v || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(); }
 
-// Openverse aggregates CC-licensed images across many open collections
-// (Flickr Commons, museums, GLAM institutions, etc). No API key required for
-// anonymous use. license_type=commercial,modification restricts results to
-// licenses that permit both the channel's commercial use and the color
-// grading/cropping this pipeline applies to every stock frame.
 async function fromOpenverse(query) {
   if (!query) return [];
   const d = await safeGet(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${Math.min(20, SOURCE_PER_QUERY)}&license_type=commercial,modification&mature=false`, { headers: { "User-Agent": "yt-shorts-broll/1.0 (contact: channel owner)" } });
@@ -207,9 +201,6 @@ async function fromOpenverse(query) {
   }).filter(Boolean);
 }
 
-// NASA's public image/video library - all content is either public domain
-// or covered by NASA's media usage guidelines (free use, attribution
-// requested but not legally required for most items). No API key required.
 async function fromNasaImages(query) {
   if (!query) return [];
   const d = await safeGet(`https://images-api.nasa.gov/search?q=${encodeURIComponent(query)}&media_type=image`, {}, 20000);
@@ -309,44 +300,29 @@ function normalizeScore(parsed, candidate) {
   return result;
 }
 
-function normalizeAnnotationPlan(raw) {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  for (const item of raw.slice(0, 6)) {
-    const label = String(item?.label || "").replace(/\s+/g, " ").trim().slice(0, 80);
-    const x = Number(item?.x_pct), y = Number(item?.y_pct);
-    if (!label || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 100 || y < 0 || y > 100) continue;
-    const w = Number(item?.w_pct), h = Number(item?.h_pct);
-    out.push({
-      label,
-      x_pct: Number(x.toFixed(2)),
-      y_pct: Number(y.toFixed(2)),
-      w_pct: Number.isFinite(w) ? Number(Math.max(3, Math.min(55, w)).toFixed(2)) : 16,
-      h_pct: Number.isFinite(h) ? Number(Math.max(3, Math.min(55, h)).toFixed(2)) : 12,
-    });
-  }
-  return out;
+function remainingDeadlineMs(state) {
+  if (!state?.deadline_at) return 45000;
+  return Math.max(0, Number(state.deadline_at) - Date.now());
 }
 
 async function askVision(imageUrl, prompt, maxTokens, state, cacheParts = []) {
   if (!OPENAI_KEY || !imageUrl) return null;
   const key = cacheKey([VISION_MODEL, ...cacheParts, prompt]);
   const cached = getCachedResult(key); if (cached) { state.cache_hits++; return cached; }
+  const remaining = remainingDeadlineMs(state);
+  if (remaining < 1200) { state.budget_exhausted = "resolver_deadline_exhausted"; return null; }
   const reservation = reserveVisionCall(state.run_id, state.scene_budget);
   if (!reservation.allowed) { state.budget_exhausted = reservation.reason; return null; }
   try {
     const r = await axios.post("https://api.openai.com/v1/chat/completions", {
       model: VISION_MODEL, max_completion_tokens: maxTokens, reasoning_effort: "none", response_format: { type: "json_object" },
       messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: imageUrl } }, { type: "text", text: prompt }] }],
-    }, { timeout: 45000, headers: { Authorization: `Bearer ${OPENAI_KEY}`, "content-type": "application/json" } });
+    }, { timeout: Math.max(1000, Math.min(45000, remaining - 500)), headers: { Authorization: `Bearer ${OPENAI_KEY}`, "content-type": "application/json" } });
     const parsed = parseJsonObject(r.data?.choices?.[0]?.message?.content || "", null); if (parsed) putCachedResult(key, parsed); return parsed;
   } catch { return null; }
 }
 
 function visualContractPrompt(contract, { firstFrame = false, videoContactSheet = false } = {}) {
-  const annotationInstruction = contract.visual_proof_mode === "annotated_real" && !videoContactSheet
-    ? "Also return annotations as an array of 1-6 visible callouts: {label,x_pct,y_pct,w_pct,h_pct}. Coordinates and box sizes are percentages of THIS EXACT ORIGINAL IMAGE. Center each box on a visibly present required entity/detail; never invent an off-image target."
-    : "";
   return [
     "Judge whether the ACTUAL pixels communicate the exact narrated beat, not merely the broad topic.",
     `VISUAL CONTRACT: ${buildScoringTarget(contract)}`,
@@ -355,14 +331,12 @@ function visualContractPrompt(contract, { firstFrame = false, videoContactSheet 
     videoContactSheet ? "This is a chronological contact sheet from one video. Identify ONLY a contiguous set of sampled frames that visibly proves the contract." : "Evaluate exactly what is shown.",
     "Return ONLY JSON with 0-100 semantic_match, entity_match, action_match, relationship_match, relevance, scroll_stop, mobile_clarity, composition, motion_energy, uniqueness, overall, reason.",
     videoContactSheet ? "Also return match:boolean and best_frame_indices:number[] using zero-based row-major frame indices. The indices MUST be non-empty and contiguous; do not return free-form trim timestamps." : "",
-    annotationInstruction,
     "If the required action/relationship is absent, semantic_match MUST be below 70.",
   ].filter(Boolean).join(" ");
 }
 
 function runFfmpeg(args, timeout = 90000) { return new Promise((resolve, reject) => execFile(ffmpegPath, args, { timeout, maxBuffer: 6 * 1024 * 1024 }, (err, stdout, stderr) => err ? reject(new Error(String(stderr || err.message).slice(-1500))) : resolve({ stdout, stderr }))); }
 
-// sampleVideoContactSheet: actual multi-frame verification, not thumbnail inference.
 async function sampleVideoContactSheet(candidate) {
   const duration = Number(candidate.duration || 0); if (!duration || duration < 0.5) return null;
   const cols = 4, rows = Math.ceil(VIDEO_SAMPLE_FRAMES / cols), fps = Math.max(0.05, VIDEO_SAMPLE_FRAMES / duration);
@@ -406,11 +380,6 @@ async function verifyVideoCandidate(candidate, contract, opts, state) {
   const parsed = await askVision(sheet.imageUrl, `${visualContractPrompt(contract, { ...opts, videoContactSheet: true })} Sample frame center-times row-major: ${sheet.timestamps.join(", ")} seconds.`, 420, state, [candidate.url, "video"]);
   if (!parsed) return { ok: false, reason: state.budget_exhausted || "video_visual_verifier_failed" };
   const dimensions = normalizeScore(parsed, candidate);
-  // No relevance gate here by design: every technically usable candidate is
-  // scored and ranked, never rejected for scoring low - the highest-scoring
-  // candidate always wins (see the `best` selection below). Only genuine
-  // technical failures (sampling, verification, or a missing frame range)
-  // return ok:false.
   const r = verifiedRangeFromFrameIndices(parsed.best_frame_indices, sheet.timestamps, candidate.duration);
   if (!r) return { ok: false, reason: "video_verified_frame_range_missing", ...dimensions, sampled_timestamps: sheet.timestamps };
   return { ok: true, ...dimensions, frame_similarity: dimensions.semantic_match, verified_start_sec: r.start, verified_end_sec: r.end, verified_frame_indices: r.indices, sampled_timestamps: sheet.timestamps };
@@ -418,10 +387,8 @@ async function verifyVideoCandidate(candidate, contract, opts, state) {
 
 async function scoreImageCandidate(candidate, contract, opts, state) {
   const encoded = await fetchImageAsBase64(candidate.url || candidate.thumb); if (!encoded) return normalizeScore({}, candidate);
-  const parsed = await askVision(`data:${encoded.mime};base64,${encoded.data}`, visualContractPrompt(contract, opts), contract.visual_proof_mode === "annotated_real" ? 440 : 300, state, [candidate.url, "image", contract.visual_proof_mode]);
-  const dimensions = normalizeScore(parsed || {}, candidate);
-  if (contract.visual_proof_mode === "annotated_real") dimensions.annotation_plan = normalizeAnnotationPlan(parsed?.annotations);
-  return dimensions;
+  const parsed = await askVision(`data:${encoded.mime};base64,${encoded.data}`, visualContractPrompt(contract, opts), 300, state, [candidate.url, "image", contract.visual_proof_mode]);
+  return normalizeScore(parsed || {}, candidate);
 }
 
 async function cleanupVerifiedCache() {
@@ -448,7 +415,7 @@ async function materializeVerifiedImage(candidate) {
   if (!buf.length || buf.length > 16 * 1024 * 1024 || !mime.startsWith("image/")) throw new Error("verified image download invalid");
   const ext = imageExtensionForMime(mime);
   const key = crypto.createHash("sha256").update(String(candidate.url)).digest("hex").slice(0, 24);
-  const filename = `annotated_${key}.${ext}`;
+  const filename = `verified_image_${key}.${ext}`;
   const dest = path.join(VERIFIED_CACHE_DIR, filename);
   if (!fs.existsSync(dest) || fs.statSync(dest).size < 1024) {
     const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`;
@@ -470,6 +437,53 @@ function metadataOverlap(candidate, target) { const ws = [...words(target)], hay
 function cheapSemanticRank(candidate, contract) { const target = buildScoringTarget(contract), lexical = metadataOverlap(candidate, target), portrait = candidate.height && candidate.width && candidate.height >= candidate.width ? 2 : 0, exact = contract.subject && String(candidate.alt || "").toLowerCase().includes(contract.subject.toLowerCase()) ? 4 : 0, motion = candidate.type === "video" && contract.visual_proof_mode === "literal_video" ? 2 : 0; return lexical * 4 + portrait + exact + motion; }
 function summarizeCandidate(best) { return best ? { type: best.type, source: best.source, score: best.score, semantic_match: best.semantic_match, entity_match: best.entity_match, action_match: best.action_match, relationship_match: best.relationship_match, relevance: best.relevance, scroll_stop: best.scroll_stop, mobile_clarity: best.mobile_clarity, local_similarity: best.local_similarity ?? null, frame_similarity: best.frame_similarity ?? null } : null; }
 
+function candidatePassesGate(candidate, contract, threshold) {
+  if (!candidate || candidate.rejected || Number(candidate.score || 0) < Number(threshold || 0)) return false;
+  return passesSemanticGate(candidate, contract, {
+    semantic: SEMANTIC_THRESHOLD,
+    entity: ENTITY_THRESHOLD,
+    action: ACTION_THRESHOLD,
+    relationship: RELATIONSHIP_THRESHOLD,
+  });
+}
+
+function normalizeTemplateFallback(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const templateName = String(raw.template_name || "").trim();
+  const templateData = raw.template_data && typeof raw.template_data === "object" ? raw.template_data : null;
+  if (!ALLOWED_FALLBACK_TEMPLATES.has(templateName) || !templateData) return null;
+  return { template_name: templateName, template_data: templateData };
+}
+
+function templateFallbackResult(input, contract, state, best, threshold, budget) {
+  const fallback = normalizeTemplateFallback(input.template_fallback);
+  if (!fallback) return null;
+  const reservation = reserveTemplateFallback(state.run_id, input.scene_index, {
+    first_frame: input.first_frame === true || Number(input.scene_index) === 0,
+    planned_template_count: Number(input.planned_template_count || 0),
+  });
+  if (!reservation.allowed) return null;
+  return {
+    ok: true,
+    type: "template",
+    visual_source: "template",
+    template_name: fallback.template_name,
+    template_data: fallback.template_data,
+    source: "deterministic_template_fallback",
+    fallback_reason: "real_media_below_semantic_gate",
+    score: Number(best?.score || 0),
+    semantic_match: Number(best?.semantic_match || 0),
+    entity_match: Number(best?.entity_match || 0),
+    action_match: Number(best?.action_match || 0),
+    relationship_match: Number(best?.relationship_match || 0),
+    threshold,
+    recommended_visual_proof_mode: contract.visual_proof_mode,
+    visual_contract: contract,
+    attribution: "",
+    ...budget,
+  };
+}
+
 async function resolveBroll(input = {}) {
   const resolveStartedAt = Date.now();
   const contract = buildVisualContract(input), desc = String(input.description || input.query || input.subject || "").trim(), subj = String(input.subject || input.named_subject || "").trim(), target = buildScoringTarget(contract) || desc || subj;
@@ -478,7 +492,13 @@ async function resolveBroll(input = {}) {
   if (input.prefer_template === true && shouldPreferTemplate(contract)) return { ok: false, reason: "representation_prefers_template", recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract };
 
   const isFirstFrame = input.first_frame === true || Number(input.scene_index) === 0, threshold = isFirstFrame ? FIRST_FRAME_THRESHOLD : SCORE_THRESHOLD;
-  const state = { run_id: String(input.run_id || "").trim(), scene_budget: { used: 0, limit: getSceneLimit(isFirstFrame) }, cache_hits: 0, budget_exhausted: null };
+  const state = {
+    run_id: String(input.run_id || "").trim(),
+    scene_budget: { used: 0, limit: getSceneLimit(isFirstFrame, { run_id: input.run_id, retrieval_scene_count: input.retrieval_scene_count, retrieval_scene_position: input.retrieval_scene_position }) },
+    cache_hits: 0,
+    budget_exhausted: null,
+    deadline_at: resolveStartedAt + RESOLVE_DEADLINE_MS,
+  };
   const recent = await library.recentUrls();
   const reusable = await library.findReusable(contract, recent);
   let candidates = reusable.map((r) => ({ ...r, source: `library:${r.source || "proven"}`, alt: r.contract_text, query: queryList[0], library_hit: true }));
@@ -488,89 +508,97 @@ async function resolveBroll(input = {}) {
   const scored = []; let videoCalls = 0;
   const scoredUrls = new Set();
 
-  // RELEVANCE_RETRY_V1: a single search+score pass can land on a technically
-  // usable candidate that still doesn't actually satisfy the scene's visual
-  // claim (a low semantic/entity match). Rather than accept that first pass
-  // outright or hard-fail the scene, spend up to MAX_RELEVANCE_RETRY_ROUNDS
-  // extra rounds pulling from queries not yet tried (the initial gather loop
-  // below usually stops well short of the full query list, once it has
-  // "enough" candidates by count) before settling for the best candidate
-  // found across every round.
   for (let retryRound = 0; retryRound <= MAX_RELEVANCE_RETRY_ROUNDS; retryRound++) {
-  for (; queryCursor < queryList.length && candidates.length < CANDIDATE_POOL_MAX; queryCursor += INITIAL_SEARCH_QUERIES) {
-    const batch = queryList.slice(queryCursor, queryCursor + INITIAL_SEARCH_QUERIES); if (!batch.length) break;
-    searchRounds++; queriesTried.push(...batch);
-    const external = await collectCandidates(batch, subj);
-    candidates = dedupeCandidates([...candidates, ...external]).filter((c) => !recent.has(c.url) || c.library_hit).slice(0, CANDIDATE_POOL_MAX);
-    if (candidates.length >= VISION_TOP_N * 2) break;
-  }
-  if (contract.visual_proof_mode === "annotated_real") candidates = candidates.filter((c) => c.type === "image");
-  if (!candidates.length) return { ok: false, reason: contract.visual_proof_mode === "annotated_real" ? "no_annotatable_image_candidates" : "no_candidates", threshold, queries_tried: queriesTried, visual_contract: contract };
-
-  candidates = await localSemanticRerank(candidates, target, contract.acceptable_visuals || []);
-  candidates = diversifyCandidates(candidates, Math.max(VISION_TOP_N * 2, 16));
-  candidates.sort((a, b) => {
-    const la = Number.isFinite(Number(a.local_similarity)) ? Number(a.local_similarity) : -1, lb = Number.isFinite(Number(b.local_similarity)) ? Number(b.local_similarity) : -1;
-    if (la !== lb) return lb - la; return cheapSemanticRank(b, contract) - cheapSemanticRank(a, contract);
-  });
-
-  const mixed = [], add = (c) => { if (c && !scoredUrls.has(c.url) && !mixed.some((x) => x.url === c.url)) mixed.push(c); };
-  candidates.filter((c) => c.source === "wikipedia" || c.source === "wikimedia").slice(0, 1).forEach(add);
-  const videos = candidates.filter((c) => c.type === "video"), photos = candidates.filter((c) => c.type !== "video" && c.source !== "wikipedia" && c.source !== "wikimedia");
-  for (let i = 0; mixed.length < VISION_TOP_N && (i < videos.length || i < photos.length); i++) { add(videos[i]); if (mixed.length < VISION_TOP_N) add(photos[i]); }
-  candidates.forEach((c) => { if (mixed.length < VISION_TOP_N) add(c); });
-
-  for (const c of mixed) {
-    if (state.budget_exhausted) break;
-    scoredUrls.add(c.url);
-    const reusableAnnotated = contract.visual_proof_mode !== "annotated_real" || (Array.isArray(c.annotation_plan) && c.annotation_plan.length > 0 && c.local_path && fs.existsSync(c.local_path));
-    if (c.library_hit && Number(c.semantic_match || 0) >= 88 && reusableAnnotated) { scored.push({ ...c, score: Number(c.score || c.semantic_match), rejected: false }); continue; }
-    if (c.type === "video") {
-      if (videoCalls++ >= VIDEO_VERIFY_TOP_N) continue;
-      const verification = await verifyVideoCandidate(c, contract, { firstFrame: isFirstFrame }, state);
-      if (!verification.ok) { scored.push({ ...c, ...verification, score: 0, rejected: true }); continue; }
-      const materialized = await materializeVerifiedClip(c, verification).catch(() => null);
-      if (!materialized) { scored.push({ ...c, ...verification, score: 0, rejected: true, reason: "verified_clip_materialization_failed" }); continue; }
-      scored.push({ ...c, ...verification, ...materialized, original_url: c.url, score: verification.overall }); continue;
+    for (; queryCursor < queryList.length && candidates.length < CANDIDATE_POOL_MAX; queryCursor += INITIAL_SEARCH_QUERIES) {
+      const batch = queryList.slice(queryCursor, queryCursor + INITIAL_SEARCH_QUERIES); if (!batch.length) break;
+      searchRounds++; queriesTried.push(...batch);
+      const external = await collectCandidates(batch, subj);
+      candidates = dedupeCandidates([...candidates, ...external]).filter((c) => !recent.has(c.url) || c.library_hit).slice(0, CANDIDATE_POOL_MAX);
+      if (candidates.length >= VISION_TOP_N * 2) break;
+      if (remainingDeadlineMs(state) < 5000) { state.budget_exhausted = "resolver_deadline_exhausted"; break; }
     }
-    const dimensions = await scoreImageCandidate(c, contract, { firstFrame: isFirstFrame }, state);
-    // No hard relevance gate here by design either: every candidate keeps its
-    // real computed score and stays eligible to be picked, regardless of
-    // how it compares to any threshold. annotationOk is a technical
-    // requirement, not a relevance judgment - annotated_real mode overlays
-    // callouts onto the image, and a candidate with no grounded callout plan
-    // literally cannot render that way, independent of how relevant it is.
-    const annotationOk = contract.visual_proof_mode !== "annotated_real" || (Array.isArray(dimensions.annotation_plan) && dimensions.annotation_plan.length > 0);
-    if (annotationOk && contract.visual_proof_mode === "annotated_real") {
-      const materialized = await materializeVerifiedImage(c).catch(() => null);
-      if (!materialized) { scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: true, reason: "annotated_real_materialization_failed" }); continue; }
-      scored.push({ ...c, ...dimensions, ...materialized, score: dimensions.overall, rejected: false });
-      continue;
+    if (contract.visual_proof_mode === "annotated_real") candidates = candidates.filter((c) => c.type === "image");
+    if (!candidates.length) return { ok: false, reason: contract.visual_proof_mode === "annotated_real" ? "no_verified_image_candidates" : "no_candidates", threshold, queries_tried: queriesTried, visual_contract: contract };
+
+    candidates = await localSemanticRerank(candidates, target, contract.acceptable_visuals || []);
+    candidates = diversifyCandidates(candidates, Math.max(VISION_TOP_N * 2, 16));
+    candidates.sort((a, b) => {
+      const la = Number.isFinite(Number(a.local_similarity)) ? Number(a.local_similarity) : -1, lb = Number.isFinite(Number(b.local_similarity)) ? Number(b.local_similarity) : -1;
+      if (la !== lb) return lb - la; return cheapSemanticRank(b, contract) - cheapSemanticRank(a, contract);
+    });
+
+    const mixed = [], add = (c) => { if (c && !scoredUrls.has(c.url) && !mixed.some((x) => x.url === c.url)) mixed.push(c); };
+    candidates.filter((c) => c.source === "wikipedia" || c.source === "wikimedia").slice(0, 1).forEach(add);
+    const videos = candidates.filter((c) => c.type === "video"), photos = candidates.filter((c) => c.type !== "video" && c.source !== "wikipedia" && c.source !== "wikimedia");
+    for (let i = 0; mixed.length < VISION_TOP_N && (i < videos.length || i < photos.length); i++) { add(videos[i]); if (mixed.length < VISION_TOP_N) add(photos[i]); }
+    candidates.forEach((c) => { if (mixed.length < VISION_TOP_N) add(c); });
+
+    for (const c of mixed) {
+      if (state.budget_exhausted || remainingDeadlineMs(state) < 1200) { if (!state.budget_exhausted) state.budget_exhausted = "resolver_deadline_exhausted"; break; }
+      scoredUrls.add(c.url);
+      const reusableVerifiedImage = contract.visual_proof_mode !== "annotated_real" || (c.local_path && fs.existsSync(c.local_path));
+      if (c.library_hit && Number(c.semantic_match || 0) >= 88 && reusableVerifiedImage) {
+        scored.push({ ...c, score: Number(c.score || c.semantic_match), rejected: false });
+        continue;
+      }
+      if (c.type === "video") {
+        if (videoCalls++ >= VIDEO_VERIFY_TOP_N) continue;
+        const verification = await verifyVideoCandidate(c, contract, { firstFrame: isFirstFrame }, state);
+        if (!verification.ok) { scored.push({ ...c, ...verification, score: 0, rejected: true }); continue; }
+        const materialized = await materializeVerifiedClip(c, verification).catch(() => null);
+        if (!materialized) { scored.push({ ...c, ...verification, score: 0, rejected: true, reason: "verified_clip_materialization_failed" }); continue; }
+        scored.push({ ...c, ...verification, ...materialized, original_url: c.url, score: verification.overall });
+        continue;
+      }
+      const dimensions = await scoreImageCandidate(c, contract, { firstFrame: isFirstFrame }, state);
+      if (contract.visual_proof_mode === "annotated_real") {
+        const materialized = await materializeVerifiedImage(c).catch(() => null);
+        if (!materialized) { scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: true, reason: "verified_image_materialization_failed" }); continue; }
+        scored.push({ ...c, ...dimensions, ...materialized, score: dimensions.overall, rejected: false });
+        continue;
+      }
+      scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: false });
     }
-    scored.push({ ...c, ...dimensions, score: dimensions.overall, rejected: !annotationOk, reason: annotationOk ? dimensions.reason : "annotated_real_missing_grounded_callouts" });
+
+    scored.sort((a, b) => b.score - a.score);
+    const roundPassing = scored.find((c) => candidatePassesGate(c, contract, threshold));
+    const hasMoreToTry = queryCursor < queryList.length || candidates.some((c) => !scoredUrls.has(c.url));
+    const retryBudgetExceeded = Date.now() - resolveStartedAt >= RELEVANCE_RETRY_WALL_CLOCK_MS;
+    if (roundPassing || !hasMoreToTry || state.budget_exhausted || retryBudgetExceeded) break;
   }
 
   scored.sort((a, b) => b.score - a.score);
-  const roundBest = scored.find((c) => !c.rejected);
-  const passesRelevance = roundBest && roundBest.score >= threshold;
-  const hasMoreToTry = queryCursor < queryList.length || mixed.length > 0;
-  const wallClockExceeded = Date.now() - resolveStartedAt >= RELEVANCE_RETRY_WALL_CLOCK_MS;
-  if (passesRelevance || !hasMoreToTry || state.budget_exhausted || wallClockExceeded) break;
-  }
+  const usableBest = scored.find((c) => !c.rejected);
+  const best = scored.find((c) => candidatePassesGate(c, contract, threshold));
+  const budget = getBudgetState(state.run_id, state.scene_budget);
 
-  scored.sort((a, b) => b.score - a.score);
-  // No relevance threshold hard-gates the final pick: after retrying against
-  // fresh candidates for scenes that fell short, the highest-scoring
-  // technically usable candidate wins, whatever its score is - a low-scoring
-  // real photo still beats no photo. `rejected` here only marks candidates
-  // that are literally unusable (couldn't be downloaded/verified/
-  // materialized), never "scored too low."
-  const best = scored.find((c) => !c.rejected), budget = getBudgetState(state.run_id, state.scene_budget);
-  if (!best) return { ok: false, reason: state.budget_exhausted || "below_quality_threshold", threshold, semantic_threshold: SEMANTIC_THRESHOLD, first_frame: isFirstFrame, queries_tried: queriesTried, candidate_count: candidates.length, scored_count: scored.length, search_rounds: searchRounds, best_score: scored[0]?.score || 0, best_candidate: summarizeCandidate(scored[0]), recommended_visual_proof_mode: contract.visual_proof_mode, visual_contract: contract, ...budget };
+  if (!best) {
+    const fallback = templateFallbackResult(input, contract, state, usableBest, threshold, budget);
+    if (fallback) return fallback;
+    return {
+      ok: false,
+      reason: state.budget_exhausted || "below_semantic_quality_gate",
+      threshold,
+      semantic_threshold: SEMANTIC_THRESHOLD,
+      entity_threshold: ENTITY_THRESHOLD,
+      action_threshold: ACTION_THRESHOLD,
+      relationship_threshold: RELATIONSHIP_THRESHOLD,
+      first_frame: isFirstFrame,
+      queries_tried: queriesTried,
+      candidate_count: candidates.length,
+      scored_count: scored.length,
+      search_rounds: searchRounds,
+      best_score: usableBest?.score || scored[0]?.score || 0,
+      best_candidate: summarizeCandidate(usableBest || scored[0]),
+      recommended_visual_proof_mode: contract.visual_proof_mode,
+      visual_contract: contract,
+      ...budget,
+    };
+  }
 
   const result = {
     ok: true, type: best.type, url: best.url, original_url: best.original_url || best.url, local_path: best.local_path || null, source: best.source,
-    width: best.width ?? null, height: best.height ?? null, annotation_plan: best.annotation_plan || null,
+    width: best.width ?? null, height: best.height ?? null,
     score: best.score, semantic_match: best.semantic_match, entity_match: best.entity_match, action_match: best.action_match,
     relationship_match: best.relationship_match, relevance: best.relevance, scroll_stop: best.scroll_stop,
     mobile_clarity: best.mobile_clarity, composition: best.composition, motion_energy: best.motion_energy, uniqueness: best.uniqueness,
@@ -586,7 +614,8 @@ async function resolveBroll(input = {}) {
 
 module.exports = {
   resolveBroll, parseScoreJson, uniqStrings, dedupeCandidates, metadataOverlap, cheapSemanticRank,
-  normalizeRange, normalizeScore, normalizeAnnotationPlan, normalizeVerifiedFrameIndices, verifiedRangeFromFrameIndices,
+  normalizeRange, normalizeScore, normalizeVerifiedFrameIndices, verifiedRangeFromFrameIndices,
   buildVideoContactSheet, sampleVideoContactSheet, verifyVideoCandidate, materializeVerifiedClip, materializeVerifiedImage,
+  candidatePassesGate, normalizeTemplateFallback, templateFallbackResult,
   fromPixabayVideos, fromPixabayPhotos, compileQueries, RUN_MAX_VISION_CALLS, INITIAL_SEARCH_QUERIES,
 };
