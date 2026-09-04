@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Patch compose.js for VISUAL_MATCHING_V4 passthrough, proof renderers and final QA."""
+"""Finalize compose.js for V4/V5 proof renderers and rendered-pixel QA."""
 from __future__ import annotations
 import sys
 from pathlib import Path
 
 MARKER = "VISUAL_MATCHING_V4_COMPOSE"
 HARD_QA_MARKER = "CATASTROPHIC_FINAL_QA_GATE"
+BT709_MARKER = "PRODUCTION_BT709_RANGE_NORMALIZATION"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -16,14 +17,33 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def patch_bt709(text: str) -> str:
+    """Normalize full-range Remotion/FFmpeg frames to limited-range BT.709."""
+    if BT709_MARKER in text:
+        return text
+    fade_anchor = "`[${vLabel}]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5[final_v]`"
+    fade_replacement = (
+        "`[${vLabel}]fade=t=in:st=0:d=0.3,fade=t=out:st=${fadeOutStart.toFixed(2)}:d=0.5,"
+        "scale=in_range=auto:out_range=tv,format=yuv420p,"
+        "setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709[final_v]`"
+    )
+    text = replace_once(text, fade_anchor, fade_replacement, "BT.709 video filter")
+    option_anchor = '      "-colorspace", "bt709",\n      "-pix_fmt", "yuv420p",'
+    option_replacement = '      "-colorspace", "bt709",\n      "-color_range", "tv",\n      "-pix_fmt", "yuv420p",'
+    text = replace_once(text, option_anchor, option_replacement, "BT.709 output range")
+    marker_anchor = "    // Studio-grade final encoding:\n"
+    text = replace_once(text, marker_anchor, f"    // {BT709_MARKER}: normalize final output to limited-range BT.709.\n" + marker_anchor, "BT.709 marker")
+    return text
+
+
 def upgrade(text: str) -> str:
     if MARKER in text:
         return text
     import_anchor = 'const { resolveBroll } = require("./brollResolver");'
     text = replace_once(text, import_anchor, import_anchor + '\nconst { reviewFinalVideo } = require("./finalVisualQa");', "final QA import")
 
-    # The older transforms enumerate resolver fields. V4 intentionally passes
-    # the complete typed request so new contract fields cannot be silently lost.
+    # V5 passes the complete typed resolver request. This avoids per-field
+    # forwarding drift as the visual contract evolves.
     start = text.find('app.post("/resolve-broll", async (req, res) => {')
     if start < 0:
         raise ValueError("resolve-broll endpoint missing")
@@ -41,8 +61,6 @@ def upgrade(text: str) -> str:
 });'''
     text = text[:start] + endpoint + text[end:]
 
-    # The creative-system transform owns preflight, but V4 adds first-class
-    # proof templates after that transform runs. Expand the same fail-fast set.
     text = replace_once(
         text,
         '    const allowedTemplates = new Set(["kinetic_text", "stat_reveal", "comparison"]);',
@@ -50,9 +68,6 @@ def upgrade(text: str) -> str:
         "V4 template preflight",
     )
 
-    # V4 structured proof renderers. annotated_real is now a clean verified-real
-    # frame: upstream may still send legacy title/annotation props, but the
-    # audience-facing component deliberately ignores them.
     old_map = '''  const compositionMap = {
     stat_reveal: "StatReveal",
     comparison: "Comparison",
@@ -103,10 +118,9 @@ def upgrade(text: str) -> str:
     new = f'''    finalCmd.output(finalPath);
     await run(finalCmd);
 
-    // VISUAL_MATCHING_V4_COMPOSE / {HARD_QA_MARKER}: inspect the actual final
+    // VISUAL_MATCHING_V4_COMPOSE / {HARD_QA_MARKER}: inspect actual final
     // pixels after crop, captions and branding. Catastrophic defects block the
-    // publish path; softer polish findings are returned as telemetry but do not
-    // throw away an otherwise usable scheduled Short.
+    // publish path; softer polish findings remain telemetry.
     const finalVisualQa = await reviewFinalVideo(finalPath, scenes, durations);
     if (finalVisualQa.hard_failed) {{
       const summary = (finalVisualQa.hard_issues || finalVisualQa.issues || []).map((x) => `scene ${{x.scene_index}}: ${{x.problem}} (semantic=${{x.semantic_match ?? 'n/a'}}, score=${{x.score ?? 'n/a'}})`).join('; ');
@@ -121,6 +135,7 @@ def upgrade(text: str) -> str:
     console.log(`[job ${{jobId}}] Done -> ${{outputFullPath}}`);
     return {{ success: true, output_path: outputFullPath, job_id: jobId, final_visual_qa: finalVisualQa }};'''
     text = replace_once(text, old, new, "final render QA")
+    text = patch_bt709(text)
     return text + f"\n// {MARKER}\n"
 
 
@@ -128,7 +143,11 @@ def main() -> None:
     if len(sys.argv) not in (2, 3):
         raise SystemExit("usage: visual_matching_v4_compose.py INPUT [OUTPUT]")
     src = Path(sys.argv[1]); dst = Path(sys.argv[2]) if len(sys.argv) == 3 else src
-    dst.write_text(upgrade(src.read_text()))
+    out = upgrade(src.read_text())
+    for marker in (MARKER, HARD_QA_MARKER, BT709_MARKER):
+        if marker not in out:
+            raise RuntimeError(f"compose production guarantee missing: {marker}")
+    dst.write_text(out)
     print(f"{MARKER} compose written to {dst}")
 
 
