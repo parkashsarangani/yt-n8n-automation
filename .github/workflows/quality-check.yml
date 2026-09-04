@@ -57,7 +57,7 @@ jobs:
           for marker in ['retrieval_scene_count','retrieval_scene_position','run_id','$execution.id','visual_claim','required_entities','required_actions','required_relationships']:
               assert marker in rb, marker
           tag=names['Tag B-roll']['parameters']['jsCode']
-          for marker in ["r.type==='template'",'deterministic fallback','verified-real scene','asset_semantic_match','verified_frame_indices']:
+          for marker in ["r.type==='template'",'deterministic fallback','verified-real scene','asset_semantic_match','verified_frame_indices','quality_gate_passed','selection_reason']:
               assert marker in tag, marker
           assert 'annotation_plan' not in tag and 'annotations:' not in tag
           merge=names['Merge By scene_index (not position)']['parameters']['jsCode']
@@ -83,12 +83,14 @@ jobs:
           node --check shorts-compose/visualContract.js
           node --check shorts-compose/visualBudget.js
           node --check shorts-compose/finalVisualQa.js
-          grep -q 'CATASTROPHIC_FINAL_QA_GATE' "$C"
+          grep -q 'NON_BLOCKING_FINAL_QA' "$C"
           grep -q 'PRODUCTION_BT709_RANGE_NORMALIZATION' "$C"
           grep -q '"-color_range", "tv"' "$C"
-          grep -q 'Final visual QA rejected catastrophic render defects' "$C"
-          ! grep -q 'publishing anyway' "$C"
-          for marker in candidatePassesGate below_semantic_quality_gate deterministic_template_fallback RESOLVE_DEADLINE_MS RESOLVER_V5_RUNTIME V5_VIDEO_SAMPLE_STAGING V5_PROOF_MEDIA_TYPE_FILTER V5_FULL_GATE_EARLY_ACCEPT downloadVideoSample video_contact_sheet_ffmpeg_failed; do grep -q "$marker" "$B"; done
+          grep -q 'publishing anyway' "$C"
+          ! grep -q 'Final visual QA rejected catastrophic render defects' "$C"
+          for marker in candidatePassesGate deterministic_template_fallback RESOLVE_DEADLINE_MS RESOLVER_V5_RUNTIME V5_VIDEO_SAMPLE_STAGING V5_FULL_GATE_EARLY_ACCEPT V5_ALWAYS_PUBLISH_BEST_AVAILABLE best_available_below_quality_target no_technically_usable_candidate downloadVideoSample video_contact_sheet_ffmpeg_failed quality_gate_passed selection_reason; do grep -q "$marker" "$B"; done
+          ! grep -q 'V5_PROOF_MEDIA_TYPE_FILTER' "$B"
+          ! grep -q 'reason: state.budget_exhausted || "below_semantic_quality_gate"' "$B"
           ! grep -q 'normalizeAnnotationPlan' "$B"
           ! grep -q 'annotation_plan' "$B"
           grep -q 'BROLL_BUDGET_STATE_PATH' shorts-compose/visualBudget.js
