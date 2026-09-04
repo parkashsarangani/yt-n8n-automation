@@ -4,9 +4,9 @@ This repository uses FreeLLMAPI as a **free-first inference router**, not as a
 local model runtime. The Docker container runs the gateway/dashboard locally;
 the selected LLM/VLM inference still runs at the configured upstream providers.
 
-FreeLLMAPI's own project currently describes itself as intended for personal
-experimentation. Each upstream provider also has its own free-tier terms and
-limits. Configure only providers whose terms fit your use of the channel.
+FreeLLMAPI's own project describes itself as a single-user/local-first router.
+Each upstream provider has its own free-tier terms and limits. Configure only
+providers whose terms fit your use of the channel.
 
 ## Runtime architecture
 
@@ -47,9 +47,10 @@ those modules.
 2. Add it as the GitHub Actions secret `FREELLMAPI_ENCRYPTION_KEY`.
 
 3. Deploy/re-run the production workflow. Deployment pulls the pinned
-   `ghcr.io/tashfeenahmed/freellmapi:v0.6.5` image and exposes its dashboard
-   only at `127.0.0.1:3001` on the server. `v0.6.5` is the current published
-   0.6.x release verified when this integration was implemented; update the pin
+   `ghcr.io/tashfeenahmed/freellmapi:v0.9.5` image and exposes its dashboard
+   only at `127.0.0.1:3001` on the server. `v0.9.5` was the latest published
+   release when this integration was finalized (published 2026-09-03). The CI
+   job verifies that the pinned container tag actually exists. Update this pin
    deliberately through a PR after validating a newer release.
 
 4. Reach the dashboard with an SSH tunnel rather than exposing it publicly:
