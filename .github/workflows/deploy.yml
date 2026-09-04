@@ -88,7 +88,7 @@ jobs:
           # freellmapi mode the gateway automatically uses direct OpenAI as an
           # emergency fallback when the local free router is unavailable.
           if [ -n "${FREELLMAPI_ENCRYPTION_KEY:-}" ]; then
-            echo "=== Starting pinned FreeLLMAPI v0.6.5 ==="
+            echo "=== Starting pinned FreeLLMAPI v0.9.5 ==="
             docker compose pull freellmapi
             docker compose up -d freellmapi
           else
