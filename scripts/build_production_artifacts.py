@@ -205,6 +205,14 @@ if(Array.isArray(parsed.scenes)){
     const _vmKeep=_vmTemplates[0];
     _vmTemplates.slice(1).forEach(s=>_vmDemote(s,`episode_template_cap_keep_scene_${Number(_vmKeep?.scene_index)}`));
   }
+  // V5_ACTION_MODE_AUTOFIX: a scene that requires visible action can never be
+  // literal_image, whether the model planned it that way from the start or a
+  // demotion above just assigned it - fix the mismatch deterministically
+  // instead of failing the whole script over a one-field inconsistency.
+  _vmContent.filter(s=>!_vmIsTemplate(s)&&s?.visual_proof_mode==='literal_image'&&Array.isArray(s?.required_actions)&&s.required_actions.length>0).forEach(s=>{
+    s.visual_proof_mode='literal_video';
+    s.visual_mix_repair_reason=s.visual_mix_repair_reason||'action_required_forced_literal_video';
+  });
   _vmTemplates=_vmContent.filter(_vmIsTemplate);
   const _vmReal=_vmContent.filter(s=>!_vmIsTemplate(s));
   parsed.visual_mix_guard={version:'1',planned_template_count:_vmTemplates.length,planned_real_media_count:_vmReal.length,repaired_scene_indexes:_vmContent.filter(s=>s.visual_mix_repair_reason).map(s=>Number(s.scene_index))};
