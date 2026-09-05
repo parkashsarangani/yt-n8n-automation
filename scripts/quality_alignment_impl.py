@@ -109,7 +109,18 @@ def patch_visual_director(workflow: dict) -> None:
         "justified. Re-score honestly after the real rewrite; raising the "
         "reported number alone without a genuine content change is not a "
         "repair, it is the same script re-failing on the next gate that "
-        "reads it.\\n\\nFAILED CHECKS: " + '" + '
+        "reads it.\\n\\nEXCEPTION - CATEGORICAL TOPIC REJECTION: if any entry in FAILED CHECKS below "
+        "states that this content type is excluded (for example a medical/health-content exclusion), "
+        "the topic itself is disqualified and cannot be repaired by rewording - ignore every instruction "
+        "above about preserving the topic. Instead pick a DIFFERENT topic from CANDIDATE POOL below, "
+        "skipping any candidate that is itself medical/health-related or otherwise excluded, and write a "
+        "brand new complete script for that different topic from scratch, following the exact same JSON "
+        "schema as a fresh draft. When you do this, set a top-level resolved_topic field to the exact new "
+        "topic string you used, so it can be recorded correctly - never omit resolved_topic when you "
+        "change topics. Do not use this exception for any other kind of failed check.\\n\\nCANDIDATE POOL: "
+        + '" + '
+        "JSON.stringify($('Extract Generated Topic').item.json.candidate_pool || []) + \""
+        "\\n\\nFAILED CHECKS: " + '" + '
         "JSON.stringify($('Validate Final Script').item.json._validationErrors || []) + \""
         "\\n\\n" + phase1_anchor
     )
@@ -276,8 +287,28 @@ def patch_reliability(workflow: dict) -> None:
     validator["parameters"]["jsCode"]=code;validator["notes"]=RELIABILITY_MARKER+": competent-video floors; evidence remains fail-closed"
 
 
+def patch_topic_history_resolved_topic(workflow: dict) -> None:
+    """Record the topic that actually got published, not always the first pick.
+
+    The categorical-topic-rejection repair path (see patch_visual_director)
+    can swap to a different topic entirely when the original is disqualified
+    (e.g. medical/health content). Topic History must reflect whichever topic
+    the published script actually used, or a swapped-away topic never gets
+    marked used and can be re-suggested indefinitely.
+    """
+    node = node_by_name(workflow, "Save Topic to History")
+    old = "={{ JSON.stringify({ topic: $('Extract Generated Topic').item.json.topic, hook: $json.hook }) }}"
+    new = "={{ JSON.stringify({ topic: ($json.resolved_topic || $('Extract Generated Topic').item.json.topic), hook: $json.hook }) }}"
+    body = str(node["parameters"]["jsonBody"])
+    if new in body:
+        return
+    if old not in body:
+        raise RuntimeError("Save Topic to History body anchor missing; cannot record swapped topic")
+    node["parameters"]["jsonBody"] = body.replace(old, new, 1)
+
+
 def upgrade(workflow: dict) -> dict:
-    patch_commissioning(workflow);patch_writer(workflow);patch_visual_director(workflow);patch_visual_retrieval_contract(workflow);patch_reliability(workflow);return workflow
+    patch_commissioning(workflow);patch_writer(workflow);patch_visual_director(workflow);patch_visual_retrieval_contract(workflow);patch_reliability(workflow);patch_topic_history_resolved_topic(workflow);return workflow
 
 
 def assert_alignment(workflow: dict) -> None:
@@ -296,3 +327,8 @@ def assert_alignment(workflow: dict) -> None:
     if "at most ONE bounded repair" not in visual: raise RuntimeError("quality repair is no longer explicitly bounded")
     if "Never set visual_type=ai" not in visual: raise RuntimeError("Visual Director can still commission non-existent AI shots")
     if "r.type==='template'" not in tag: raise RuntimeError("Tag B-roll cannot pass template fallbacks into compose")
+    repair=node_by_name(workflow,"Claude: Repair Script")["parameters"]["jsonBody"]
+    if "CATEGORICAL TOPIC REJECTION" not in repair: raise RuntimeError("repair pass lost its categorical-topic-rejection escape hatch")
+    if "resolved_topic" not in repair: raise RuntimeError("repair pass no longer reports resolved_topic on a topic swap")
+    history=node_by_name(workflow,"Save Topic to History")["parameters"]["jsonBody"]
+    if "resolved_topic" not in history: raise RuntimeError("Topic History no longer records a swapped-topic repair")
